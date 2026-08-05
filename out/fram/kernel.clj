@@ -72,8 +72,12 @@
    r1 (and (t/atom? slot0) (and (t/atom? slot1) (t/atom? slot2)))
    r2 (or (keyword? slot0) (and (string? slot0) (not (= "" slot0))))
    r3 (or (keyword? slot1) (and (string? slot1) (not (= "" slot1))))
-   r4 (t/atom? slot2)]
-  (cond-> [] (not r1) (conj "R1") (not r2) (conj "R2") (not r3) (conj "R3") (not r4) (conj "R4"))))
+   r4 (t/atom? slot2)
+   errors0 []
+   errors1 (if r1 errors0 (conj errors0 "R1"))
+   errors2 (if r2 errors1 (conj errors1 "R2"))
+   errors3 (if r3 errors2 (conj errors2 "R3"))]
+  (if r4 errors3 (conj errors3 "R4"))))
 
 (defn lint-declared-profile [triples ^String space-id]
   (if (not (declared-relational-profile? triples space-id)) [] (let [vocabulary? (declared-vocabulary-rule? triples space-id)]

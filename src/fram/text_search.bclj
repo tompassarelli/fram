@@ -7,10 +7,9 @@
 (require fram.text-index :as text-index)
 (require fram.types :as t)
 
-(declare-extern java.util.Locale/ROOT Any)
-(declare-extern .toLowerCase [String Any -> String])
-
 (defalias PostingMap (Map String (Vec Int)))
+
+(def WORD-SEPARATOR-RE: Regex (re-pattern "[^\\p{L}\\p{Nd}]+"))
 
 (defrecord SearchAnalyzers
   [token-rows: (Vec (Vec String))
@@ -41,11 +40,18 @@
        (if (nil? analyzers) 0 (searchanalyzers-bytes analyzers)))))
 
 (defn- lower [value: String] -> String
-  (.toLowerCase value java.util.Locale/ROOT))
+  (str/lower-case value))
 
 (defn word-tokens [value: String] -> (Vec String)
-  (mapv (fn [token: String] -> String (lower token))
-        (vec (re-seq #"[\p{L}\p{Nd}]+" value))))
+  (let [parts: (Vec String) (str/split value WORD-SEPARATOR-RE)]
+    (loop [index 0 tokens: (Vec String) []]
+      (if (>= index (count parts))
+        tokens
+        (let [token: String (nth parts index)]
+          (recur (inc index)
+                 (if (= "" token)
+                   tokens
+                   (conj tokens (lower token)))))))))
 
 (defn- drop-last
   [value: String

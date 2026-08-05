@@ -3,13 +3,13 @@
             [fram.types :as t]
             [clojure.string :as str]))
 
-^{:line 10 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defrecord AggregateSpec [operator argument])
+(defrecord AggregateSpec [operator argument])
 
 (defn aggregatespec-operator [r] (:operator r))
 
 (defn aggregatespec-argument [r] (:argument r))
 
-^{:line 13 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defrecord HavingClause [operator aggregate-index value])
+(defrecord HavingClause [operator aggregate-index value])
 
 (defn havingclause-operator [r] (:operator r))
 
@@ -17,7 +17,7 @@
 
 (defn havingclause-value [r] (:value r))
 
-^{:line 17 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defrecord FindSpec [relation grouping aggregates having])
+(defrecord FindSpec [relation grouping aggregates having])
 
 (defn findspec-relation [r] (:relation r))
 
@@ -27,31 +27,31 @@
 
 (defn findspec-having [r] (:having r))
 
-^{:line 22 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defrecord QueryPlan [find strata])
+(defrecord QueryPlan [find strata])
 
 (defn queryplan-find [r] (:find r))
 
 (defn queryplan-strata [r] (:strata r))
 
-^{:line 25 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defrecord Projection [edb candidates])
+(defrecord Projection [edb candidates])
 
 (defn projection-edb [r] (:edb r))
 
 (defn projection-candidates [r] (:candidates r))
 
-^{:line 28 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defrecord QueryError [code message])
+(defrecord QueryError [code message])
 
 (defn queryerror-code [r] (:code r))
 
 (defn queryerror-message [r] (:message r))
 
-^{:line 31 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defrecord CompileResult [plan errors])
+(defrecord CompileResult [plan errors])
 
 (defn compileresult-plan [r] (:plan r))
 
 (defn compileresult-errors [r] (:errors r))
 
-^{:line 34 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defrecord QueryResult [rows errors over-limit maximum])
+(defrecord QueryResult [rows errors over-limit maximum])
 
 (defn queryresult-rows [r] (:rows r))
 
@@ -61,7 +61,7 @@
 
 (defn queryresult-maximum [r] (:maximum r))
 
-^{:line 39 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defrecord QueryPage [rows next more errors max-bytes])
+(defrecord QueryPage [rows next more errors max-bytes])
 
 (defn querypage-rows [r] (:rows r))
 
@@ -73,553 +73,558 @@
 
 (defn querypage-max-bytes [r] (:max-bytes r))
 
-^{:line 45 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defrecord CursorResult [key error])
+(defrecord CursorResult [key error])
 
 (defn cursorresult-key [r] (:key r))
 
 (defn cursorresult-error [r] (:error r))
 
-^{:line 49 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def ^:dynamic *query-control* nil)
+(def ^:dynamic *query-control* nil)
 
-^{:line 51 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def base-rel-arities ^{:line 52 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} {d/triple-relation 3 d/occurrence-relation 3 d/text-match-relation 3 d/text-phrase-relation 3 d/text-substring-relation 3 d/text-stem-relation 3 d/text-search-relation 4})
+(def base-rel-arities {d/triple-relation 3 d/occurrence-relation 3 d/text-match-relation 3 d/text-phrase-relation 3 d/text-substring-relation 3 d/text-stem-relation 3 d/text-search-relation 4})
 
-^{:line 59 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def base-relations d/base-relations)
+(def base-relations d/base-relations)
 
-^{:line 61 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def aggregate-operators ^{:line 62 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{:count :count-distinct :sum :avg :min :max})
+(def aggregate-operators #{:count :count-distinct :sum :avg :min :max})
 
-^{:line 63 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def aggregate-argument-operators ^{:line 64 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{:count-distinct :sum :avg :min :max})
+(def aggregate-argument-operators #{:count-distinct :sum :avg :min :max})
 
-^{:line 66 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^QueryError query-error [code ^String message]
-  ^{:line 69 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->QueryError code message))
+(defn ^QueryError query-error [code ^String message]
+  (->QueryError code message))
 
-^{:line 71 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^FindSpec relation-find [^String relation]
-  ^{:line 72 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->FindSpec relation ^{:line 72 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 72 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 72 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []))
+(defn ^FindSpec relation-find [^String relation]
+  (->FindSpec relation [] [] []))
 
-^{:line 74 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^AggregateSpec aggregate-spec [operator argument]
-  ^{:line 77 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->AggregateSpec operator argument))
+(defn ^AggregateSpec aggregate-spec [operator argument]
+  (->AggregateSpec operator argument))
 
-^{:line 79 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^HavingClause having-clause [operator aggregate-index value]
-  ^{:line 83 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->HavingClause operator aggregate-index value))
+(defn ^HavingClause having-clause [operator aggregate-index value]
+  (->HavingClause operator aggregate-index value))
 
-^{:line 85 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^FindSpec aggregate-find [^String relation grouping aggregates having]
-  ^{:line 90 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->FindSpec relation grouping aggregates having))
+(defn ^FindSpec aggregate-find [^String relation grouping aggregates having]
+  (->FindSpec relation grouping aggregates having))
 
-^{:line 92 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^QueryPlan query-plan [^FindSpec find strata]
-  ^{:line 95 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->QueryPlan find strata))
+(defn ^QueryPlan query-plan [^FindSpec find strata]
+  (->QueryPlan find strata))
 
-^{:line 97 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^Boolean query-plan? [value]
-  ^{:line 97 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (instance? QueryPlan value))
+(defn ^Boolean query-plan? [value]
+  (instance? QueryPlan value))
 
-^{:line 98 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^Boolean projection? [value]
-  ^{:line 98 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (instance? Projection value))
+(defn ^Boolean projection? [value]
+  (instance? Projection value))
 
-^{:line 99 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^Boolean aggregate-find? [^FindSpec find]
-  ^{:line 100 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 100 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? ^{:line 100 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-aggregates find))))
+(defn ^Boolean aggregate-find? [^FindSpec find]
+  (not (empty? (findspec-aggregates find))))
 
-^{:line 102 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^Boolean compile-ok? [^CompileResult result]
-  ^{:line 103 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? ^{:line 103 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compileresult-errors result)))
+(defn ^Boolean compile-ok? [^CompileResult result]
+  (empty? (compileresult-errors result)))
 
-^{:line 104 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn compiled-plan [^CompileResult result]
-  ^{:line 105 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compileresult-plan result))
+(defn compiled-plan [^CompileResult result]
+  (compileresult-plan result))
 
-^{:line 106 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn compile-errors [^CompileResult result]
-  ^{:line 107 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compileresult-errors result))
+(defn compile-errors [^CompileResult result]
+  (compileresult-errors result))
 
-^{:line 109 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^Boolean result-ok? [^QueryResult result]
-  ^{:line 110 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? ^{:line 110 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryresult-errors result)))
+(defn ^Boolean result-ok? [^QueryResult result]
+  (empty? (queryresult-errors result)))
 
-^{:line 111 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn result-rows [^QueryResult result]
-  ^{:line 112 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryresult-rows result))
+(defn result-rows [^QueryResult result]
+  (queryresult-rows result))
 
-^{:line 113 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn result-errors [^QueryResult result]
-  ^{:line 114 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryresult-errors result))
+(defn result-errors [^QueryResult result]
+  (queryresult-errors result))
 
-^{:line 115 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn result-over-limit [^QueryResult result]
-  ^{:line 116 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryresult-over-limit result))
+(defn result-over-limit [^QueryResult result]
+  (queryresult-over-limit result))
 
-^{:line 117 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn result-maximum [^QueryResult result]
-  ^{:line 118 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryresult-maximum result))
+(defn result-maximum [^QueryResult result]
+  (queryresult-maximum result))
 
-^{:line 120 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^Boolean page-ok? [^QueryPage page]
-  ^{:line 120 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? ^{:line 120 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (querypage-errors page)))
+(defn ^Boolean page-ok? [^QueryPage page]
+  (empty? (querypage-errors page)))
 
-^{:line 121 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn page-rows [^QueryPage page]
-  ^{:line 121 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (querypage-rows page))
+(defn page-rows [^QueryPage page]
+  (querypage-rows page))
 
-^{:line 122 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn page-next [^QueryPage page]
-  ^{:line 122 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (querypage-next page))
+(defn page-next [^QueryPage page]
+  (querypage-next page))
 
-^{:line 123 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^Boolean page-more? [^QueryPage page]
-  ^{:line 123 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (querypage-more page))
+(defn ^Boolean page-more? [^QueryPage page]
+  (querypage-more page))
 
-^{:line 124 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn page-errors [^QueryPage page]
-  ^{:line 124 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (querypage-errors page))
+(defn page-errors [^QueryPage page]
+  (querypage-errors page))
 
-^{:line 126 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn error-code [^QueryError error-value]
-  ^{:line 127 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryerror-code error-value))
+(defn error-code [^QueryError error-value]
+  (queryerror-code error-value))
 
-^{:line 128 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^String error-message [^QueryError error-value]
-  ^{:line 129 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryerror-message error-value))
+(defn ^String error-message [^QueryError error-value]
+  (queryerror-message error-value))
 
-^{:line 131 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^QueryResult success-result [rows]
-  ^{:line 132 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->QueryResult rows ^{:line 132 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] nil nil))
+(defn- ^QueryResult success-result [rows]
+  (->QueryResult rows [] nil nil))
 
-^{:line 133 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^QueryResult failure-result [errors]
-  ^{:line 134 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->QueryResult ^{:line 134 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] errors nil nil))
+(defn- ^QueryResult failure-result [errors]
+  (->QueryResult [] errors nil nil))
 
-^{:line 135 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^QueryResult limited-result [^QueryError error-value count-value maximum]
-  ^{:line 139 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->QueryResult ^{:line 139 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 139 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [error-value] count-value maximum))
+(defn- ^QueryResult limited-result [^QueryError error-value count-value maximum]
+  (->QueryResult [] [error-value] count-value maximum))
 
-^{:line 140 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^QueryPage success-page [rows next ^Boolean more]
-  ^{:line 144 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->QueryPage rows next more ^{:line 144 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] nil))
+(defn- ^QueryPage success-page [rows next ^Boolean more]
+  (->QueryPage rows next more [] nil))
 
-^{:line 145 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^QueryPage failure-page [errors]
-  ^{:line 146 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->QueryPage ^{:line 146 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] nil false errors nil))
+(defn- ^QueryPage failure-page [errors]
+  (->QueryPage [] nil false errors nil))
 
-^{:line 147 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^QueryPage wire-failure-page [^QueryError error-value maximum]
-  ^{:line 150 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->QueryPage ^{:line 150 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] nil false ^{:line 150 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [error-value] maximum))
+(defn- ^QueryPage wire-failure-page [^QueryError error-value maximum]
+  (->QueryPage [] nil false [error-value] maximum))
 
-^{:line 152 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^Projection project-with-candidates [propositions candidates]
-  ^{:line 155 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->Projection ^{:line 155 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/edb propositions) candidates))
+(defn ^Projection project-with-candidates [propositions candidates]
+  (->Projection (d/edb propositions) candidates))
 
-^{:line 157 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^Projection project-with-source [propositions ^String relation source]
-  ^{:line 161 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (project-with-candidates propositions ^{:line 161 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} {relation source}))
+(defn ^Projection project-with-source [propositions ^String relation source]
+  (project-with-candidates propositions {relation source}))
 
-^{:line 163 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^Projection project [propositions]
-  ^{:line 164 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (project-with-candidates propositions ^{:line 164 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/build-text-candidates propositions)))
+(defn ^Projection project [propositions]
+  (project-with-candidates propositions (d/build-text-candidates propositions)))
 
-^{:line 166 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^Projection project-with-occurrences [propositions occurrences]
-  ^{:line 169 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->Projection ^{:line 169 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/edb-with-occurrences propositions occurrences) ^{:line 170 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/build-text-candidates propositions)))
+(defn ^Projection project-with-occurrences [propositions occurrences]
+  (->Projection (d/edb-with-occurrences propositions occurrences) (d/build-text-candidates propositions)))
 
-^{:line 172 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- set-union [left right]
-  ^{:line 175 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 175 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc value] ^{:line 177 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc value)) left right))
+(defn- set-union [left right]
+  (reduce (fn [acc value] (conj acc value)) left right))
 
-^{:line 180 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- term-vars [terms]
-  ^{:line 181 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 181 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc term] ^{:line 184 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [name ^{:line 184 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/queryterm-variable term)]
-  ^{:line 185 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 185 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? name) ^{:line 185 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc name) acc))) ^{:line 186 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{} terms))
+(defn- term-vars [terms]
+  (reduce (fn [acc term] (let [name (d/queryterm-variable term)]
+  (if (some? name) (conj acc name) acc))) #{} terms))
 
-^{:line 188 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- term-errors [terms ^String context]
-  ^{:line 191 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 191 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc term] ^{:line 194 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 194 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/query-term? term) acc ^{:line 196 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 196 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-term ^{:line 197 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str context " contains an invalid QueryTerm"))))) ^{:line 198 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] terms))
+(defn- term-errors [terms ^String context]
+  (reduce (fn [acc term] (if (d/query-term? term) acc (conj acc (query-error :query-invalid-term (str context " contains an invalid QueryTerm"))))) [] terms))
 
-^{:line 200 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- unbound-errors [terms bound ^String context]
-  ^{:line 204 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 204 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc name] ^{:line 207 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 207 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? bound name) acc ^{:line 209 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 209 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-unbound-variable ^{:line 210 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str context " variable '" name "' is not bound"))))) ^{:line 211 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 211 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (term-vars terms)))
+(defn- unbound-errors [terms bound ^String context]
+  (reduce (fn [acc name] (if (contains? bound name) acc (conj acc (query-error :query-unbound-variable (str context " variable '" name "' is not bound"))))) [] (term-vars terms)))
 
-^{:line 213 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- head-arities [rules]
-  ^{:line 214 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 214 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc rule] ^{:line 217 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [relation ^{:line 217 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-head-relation rule)]
-  ^{:line 218 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 218 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? acc relation) acc ^{:line 220 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (assoc acc relation ^{:line 220 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count ^{:line 220 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-head-arguments rule)))))) ^{:line 221 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} {} rules))
+(defn- head-arities [rules]
+  (reduce (fn [acc rule] (let [relation (d/rule-head-relation rule)]
+  (if (contains? acc relation) acc (assoc acc relation (count (d/rule-head-arguments rule)))))) {} rules))
 
-^{:line 223 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- derived-relations [rules]
-  ^{:line 224 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 224 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc rule] ^{:line 227 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 227 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-head-relation rule))) ^{:line 228 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{} rules))
+(defn- derived-relations [rules]
+  (reduce (fn [acc rule] (conj acc (d/rule-head-relation rule))) #{} rules))
 
-^{:line 230 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- relation-arity [^String relation arities]
-  ^{:line 233 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 233 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? base-rel-arities relation) ^{:line 234 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (get base-rel-arities relation) ^{:line 235 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (get arities relation)))
+(defn- relation-arity [^String relation arities]
+  (if (contains? base-rel-arities relation) (get base-rel-arities relation) (get arities relation)))
 
-^{:line 237 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- literal-errors [literal known arities bound]
-  ^{:line 242 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [kind ^{:line 242 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-kind literal)
-   arguments ^{:line 243 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-arguments literal)
-   base-errors ^{:line 244 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (term-errors arguments "literal")]
-  ^{:line 245 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 246 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= kind :relation) ^{:line 247 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [relation ^{:line 247 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-relation literal)
-   arity ^{:line 248 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (relation-arity relation arities)
-   relation-errors ^{:line 250 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 251 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 251 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? known relation)) ^{:line 252 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 252 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-unknown-relation ^{:line 253 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "unknown relation '" relation "'"))]
-  ^{:line 254 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 254 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? arity) ^{:line 254 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 254 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= arity ^{:line 254 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count arguments)))) ^{:line 255 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 255 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-arity ^{:line 256 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "relation '" relation "' takes " arity " arguments"))]
-  :else ^{:line 257 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [])
-   range-errors ^{:line 259 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 259 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-negated literal) ^{:line 260 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (unbound-errors arguments bound "negated literal") ^{:line 261 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [])]
-  ^{:line 262 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 262 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat base-errors ^{:line 262 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat relation-errors range-errors))))
-  ^{:line 263 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= kind :comparison) ^{:line 264 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [operator-errors ^{:line 265 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 265 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? d/comparison-operators ^{:line 265 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-operator literal)) ^{:line 266 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 266 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 266 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-comparison "comparison operator is not supported")])
-   arity-errors ^{:line 269 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 269 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= 2 ^{:line 269 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count arguments)) ^{:line 270 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 270 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 270 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-arity "comparison literal takes two arguments")])]
-  ^{:line 272 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 272 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat base-errors ^{:line 273 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat operator-errors ^{:line 274 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat arity-errors ^{:line 275 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (unbound-errors arguments bound "comparison"))))))
-  ^{:line 276 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= kind :builtin) ^{:line 277 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [operator-errors ^{:line 278 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 278 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? d/builtin-operators ^{:line 278 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-operator literal)) ^{:line 279 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 279 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 279 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-builtin "builtin operator is not supported")])
-   arity-errors ^{:line 282 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 282 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= 2 ^{:line 282 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count arguments)) ^{:line 283 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 283 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 283 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-arity "builtin literal takes two arguments")])
-   binding ^{:line 284 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-binding literal)
-   binding-errors ^{:line 286 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 287 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 287 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (pos? ^{:line 287 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count binding))) ^{:line 288 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 288 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-builtin "builtin binding must be non-empty")]
-  ^{:line 290 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? bound binding) ^{:line 291 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 291 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-unbound-variable ^{:line 292 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "builtin binding '" binding "' is already bound"))]
-  :else ^{:line 293 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [])]
-  ^{:line 294 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 294 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat base-errors ^{:line 295 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat operator-errors ^{:line 296 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat arity-errors ^{:line 297 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat binding-errors ^{:line 298 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (unbound-errors arguments bound "builtin")))))))
-  :else ^{:line 299 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 299 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-literal "literal kind is not supported")])))
+(defn- literal-errors [literal known arities bound]
+  (let [kind (d/literal-kind literal)
+   arguments (d/literal-arguments literal)
+   base-errors (term-errors arguments "literal")]
+  (cond
+  (= kind :relation) (let [relation (d/literal-relation literal)
+   arity (relation-arity relation arities)
+   relation-errors (cond
+  (not (contains? known relation)) [(query-error :query-unknown-relation (str "unknown relation '" relation "'"))]
+  (and (some? arity) (not (= arity (count arguments)))) [(query-error :query-arity (str "relation '" relation "' takes " arity " arguments"))]
+  :else [])
+   range-errors (if (d/literal-negated literal) (unbound-errors arguments bound "negated literal") [])]
+  (vec (concat base-errors (concat relation-errors range-errors))))
+  (= kind :comparison) (let [operator-errors (if (contains? d/comparison-operators (d/literal-operator literal)) [] [(query-error :query-invalid-comparison "comparison operator is not supported")])
+   arity-errors (if (= 2 (count arguments)) [] [(query-error :query-arity "comparison literal takes two arguments")])]
+  (vec (concat base-errors (concat operator-errors (concat arity-errors (unbound-errors arguments bound "comparison"))))))
+  (= kind :builtin) (let [operator-errors (if (contains? d/builtin-operators (d/literal-operator literal)) [] [(query-error :query-invalid-builtin "builtin operator is not supported")])
+   arity-errors (if (= 2 (count arguments)) [] [(query-error :query-arity "builtin literal takes two arguments")])
+   binding (d/literal-binding literal)
+   binding-errors (cond
+  (not (pos? (count binding))) [(query-error :query-invalid-builtin "builtin binding must be non-empty")]
+  (contains? bound binding) [(query-error :query-unbound-variable (str "builtin binding '" binding "' is already bound"))]
+  :else [])]
+  (vec (concat base-errors (concat operator-errors (concat arity-errors (concat binding-errors (unbound-errors arguments bound "builtin")))))))
+  :else [(query-error :query-invalid-literal "literal kind is not supported")])))
 
-^{:line 301 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- literal-bindings [literal]
-  ^{:line 302 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 303 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 303 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= :relation ^{:line 303 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-kind literal)) ^{:line 304 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 304 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-negated literal))) ^{:line 305 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (term-vars ^{:line 305 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-arguments literal))
-  ^{:line 306 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= :builtin ^{:line 306 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-kind literal)) ^{:line 306 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{^{:line 306 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-binding literal)}
-  :else ^{:line 307 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{}))
+(defn- literal-bindings [literal]
+  (cond
+  (and (= :relation (d/literal-kind literal)) (not (d/literal-negated literal))) (term-vars (d/literal-arguments literal))
+  (= :builtin (d/literal-kind literal)) #{(d/literal-binding literal)}
+  :else #{}))
 
-^{:line 309 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- text-literal-errors [literal bound]
-  ^{:line 312 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 312 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 312 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= :relation ^{:line 312 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-kind literal)) ^{:line 313 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? d/text-relations ^{:line 313 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-relation literal))) ^{:line 314 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [relation ^{:line 314 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-relation literal)
-   arguments ^{:line 315 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-arguments literal)]
-  ^{:line 316 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 317 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-negated literal) ^{:line 318 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 318 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-text-negative ^{:line 319 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str relation " is available only as a positive relation"))]
-  ^{:line 320 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 320 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= ^{:line 320 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (get base-rel-arities relation) ^{:line 320 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count arguments))) ^{:line 320 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []
-  :else ^{:line 322 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [needle ^{:line 322 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth arguments 2)
-   variable ^{:line 323 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/queryterm-variable needle)]
-  ^{:line 324 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 325 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? variable) ^{:line 326 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 326 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? bound variable) ^{:line 327 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 328 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 328 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-text-unbound-needle ^{:line 329 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str relation " query must be constant or already bound"))])
-  ^{:line 331 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/text-relation-needle-valid? relation ^{:line 332 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/queryterm-value needle)) ^{:line 332 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []
-  :else ^{:line 334 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 334 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-text-invalid-needle ^{:line 335 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str relation " query is empty or invalid"))])))) ^{:line 336 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []))
+(defn- text-literal-errors [literal bound]
+  (if (and (= :relation (d/literal-kind literal)) (contains? d/text-relations (d/literal-relation literal))) (let [relation (d/literal-relation literal)
+   arguments (d/literal-arguments literal)]
+  (cond
+  (d/literal-negated literal) [(query-error :query-text-negative (str relation " is available only as a positive relation"))]
+  (not (= (get base-rel-arities relation) (count arguments))) []
+  :else (let [needle (nth arguments 2)
+   variable (d/queryterm-variable needle)]
+  (cond
+  (some? variable) (if (contains? bound variable) [] [(query-error :query-text-unbound-needle (str relation " query must be constant or already bound"))])
+  (d/text-relation-needle-valid? relation (d/queryterm-value needle)) []
+  :else [(query-error :query-text-invalid-needle (str relation " query is empty or invalid"))])))) []))
 
-^{:line 338 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- rule-errors [rule known arities]
-  ^{:line 342 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [head-relation ^{:line 342 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-head-relation rule)
-   head-arguments ^{:line 343 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-head-arguments rule)
-   head-errors ^{:line 345 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 345 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 346 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 346 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (pos? ^{:line 346 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count head-relation)) ^{:line 347 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 347 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 347 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-rule "rule head relation is empty")]) ^{:line 348 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 349 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 349 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? base-relations head-relation) ^{:line 350 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 350 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-base-shadow ^{:line 351 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "rule head cannot redefine base relation '" head-relation "'"))] ^{:line 353 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []) ^{:line 354 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (term-errors head-arguments "rule head"))))]
-  ^{:line 355 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (loop [remaining ^{:line 355 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-body rule)
-   bound ^{:line 356 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{}
+(defn- rule-errors [rule known arities]
+  (let [head-relation (d/rule-head-relation rule)
+   head-arguments (d/rule-head-arguments rule)
+   head-errors (vec (concat (if (pos? (count head-relation)) [] [(query-error :query-invalid-rule "rule head relation is empty")]) (concat (if (contains? base-relations head-relation) [(query-error :query-base-shadow (str "rule head cannot redefine base relation '" head-relation "'"))] []) (term-errors head-arguments "rule head"))))]
+  (loop [remaining (d/rule-body rule)
+   bound #{}
    errors head-errors]
-  ^{:line 358 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 358 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? remaining) ^{:line 359 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 359 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat errors ^{:line 359 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (unbound-errors head-arguments bound "rule head"))) ^{:line 360 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [literal ^{:line 360 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (first remaining)]
-  ^{:line 361 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (recur ^{:line 361 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (rest remaining) ^{:line 362 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (set-union bound ^{:line 362 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (literal-bindings literal)) ^{:line 363 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 364 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat errors ^{:line 365 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 365 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (literal-errors literal known arities bound) ^{:line 366 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (text-literal-errors literal bound))))))))))
+  (if (empty? remaining) (vec (concat errors (unbound-errors head-arguments bound "rule head"))) (let [literal (first remaining)]
+  (recur (rest remaining) (set-union bound (literal-bindings literal)) (vec (concat errors (concat (literal-errors literal known arities bound) (text-literal-errors literal bound))))))))))
 
-^{:line 368 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- arity-errors [rules]
-  ^{:line 369 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [arities ^{:line 369 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (head-arities rules)]
-  ^{:line 370 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 370 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc rule] ^{:line 373 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [relation ^{:line 373 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-head-relation rule)
-   expected ^{:line 374 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (get arities relation)
-   actual ^{:line 375 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count ^{:line 375 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-head-arguments rule))]
-  ^{:line 376 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 376 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= expected actual) acc ^{:line 378 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 378 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-arity ^{:line 379 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "relation '" relation "' has inconsistent arity")))))) ^{:line 381 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] rules)))
+(defn- arity-errors [rules]
+  (let [arities (head-arities rules)]
+  (reduce (fn [acc rule] (let [relation (d/rule-head-relation rule)
+   expected (get arities relation)
+   actual (count (d/rule-head-arguments rule))]
+  (if (= expected actual) acc (conj acc (query-error :query-arity (str "relation '" relation "' has inconsistent arity")))))) [] rules)))
 
-^{:line 383 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- positive-relations [rule]
-  ^{:line 384 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 384 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc literal] ^{:line 387 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 387 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 387 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= :relation ^{:line 387 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-kind literal)) ^{:line 388 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 388 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-negated literal))) ^{:line 389 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 389 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-relation literal)) acc)) ^{:line 391 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{} ^{:line 391 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-body rule)))
+(defn- positive-relations [rule]
+  (reduce (fn [acc literal] (if (and (= :relation (d/literal-kind literal)) (not (d/literal-negated literal))) (conj acc (d/literal-relation literal)) acc)) #{} (d/rule-body rule)))
 
-^{:line 393 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- dependency-edges [rules]
-  ^{:line 394 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 394 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc rule] ^{:line 397 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [head ^{:line 397 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-head-relation rule)]
-  ^{:line 398 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (update acc head ^{:line 399 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [current] ^{:line 400 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (set-union ^{:line 400 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or current ^{:line 400 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{}) ^{:line 400 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (positive-relations rule)))))) ^{:line 401 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} {} rules))
+(defn- dependency-edges [rules]
+  (reduce (fn [acc rule] (let [head (d/rule-head-relation rule)]
+  (update acc head (fn [current] (set-union (or current #{}) (positive-relations rule)))))) {} rules))
 
-^{:line 403 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^Boolean reaches? [^String start ^String target edges]
-  ^{:line 407 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (loop [frontier ^{:line 407 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 407 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (get edges start ^{:line 407 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{}))
-   seen ^{:line 407 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{}]
-  ^{:line 408 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 408 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? frontier) false ^{:line 410 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [current ^{:line 410 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (first frontier)]
-  ^{:line 411 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 412 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= current target) true
-  ^{:line 413 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? seen current) ^{:line 413 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (recur ^{:line 413 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (rest frontier) seen)
-  :else ^{:line 415 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (recur ^{:line 415 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 415 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 415 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (rest frontier) ^{:line 415 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 415 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (get edges current ^{:line 415 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{})))) ^{:line 416 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj seen current)))))))
+(defn- ^Boolean reaches? [^String start ^String target edges]
+  (loop [frontier (vec (get edges start #{}))
+   seen #{}]
+  (if (empty? frontier) false (let [current (first frontier)]
+  (cond
+  (= current target) true
+  (contains? seen current) (recur (rest frontier) seen)
+  :else (recur (vec (concat (rest frontier) (vec (get edges current #{})))) (conj seen current)))))))
 
-^{:line 418 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- recursive-relations [rules]
-  ^{:line 419 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [edges ^{:line 419 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (dependency-edges rules)]
-  ^{:line 420 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 420 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc rule] ^{:line 423 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [relation ^{:line 423 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-head-relation rule)]
-  ^{:line 424 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 424 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reaches? relation relation edges) ^{:line 424 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc relation) acc))) ^{:line 425 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{} rules)))
+(defn- recursive-relations [rules]
+  (let [edges (dependency-edges rules)]
+  (reduce (fn [acc rule] (let [relation (d/rule-head-relation rule)]
+  (if (reaches? relation relation edges) (conj acc relation) acc))) #{} rules)))
 
-^{:line 427 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- recursive-builtin-errors [rules]
-  ^{:line 428 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [recursive ^{:line 428 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (recursive-relations rules)]
-  ^{:line 429 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 430 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc rule] ^{:line 433 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 433 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 433 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? recursive ^{:line 433 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-head-relation rule)) ^{:line 434 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some ^{:line 434 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [literal] ^{:line 435 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= :builtin ^{:line 435 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/literal-kind literal))) ^{:line 436 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-body rule))) ^{:line 437 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 437 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-recursive-builtin ^{:line 438 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "recursive relation '" ^{:line 438 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule-head-relation rule) "' cannot contain a builtin binding"))) acc)) ^{:line 441 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] rules)))
+(defn- recursive-builtin-errors [rules]
+  (let [recursive (recursive-relations rules)]
+  (reduce (fn [acc rule] (if (and (contains? recursive (d/rule-head-relation rule)) (some (fn [literal] (= :builtin (d/literal-kind literal))) (d/rule-body rule))) (conj acc (query-error :query-recursive-builtin (str "recursive relation '" (d/rule-head-relation rule) "' cannot contain a builtin binding"))) acc)) [] rules)))
 
-^{:line 443 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- forward-errors [strata all-derived]
-  ^{:line 446 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (loop [remaining strata
+(defn- forward-errors [strata all-derived]
+  (loop [remaining strata
    lower base-relations
-   errors ^{:line 446 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []]
-  ^{:line 447 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 447 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? remaining) errors ^{:line 449 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [stratum ^{:line 449 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (first remaining)
-   current ^{:line 450 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (derived-relations stratum)
-   available ^{:line 451 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (set-union lower current)
-   errors2 ^{:line 453 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 454 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc rule] ^{:line 457 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 458 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [inner relation] ^{:line 461 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 461 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 461 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? all-derived relation) ^{:line 462 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 462 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? available relation))) ^{:line 463 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj inner ^{:line 463 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-forward-reference ^{:line 464 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "relation '" relation "' is defined only in a later stratum"))) inner)) acc ^{:line 467 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (positive-relations rule))) errors stratum)]
-  ^{:line 469 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (recur ^{:line 469 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (rest remaining) ^{:line 469 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (set-union lower current) errors2)))))
+   errors []]
+  (if (empty? remaining) errors (let [stratum (first remaining)
+   current (derived-relations stratum)
+   available (set-union lower current)
+   errors2 (reduce (fn [acc rule] (reduce (fn [inner relation] (if (and (contains? all-derived relation) (not (contains? available relation))) (conj inner (query-error :query-forward-reference (str "relation '" relation "' is defined only in a later stratum"))) inner)) acc (positive-relations rule))) errors stratum)]
+  (recur (rest remaining) (set-union lower current) errors2)))))
 
-^{:line 471 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- find-errors [^FindSpec find derived arities]
-  ^{:line 475 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [relation ^{:line 475 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-relation find)
-   arity ^{:line 476 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (get arities relation)
-   relation-errors ^{:line 478 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 479 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? base-relations relation) ^{:line 480 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 480 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-find "find cannot name a base relation")]
-  ^{:line 481 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 481 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? derived relation)) ^{:line 482 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 482 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-find ^{:line 483 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "find relation '" relation "' is not derived"))]
-  :else ^{:line 484 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [])
-   aggregate-errors ^{:line 486 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 486 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregate-find? find) ^{:line 487 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [group-errors ^{:line 488 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 488 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc position] ^{:line 491 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 491 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 491 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (>= position 0) ^{:line 492 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 492 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? arity) ^{:line 492 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (< position arity))) acc ^{:line 494 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 494 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-aggregate "aggregate group position is out of range")))) ^{:line 496 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 496 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-grouping find))
-   spec-errors ^{:line 498 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 499 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc spec] ^{:line 502 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [operator ^{:line 502 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregatespec-operator spec)
-   argument ^{:line 503 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregatespec-argument spec)]
-  ^{:line 504 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 505 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 505 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? aggregate-operators operator)) ^{:line 506 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 506 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-aggregate "aggregate operator is not supported"))
-  ^{:line 508 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 508 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? aggregate-argument-operators operator) ^{:line 509 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nil? argument)) ^{:line 510 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 510 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-aggregate "aggregate operator requires an argument position"))
-  ^{:line 512 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 512 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? argument) ^{:line 513 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 513 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 513 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (>= argument 0) ^{:line 514 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 514 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? arity) ^{:line 514 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (< argument arity))))) ^{:line 515 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 515 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-aggregate "aggregate argument position is out of range"))
-  :else acc))) ^{:line 518 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 518 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-aggregates find))
-   having-errors ^{:line 520 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 521 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc clause] ^{:line 524 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 525 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 525 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? d/comparison-operators ^{:line 526 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (havingclause-operator clause))) ^{:line 527 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 527 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-having "having operator is not supported"))
-  ^{:line 529 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 529 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 529 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (>= ^{:line 529 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (havingclause-aggregate-index clause) 0) ^{:line 530 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (< ^{:line 530 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (havingclause-aggregate-index clause) ^{:line 531 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count ^{:line 531 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-aggregates find))))) ^{:line 532 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 532 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-having "having aggregate index is out of range"))
-  ^{:line 534 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 534 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (number? ^{:line 534 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (havingclause-value clause))) ^{:line 535 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 535 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-having "having comparison value must be numeric"))
-  :else acc)) ^{:line 538 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 538 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-having find))]
-  ^{:line 539 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 539 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat group-errors ^{:line 539 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat spec-errors having-errors)))) ^{:line 540 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 540 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 540 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 540 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? ^{:line 540 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-grouping find))) ^{:line 541 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 541 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? ^{:line 541 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-having find)))) ^{:line 542 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 542 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-find "plain find cannot contain grouping or having clauses")] ^{:line 544 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []))]
-  ^{:line 545 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 545 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat relation-errors aggregate-errors))))
+(defn- find-errors [^FindSpec find derived arities]
+  (let [relation (findspec-relation find)
+   arity (get arities relation)
+   relation-errors (cond
+  (contains? base-relations relation) [(query-error :query-invalid-find "find cannot name a base relation")]
+  (not (contains? derived relation)) [(query-error :query-invalid-find (str "find relation '" relation "' is not derived"))]
+  :else [])
+   aggregate-errors (if (aggregate-find? find) (let [group-errors (reduce (fn [acc position] (if (and (>= position 0) (and (some? arity) (< position arity))) acc (conj acc (query-error :query-invalid-aggregate "aggregate group position is out of range")))) [] (findspec-grouping find))
+   spec-errors (reduce (fn [acc spec] (let [operator (aggregatespec-operator spec)
+   argument (aggregatespec-argument spec)]
+  (cond
+  (not (contains? aggregate-operators operator)) (conj acc (query-error :query-invalid-aggregate "aggregate operator is not supported"))
+  (and (contains? aggregate-argument-operators operator) (nil? argument)) (conj acc (query-error :query-invalid-aggregate "aggregate operator requires an argument position"))
+  (and (some? argument) (not (and (>= argument 0) (and (some? arity) (< argument arity))))) (conj acc (query-error :query-invalid-aggregate "aggregate argument position is out of range"))
+  :else acc))) [] (findspec-aggregates find))
+   having-errors (reduce (fn [acc clause] (cond
+  (not (contains? d/comparison-operators (havingclause-operator clause))) (conj acc (query-error :query-invalid-having "having operator is not supported"))
+  (not (and (>= (havingclause-aggregate-index clause) 0) (< (havingclause-aggregate-index clause) (count (findspec-aggregates find))))) (conj acc (query-error :query-invalid-having "having aggregate index is out of range"))
+  (not (number? (havingclause-value clause))) (conj acc (query-error :query-invalid-having "having comparison value must be numeric"))
+  :else acc)) [] (findspec-having find))]
+  (vec (concat group-errors (concat spec-errors having-errors)))) (if (or (not (empty? (findspec-grouping find))) (not (empty? (findspec-having find)))) [(query-error :query-invalid-find "plain find cannot contain grouping or having clauses")] []))]
+  (vec (concat relation-errors aggregate-errors))))
 
-^{:line 547 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn validate-plan [^QueryPlan plan]
-  ^{:line 548 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [strata ^{:line 548 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryplan-strata plan)
-   rules ^{:line 549 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 549 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc stratum] ^{:line 552 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 552 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat acc stratum))) ^{:line 553 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] strata)
-   derived ^{:line 554 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (derived-relations rules)
-   known ^{:line 555 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (set-union base-relations derived)
-   arities ^{:line 556 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (head-arities rules)
-   empty-errors ^{:line 558 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 558 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? rules) ^{:line 559 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 559 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-plan "query plan must contain at least one rule")] ^{:line 560 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [])
-   rules-errors ^{:line 562 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 562 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc rule] ^{:line 565 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 565 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat acc ^{:line 565 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (rule-errors rule known arities)))) ^{:line 566 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] rules)
-   strata-errors ^{:line 568 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (mapv ^{:line 568 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [message] ^{:line 569 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-stratification message)) ^{:line 570 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/strata-violations strata))]
-  ^{:line 571 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 571 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat empty-errors ^{:line 572 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat rules-errors ^{:line 573 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 573 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (arity-errors rules) ^{:line 574 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 574 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (recursive-builtin-errors rules) ^{:line 575 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 575 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (forward-errors strata derived) ^{:line 576 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat strata-errors ^{:line 577 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (find-errors ^{:line 577 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryplan-find plan) derived arities))))))))))
+(defn validate-plan [^QueryPlan plan]
+  (let [strata (queryplan-strata plan)
+   rules (reduce (fn [acc stratum] (vec (concat acc stratum))) [] strata)
+   derived (derived-relations rules)
+   known (set-union base-relations derived)
+   arities (head-arities rules)
+   empty-errors (if (empty? rules) [(query-error :query-invalid-plan "query plan must contain at least one rule")] [])
+   rules-errors (reduce (fn [acc rule] (vec (concat acc (rule-errors rule known arities)))) [] rules)
+   strata-errors (mapv (fn [message] (query-error :query-stratification message)) (d/strata-violations strata))]
+  (vec (concat empty-errors (concat rules-errors (concat (arity-errors rules) (concat (recursive-builtin-errors rules) (concat (forward-errors strata derived) (concat strata-errors (find-errors (queryplan-find plan) derived arities))))))))))
 
-^{:line 581 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^Boolean variable-form? [value]
-  ^{:line 582 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 582 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (map? value) ^{:line 583 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 583 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= 1 ^{:line 583 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count value)) ^{:line 584 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 584 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? value :var) ^{:line 585 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 585 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (string? ^{:line 585 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:var value)) ^{:line 585 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (pos? ^{:line 585 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count ^{:line 585 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:var value))))))))
+(defn- ^Boolean variable-form? [value]
+  (and (map? value) (and (= 1 (count value)) (and (contains? value :var) (and (string? (:var value)) (pos? (count (:var value))))))))
 
-^{:line 587 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^Boolean query-term-form? [value]
-  ^{:line 588 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 588 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (variable-form? value) ^{:line 588 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (t/term? value)))
+(defn- ^Boolean query-term-form? [value]
+  (or (variable-form? value) (t/term? value)))
 
-^{:line 590 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^Boolean all-vectors? [values]
-  ^{:line 591 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (loop [remaining values]
-  ^{:line 592 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 592 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? remaining) true ^{:line 594 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 594 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vector? ^{:line 594 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (first remaining)) ^{:line 594 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (recur ^{:line 594 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (rest remaining)) false))))
+(defn- ^Boolean all-vectors? [values]
+  (loop [remaining values]
+  (if (empty? remaining) true (if (vector? (first remaining)) (recur (rest remaining)) false))))
 
-^{:line 596 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- raw-strata [form]
-  ^{:line 597 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 598 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 598 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (map? form)) nil
-  ^{:line 599 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 599 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? form :rules) ^{:line 599 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 599 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? form :strata))) ^{:line 600 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 600 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vector? ^{:line 600 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:rules form)) ^{:line 600 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 600 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:rules form)] nil)
-  ^{:line 601 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 601 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? form :strata) ^{:line 601 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 601 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? form :rules))) ^{:line 602 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 602 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 602 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vector? ^{:line 602 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:strata form)) ^{:line 602 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (all-vectors? ^{:line 602 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:strata form))) ^{:line 603 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:strata form) nil)
+(defn- raw-strata [form]
+  (cond
+  (not (map? form)) nil
+  (and (contains? form :rules) (not (contains? form :strata))) (if (vector? (:rules form)) [(:rules form)] nil)
+  (and (contains? form :strata) (not (contains? form :rules))) (if (and (vector? (:strata form)) (all-vectors? (:strata form))) (:strata form) nil)
   :else nil))
 
-^{:line 606 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- syntax-term-errors [values ^String context]
-  ^{:line 609 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 609 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 609 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vector? values)) ^{:line 610 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 610 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax ^{:line 610 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str context " arguments must be a vector"))] ^{:line 611 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 611 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc value] ^{:line 614 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 614 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-term-form? value) acc ^{:line 616 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 616 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax ^{:line 617 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str context " contains an invalid term"))))) ^{:line 618 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] values)))
+(defn- syntax-term-errors [values ^String context]
+  (if (not (vector? values)) [(query-error :query-invalid-syntax (str context " arguments must be a vector"))] (reduce (fn [acc value] (if (query-term-form? value) acc (conj acc (query-error :query-invalid-syntax (str context " contains an invalid term"))))) [] values)))
 
-^{:line 620 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- syntax-literal-errors [literal]
-  ^{:line 621 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 621 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 621 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (map? literal)) ^{:line 622 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 622 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "literal must be a map")] ^{:line 623 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 624 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? literal :pred) ^{:line 625 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 625 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 626 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 626 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (keyword? ^{:line 626 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:pred literal)) ^{:line 627 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 627 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 627 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "comparison operator must be a keyword")]) ^{:line 629 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (syntax-term-errors ^{:line 629 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:args literal) "comparison")))
-  ^{:line 630 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? literal :fn) ^{:line 631 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 631 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 632 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 632 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 632 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (keyword? ^{:line 632 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:fn literal)) ^{:line 632 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (string? ^{:line 632 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:bind literal))) ^{:line 633 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 633 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 633 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "builtin requires keyword :fn and string :bind")]) ^{:line 635 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (syntax-term-errors ^{:line 635 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:args literal) "builtin")))
-  :else ^{:line 637 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 637 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 638 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 638 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (string? ^{:line 638 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:rel literal)) ^{:line 639 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 639 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 639 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "relation literal requires string :rel")]) ^{:line 641 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 642 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 642 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 642 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nil? ^{:line 642 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:neg literal)) ^{:line 643 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 643 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= true ^{:line 643 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:neg literal)) ^{:line 643 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= false ^{:line 643 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:neg literal)))) ^{:line 644 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 644 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 644 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "literal :neg must be boolean")]) ^{:line 646 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (syntax-term-errors ^{:line 646 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:args literal) "literal")))))))
+(defn- syntax-literal-errors [literal]
+  (if (not (map? literal)) [(query-error :query-invalid-syntax "literal must be a map")] (cond
+  (contains? literal :pred) (vec (concat (if (keyword? (:pred literal)) [] [(query-error :query-invalid-syntax "comparison operator must be a keyword")]) (syntax-term-errors (:args literal) "comparison")))
+  (contains? literal :fn) (vec (concat (if (and (keyword? (:fn literal)) (string? (:bind literal))) [] [(query-error :query-invalid-syntax "builtin requires keyword :fn and string :bind")]) (syntax-term-errors (:args literal) "builtin")))
+  :else (vec (concat (if (string? (:rel literal)) [] [(query-error :query-invalid-syntax "relation literal requires string :rel")]) (concat (if (or (nil? (:neg literal)) (or (= true (:neg literal)) (= false (:neg literal)))) [] [(query-error :query-invalid-syntax "literal :neg must be boolean")]) (syntax-term-errors (:args literal) "literal")))))))
 
-^{:line 648 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- syntax-rule-errors [rule]
-  ^{:line 649 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 649 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 649 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (map? rule)) ^{:line 650 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 650 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "rule must be a map")] ^{:line 651 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [head ^{:line 651 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:head rule)
-   body ^{:line 652 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:body rule)
-   head-errors ^{:line 654 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 654 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 654 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (map? head) ^{:line 654 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 654 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (string? ^{:line 654 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:rel head)) ^{:line 654 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vector? ^{:line 654 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:args head)))) ^{:line 655 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (syntax-term-errors ^{:line 655 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:args head) "rule head") ^{:line 656 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 656 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "rule head must contain string :rel and vector :args")])
-   body-errors ^{:line 659 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 659 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vector? body) ^{:line 660 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 660 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc literal] ^{:line 663 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 663 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat acc ^{:line 663 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (syntax-literal-errors literal)))) ^{:line 664 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] body) ^{:line 665 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 665 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "rule body must be a vector")])]
-  ^{:line 666 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 666 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat head-errors body-errors)))))
+(defn- syntax-rule-errors [rule]
+  (if (not (map? rule)) [(query-error :query-invalid-syntax "rule must be a map")] (let [head (:head rule)
+   body (:body rule)
+   head-errors (if (and (map? head) (and (string? (:rel head)) (vector? (:args head)))) (syntax-term-errors (:args head) "rule head") [(query-error :query-invalid-syntax "rule head must contain string :rel and vector :args")])
+   body-errors (if (vector? body) (reduce (fn [acc literal] (vec (concat acc (syntax-literal-errors literal)))) [] body) [(query-error :query-invalid-syntax "rule body must be a vector")])]
+  (vec (concat head-errors body-errors)))))
 
-^{:line 668 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- syntax-find-errors [find]
-  ^{:line 669 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 670 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (string? find) ^{:line 670 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []
-  ^{:line 671 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 671 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (map? find)) ^{:line 672 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 672 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "find must be a relation string or aggregate map")]
-  :else ^{:line 674 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [base-errors ^{:line 675 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 675 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 676 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 676 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (string? ^{:line 676 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:rel find)) ^{:line 677 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 677 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 677 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "aggregate find requires string :rel")]) ^{:line 679 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 680 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 680 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 680 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vector? ^{:line 680 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:group find)) ^{:line 681 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (every? integer? ^{:line 681 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:group find))) ^{:line 682 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 682 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 682 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "aggregate :group must contain integer positions")]) ^{:line 684 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 684 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 684 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vector? ^{:line 684 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:agg find)) ^{:line 684 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 684 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? ^{:line 684 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:agg find)))) ^{:line 685 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 685 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 685 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "aggregate :agg must be a non-empty vector")]))))
-   spec-errors ^{:line 688 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 688 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vector? ^{:line 688 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:agg find)) ^{:line 689 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 690 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc spec] ^{:line 693 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 693 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 693 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (map? spec) ^{:line 694 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 694 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (keyword? ^{:line 694 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:op spec)) ^{:line 695 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 695 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nil? ^{:line 695 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:arg spec)) ^{:line 695 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (integer? ^{:line 695 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:arg spec))))) acc ^{:line 697 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 697 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "aggregate spec requires keyword :op and optional integer :arg")))) ^{:line 699 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 699 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:agg find)) ^{:line 700 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [])
-   having-errors ^{:line 702 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 702 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 702 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nil? ^{:line 702 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:having find)) ^{:line 702 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vector? ^{:line 702 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:having find))) ^{:line 703 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 704 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc clause] ^{:line 707 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 707 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 707 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (map? clause) ^{:line 708 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 708 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (keyword? ^{:line 708 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:op clause)) ^{:line 709 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 709 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (integer? ^{:line 709 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:agg clause)) ^{:line 710 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (number? ^{:line 710 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:val clause))))) acc ^{:line 712 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 712 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "having clause requires :op, integer :agg, and numeric :val")))) ^{:line 714 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] ^{:line 714 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 714 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:having find) ^{:line 714 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [])) ^{:line 715 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 715 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "aggregate :having must be a vector")])]
-  ^{:line 716 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 716 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat base-errors ^{:line 716 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat spec-errors having-errors))))))
+(defn- syntax-find-errors [find]
+  (cond
+  (string? find) []
+  (not (map? find)) [(query-error :query-invalid-syntax "find must be a relation string or aggregate map")]
+  :else (let [base-errors (vec (concat (if (string? (:rel find)) [] [(query-error :query-invalid-syntax "aggregate find requires string :rel")]) (concat (if (and (vector? (:group find)) (every? integer? (:group find))) [] [(query-error :query-invalid-syntax "aggregate :group must contain integer positions")]) (if (and (vector? (:agg find)) (not (empty? (:agg find)))) [] [(query-error :query-invalid-syntax "aggregate :agg must be a non-empty vector")]))))
+   spec-errors (if (vector? (:agg find)) (reduce (fn [acc spec] (if (and (map? spec) (and (keyword? (:op spec)) (or (nil? (:arg spec)) (integer? (:arg spec))))) acc (conj acc (query-error :query-invalid-syntax "aggregate spec requires keyword :op and optional integer :arg")))) [] (:agg find)) [])
+   having-errors (if (or (nil? (:having find)) (vector? (:having find))) (reduce (fn [acc clause] (if (and (map? clause) (and (keyword? (:op clause)) (and (integer? (:agg clause)) (number? (:val clause))))) acc (conj acc (query-error :query-invalid-syntax "having clause requires :op, integer :agg, and numeric :val")))) [] (or (:having find) [])) [(query-error :query-invalid-syntax "aggregate :having must be a vector")])]
+  (vec (concat base-errors (concat spec-errors having-errors))))))
 
-^{:line 718 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- syntax-errors [form]
-  ^{:line 719 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 720 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 720 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (map? form)) ^{:line 720 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 720 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "query must be a map")]
-  ^{:line 721 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= ^{:line 721 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? form :rules) ^{:line 721 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? form :strata)) ^{:line 722 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 722 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "query must provide exactly one of :rules or :strata")]
-  ^{:line 724 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nil? ^{:line 724 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (raw-strata form)) ^{:line 725 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 725 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-invalid-syntax "rules or strata have an invalid shape")]
-  :else ^{:line 727 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [strata ^{:line 727 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (raw-strata form)
-   rules ^{:line 728 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 728 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc stratum] ^{:line 731 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 731 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat acc stratum))) ^{:line 732 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] strata)
-   rule-errors ^{:line 734 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 734 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc rule] ^{:line 737 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 737 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat acc ^{:line 737 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (syntax-rule-errors rule)))) ^{:line 738 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] rules)]
-  ^{:line 739 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 739 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat ^{:line 739 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (syntax-find-errors ^{:line 739 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:find form)) rule-errors)))))
+(defn- syntax-errors [form]
+  (cond
+  (not (map? form)) [(query-error :query-invalid-syntax "query must be a map")]
+  (= (contains? form :rules) (contains? form :strata)) [(query-error :query-invalid-syntax "query must provide exactly one of :rules or :strata")]
+  (nil? (raw-strata form)) [(query-error :query-invalid-syntax "rules or strata have an invalid shape")]
+  :else (let [strata (raw-strata form)
+   rules (reduce (fn [acc stratum] (vec (concat acc stratum))) [] strata)
+   rule-errors (reduce (fn [acc rule] (vec (concat acc (syntax-rule-errors rule)))) [] rules)]
+  (vec (concat (syntax-find-errors (:find form)) rule-errors)))))
 
-^{:line 741 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- compile-term-form [value]
-  ^{:line 742 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 742 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (variable-form? value) ^{:line 742 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/variable ^{:line 742 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:var value)) ^{:line 742 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/constant value)))
+(defn- compile-term-form [value]
+  (if (variable-form? value) (d/variable (:var value)) (d/constant value)))
 
-^{:line 744 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- compile-term-forms [values]
-  ^{:line 745 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (mapv ^{:line 745 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [value] ^{:line 745 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compile-term-form value)) values))
+(defn- compile-term-forms [values]
+  (mapv (fn [value] (compile-term-form value)) values))
 
-^{:line 747 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- compile-literal-form [literal]
-  ^{:line 748 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 749 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? literal :pred) ^{:line 750 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/comparison-literal ^{:line 750 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:pred literal) ^{:line 750 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compile-term-forms ^{:line 750 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:args literal)))
-  ^{:line 751 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? literal :fn) ^{:line 752 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/builtin-literal ^{:line 752 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:fn literal) ^{:line 752 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compile-term-forms ^{:line 752 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:args literal)) ^{:line 753 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:bind literal))
-  ^{:line 754 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= true ^{:line 754 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:neg literal)) ^{:line 755 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/negated-literal ^{:line 755 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:rel literal) ^{:line 755 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compile-term-forms ^{:line 755 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:args literal)))
-  :else ^{:line 757 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/relation-literal ^{:line 757 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:rel literal) ^{:line 757 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compile-term-forms ^{:line 757 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:args literal)))))
+(defn- compile-literal-form [literal]
+  (cond
+  (contains? literal :pred) (d/comparison-literal (:pred literal) (compile-term-forms (:args literal)))
+  (contains? literal :fn) (d/builtin-literal (:fn literal) (compile-term-forms (:args literal)) (:bind literal))
+  (= true (:neg literal)) (d/negated-literal (:rel literal) (compile-term-forms (:args literal)))
+  :else (d/relation-literal (:rel literal) (compile-term-forms (:args literal)))))
 
-^{:line 759 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- compile-rule-form [rule]
-  ^{:line 760 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/rule ^{:line 760 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:rel ^{:line 760 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:head rule)) ^{:line 761 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compile-term-forms ^{:line 761 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:args ^{:line 761 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:head rule))) ^{:line 762 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (mapv ^{:line 762 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [literal] ^{:line 762 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compile-literal-form literal)) ^{:line 763 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:body rule))))
+(defn- compile-rule-form [rule]
+  (d/rule (:rel (:head rule)) (compile-term-forms (:args (:head rule))) (mapv (fn [literal] (compile-literal-form literal)) (:body rule))))
 
-^{:line 765 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^FindSpec compile-find-form [find]
-  ^{:line 766 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 766 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (string? find) ^{:line 767 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (relation-find find) ^{:line 768 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregate-find ^{:line 769 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:rel find) ^{:line 770 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:group find) ^{:line 771 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (mapv ^{:line 771 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [spec] ^{:line 772 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregate-spec ^{:line 772 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:op spec) ^{:line 772 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:arg spec))) ^{:line 773 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:agg find)) ^{:line 774 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (mapv ^{:line 774 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [clause] ^{:line 775 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (having-clause ^{:line 775 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:op clause) ^{:line 775 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:agg clause) ^{:line 775 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:val clause))) ^{:line 776 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 776 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:having find) ^{:line 776 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [])))))
+(defn- ^FindSpec compile-find-form [find]
+  (if (string? find) (relation-find find) (aggregate-find (:rel find) (:group find) (mapv (fn [spec] (aggregate-spec (:op spec) (:arg spec))) (:agg find)) (mapv (fn [clause] (having-clause (:op clause) (:agg clause) (:val clause))) (or (:having find) [])))))
 
-^{:line 778 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^CompileResult compile-query [form]
-  ^{:line 779 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 779 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-plan? form) ^{:line 780 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [errors ^{:line 780 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (validate-plan form)]
-  ^{:line 781 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 781 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? errors) ^{:line 781 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->CompileResult form ^{:line 781 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []) ^{:line 781 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->CompileResult nil errors))) ^{:line 782 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [errors ^{:line 782 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (syntax-errors form)]
-  ^{:line 783 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 783 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 783 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? errors)) ^{:line 784 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->CompileResult nil errors) ^{:line 785 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [strata ^{:line 786 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (mapv ^{:line 786 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [stratum] ^{:line 787 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (mapv ^{:line 787 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [rule] ^{:line 787 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compile-rule-form rule)) stratum)) ^{:line 788 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (raw-strata form))
-   plan ^{:line 789 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-plan ^{:line 789 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compile-find-form ^{:line 789 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:find form)) strata)
-   validation-errors ^{:line 790 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (validate-plan plan)]
-  ^{:line 791 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 791 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? validation-errors) ^{:line 792 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->CompileResult plan ^{:line 792 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []) ^{:line 793 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->CompileResult nil validation-errors)))))))
+(defn ^CompileResult compile-query [form]
+  (if (query-plan? form) (let [errors (validate-plan form)]
+  (if (empty? errors) (->CompileResult form []) (->CompileResult nil errors))) (let [errors (syntax-errors form)]
+  (if (not (empty? errors)) (->CompileResult nil errors) (let [strata (mapv (fn [stratum] (mapv (fn [rule] (compile-rule-form rule)) stratum)) (raw-strata form))
+   plan (query-plan (compile-find-form (:find form)) strata)
+   validation-errors (validate-plan plan)]
+  (if (empty? validation-errors) (->CompileResult plan []) (->CompileResult nil validation-errors)))))))
 
-^{:line 796 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^String length-key [^String tag ^String value]
-  ^{:line 799 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str tag ^{:line 799 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count value) ":" value))
+(defn- ^String length-key [^String tag ^String value]
+  (str tag (count value) ":" value))
 
-^{:line 801 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^String term-key [value]
-  ^{:line 802 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 803 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (string? value) ^{:line 803 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (length-key "s" value)
-  ^{:line 804 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (integer? value) ^{:line 804 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "i" value ";")
-  ^{:line 805 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (number? value) ^{:line 805 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "f" value ";")
-  ^{:line 806 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (boolean? value) ^{:line 806 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if value "b1;" "b0;")
-  ^{:line 807 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (keyword? value) ^{:line 807 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (length-key "k" ^{:line 807 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str value))
-  ^{:line 808 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (t/instant? value) ^{:line 809 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "m" ^{:line 809 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (t/instant-epoch-seconds value) ":" ^{:line 809 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (t/instant-nanos value) ";")
-  ^{:line 810 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (t/triple? value) ^{:line 811 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [slot0 ^{:line 811 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (term-key ^{:line 811 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (t/triple-slot0 value))
-   slot1 ^{:line 812 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (term-key ^{:line 812 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (t/triple-slot1 value))
-   slot2 ^{:line 813 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (term-key ^{:line 813 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (t/triple-slot2 value))]
-  ^{:line 814 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "t" ^{:line 814 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count slot0) ":" slot0 ^{:line 815 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count slot1) ":" slot1 ^{:line 816 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count slot2) ":" slot2))
-  :else ^{:line 817 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (length-key "x" ^{:line 817 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (pr-str value))))
+(defn ^String term-key [value]
+  (cond
+  (string? value) (length-key "s" value)
+  (integer? value) (str "i" value ";")
+  (number? value) (str "f" value ";")
+  (boolean? value) (if value "b1;" "b0;")
+  (keyword? value) (length-key "k" (str value))
+  (t/instant? value) (str "m" (t/instant-epoch-seconds value) ":" (t/instant-nanos value) ";")
+  (t/triple? value) (let [slot0 (term-key (t/triple-slot0 value))
+   slot1 (term-key (t/triple-slot1 value))
+   slot2 (term-key (t/triple-slot2 value))]
+  (str "t" (count slot0) ":" slot0 (count slot1) ":" slot1 (count slot2) ":" slot2))
+  :else (length-key "x" (pr-str value))))
 
-^{:line 819 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^String row-key [row]
-  ^{:line 820 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 820 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc value] ^{:line 823 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [key ^{:line 823 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (term-key value)]
-  ^{:line 823 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str acc ^{:line 823 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count key) ":" key))) "r" row))
+(defn ^String row-key [row]
+  (reduce (fn [acc value] (let [key (term-key value)]
+  (str acc (count key) ":" key))) "r" row))
 
-^{:line 826 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ordered-rows [rows]
-  ^{:line 827 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 827 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (sort-by row-key ^{:line 827 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec rows))))
+(defn- ordered-rows [rows]
+  (vec (sort-by row-key (vec rows))))
 
-^{:line 829 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def max-results ^{:line 830 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [raw ^{:line 830 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (System/getenv "FRAM_MAX_RESULTS")
-   parsed ^{:line 832 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 832 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 832 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? raw) ^{:line 832 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 832 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= raw ""))) ^{:line 832 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (parse-long raw) nil)]
-  ^{:line 833 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 833 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 833 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? parsed) ^{:line 833 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (> parsed 0)) parsed 100000)))
+(def max-results (let [raw (System/getenv "FRAM_MAX_RESULTS")
+   parsed (if (and (some? raw) (not (= raw ""))) (parse-long raw) nil)]
+  (if (and (some? parsed) (> parsed 0)) parsed 100000)))
 
-^{:line 835 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- evaluate-plan! [^Projection projection ^QueryPlan plan]
-  ^{:line 838 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (binding [d/*query-control* *query-control*]
-  ^{:line 839 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (d/run-strata-db-with-candidates! ^{:line 840 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (projection-edb projection) ^{:line 841 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryplan-strata plan) ^{:line 842 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (projection-candidates projection))))
+(defn- evaluate-plan-controlled! [^Projection projection ^QueryPlan plan control]
+  (d/run-strata-db-with-candidates-controlled! (projection-edb projection) (queryplan-strata plan) (projection-candidates projection) control))
 
-^{:line 844 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^QueryResult abort-result [problem]
-  ^{:line 845 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [data ^{:line 845 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (ex-data problem)]
-  ^{:line 846 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 846 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= :fram-query-abort ^{:line 846 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:type data)) ^{:line 847 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (failure-result ^{:line 847 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 847 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error ^{:line 847 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:code data) ^{:line 847 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (.getMessage problem))]) ^{:line 848 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (throw problem))))
+(defn- evaluate-plan! [^Projection projection ^QueryPlan plan]
+  (evaluate-plan-controlled! projection plan *query-control*))
 
-^{:line 851 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def numeric-aggregate-operators ^{:line 851 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{:sum :avg :min :max})
+(defn- ^QueryResult abort-result [problem]
+  (let [data (ex-data problem)]
+  (if (= :fram-query-abort (:type data)) (failure-result [(query-error (:code data) (.getMessage problem))]) (throw problem))))
 
-^{:line 853 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- number-atom [value]
-  ^{:line 854 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 855 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (integer? value) value
-  ^{:line 856 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (number? value) ^{:line 856 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (double value)
-  ^{:line 857 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (string? value) ^{:line 858 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [integer-result ^{:line 858 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (parse-long value)]
-  ^{:line 859 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 859 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? integer-result) integer-result ^{:line 859 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (parse-double value)))
+(def numeric-aggregate-operators #{:sum :avg :min :max})
+
+(defn- number-atom [value]
+  (cond
+  (integer? value) value
+  (number? value) (double value)
+  (string? value) (let [integer-result (parse-long value)]
+  (if (some? integer-result) integer-result (parse-double value)))
   :else nil))
 
-^{:line 862 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- numeric-column-error [rows ^FindSpec find]
-  ^{:line 865 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (loop [specs ^{:line 865 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-aggregates find)]
-  ^{:line 866 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 866 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? specs) nil ^{:line 868 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [spec ^{:line 868 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (first specs)]
-  ^{:line 869 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 869 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (contains? numeric-aggregate-operators ^{:line 869 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregatespec-operator spec)) ^{:line 870 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [position ^{:line 870 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregatespec-argument spec)
-   bad ^{:line 871 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some ^{:line 871 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [row] ^{:line 872 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nil? ^{:line 872 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (number-atom ^{:line 872 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth row position)))) rows)]
-  ^{:line 874 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if bad ^{:line 875 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-nonnumeric-aggregate ^{:line 876 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "aggregate position " position " contains a non-numeric Term")) ^{:line 878 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (recur ^{:line 878 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (rest specs)))) ^{:line 879 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (recur ^{:line 879 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (rest specs)))))))
+(defn- numeric-column-error [rows ^FindSpec find]
+  (loop [specs (findspec-aggregates find)]
+  (if (empty? specs) nil (let [spec (first specs)]
+  (if (contains? numeric-aggregate-operators (aggregatespec-operator spec)) (let [position (aggregatespec-argument spec)
+   bad (some (fn [row] (nil? (number-atom (nth row position)))) rows)]
+  (if bad (query-error :query-nonnumeric-aggregate (str "aggregate position " position " contains a non-numeric Term")) (recur (rest specs)))) (recur (rest specs)))))))
 
-^{:line 881 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- group-rows [rows grouping]
-  ^{:line 884 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 884 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc row] ^{:line 887 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [key ^{:line 887 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (mapv ^{:line 887 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [position] ^{:line 887 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth row position)) grouping)]
-  ^{:line 888 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (update acc key ^{:line 889 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [current] ^{:line 890 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj ^{:line 890 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or current ^{:line 890 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []) row))))) ^{:line 891 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} {} rows))
+(defn- group-rows [rows grouping]
+  (reduce (fn [acc row] (let [key (mapv (fn [position] (nth row position)) grouping)]
+  (update acc key (fn [current] (conj (or current []) row))))) {} rows))
 
-^{:line 893 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^Boolean all-integers? [rows position]
-  ^{:line 896 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (every? ^{:line 896 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [row] ^{:line 897 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (integer? ^{:line 897 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (number-atom ^{:line 897 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth row position)))) rows))
+(defn- ^Boolean all-integers? [rows position]
+  (every? (fn [row] (integer? (number-atom (nth row position)))) rows))
 
-^{:line 900 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- sum-values [rows position]
-  ^{:line 903 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 903 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (all-integers? rows position) ^{:line 904 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 904 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc row] ^{:line 907 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (+ acc ^{:line 907 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (number-atom ^{:line 907 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth row position)))) 0 rows) ^{:line 909 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 909 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc row] ^{:line 912 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (+ acc ^{:line 912 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (double ^{:line 912 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (number-atom ^{:line 912 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth row position))))) 0.0 rows)))
+(defn- sum-values [rows position]
+  (if (all-integers? rows position) (reduce (fn [acc row] (+ acc (number-atom (nth row position)))) 0 rows) (reduce (fn [acc row] (+ acc (double (number-atom (nth row position))))) 0.0 rows)))
 
-^{:line 915 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- extreme-value [rows position ^Boolean maximum?]
-  ^{:line 919 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 919 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [best row] ^{:line 922 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [candidate ^{:line 922 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (number-atom ^{:line 922 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth row position))]
-  ^{:line 923 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 923 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nil? best) candidate ^{:line 925 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 925 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if maximum? ^{:line 926 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (> ^{:line 926 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (double candidate) ^{:line 926 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (double best)) ^{:line 927 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (< ^{:line 927 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (double candidate) ^{:line 927 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (double best))) candidate best)))) nil rows))
+(defn- extreme-value [rows position ^Boolean maximum?]
+  (reduce (fn [best row] (let [candidate (number-atom (nth row position))]
+  (if (nil? best) candidate (if (if maximum? (> (double candidate) (double best)) (< (double candidate) (double best))) candidate best)))) nil rows))
 
-^{:line 931 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- aggregate-value [rows ^AggregateSpec spec]
-  ^{:line 934 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [operator ^{:line 934 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregatespec-operator spec)
-   position ^{:line 935 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 935 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregatespec-argument spec) 0)]
-  ^{:line 936 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 937 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :count) ^{:line 937 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count rows)
-  ^{:line 938 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :count-distinct) ^{:line 939 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count ^{:line 939 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (set ^{:line 939 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (mapv ^{:line 939 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [row] ^{:line 939 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth row position)) rows)))
-  ^{:line 940 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :sum) ^{:line 940 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (sum-values rows position)
-  ^{:line 941 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :avg) ^{:line 941 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (/ ^{:line 941 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (double ^{:line 941 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (sum-values rows position)) ^{:line 941 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (double ^{:line 941 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count rows)))
-  ^{:line 942 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :min) ^{:line 942 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (extreme-value rows position false)
-  ^{:line 943 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :max) ^{:line 943 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (extreme-value rows position true)
+(defn- aggregate-value [rows ^AggregateSpec spec]
+  (let [operator (aggregatespec-operator spec)
+   position (or (aggregatespec-argument spec) 0)]
+  (cond
+  (= operator :count) (count rows)
+  (= operator :count-distinct) (count (set (mapv (fn [row] (nth row position)) rows)))
+  (= operator :sum) (sum-values rows position)
+  (= operator :avg) (/ (double (sum-values rows position)) (double (count rows)))
+  (= operator :min) (extreme-value rows position false)
+  (= operator :max) (extreme-value rows position true)
   :else nil)))
 
-^{:line 946 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^Boolean comparison-number [operator left right]
-  ^{:line 950 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [left-number ^{:line 950 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (double left)
-   right-number ^{:line 950 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (double right)]
-  ^{:line 951 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 952 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :eq) ^{:line 952 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= left-number right-number)
-  ^{:line 953 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :ne) ^{:line 953 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 953 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= left-number right-number))
-  ^{:line 954 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :lt) ^{:line 954 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (< left-number right-number)
-  ^{:line 955 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :le) ^{:line 955 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (<= left-number right-number)
-  ^{:line 956 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :gt) ^{:line 956 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (> left-number right-number)
-  ^{:line 957 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= operator :ge) ^{:line 957 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (>= left-number right-number)
+(defn- ^Boolean comparison-number [operator left right]
+  (let [left-number (double left)
+   right-number (double right)]
+  (cond
+  (= operator :eq) (= left-number right-number)
+  (= operator :ne) (not (= left-number right-number))
+  (= operator :lt) (< left-number right-number)
+  (= operator :le) (<= left-number right-number)
+  (= operator :gt) (> left-number right-number)
+  (= operator :ge) (>= left-number right-number)
   :else false)))
 
-^{:line 960 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^Boolean having-passes? [row grouping-count clauses]
-  ^{:line 964 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (every? ^{:line 965 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [clause] ^{:line 966 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (comparison-number ^{:line 967 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (havingclause-operator clause) ^{:line 968 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth row ^{:line 968 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (+ grouping-count ^{:line 968 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (havingclause-aggregate-index clause))) ^{:line 969 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (havingclause-value clause))) clauses))
+(defn- ^Boolean having-passes? [row grouping-count clauses]
+  (every? (fn [clause] (comparison-number (havingclause-operator clause) (nth row (+ grouping-count (havingclause-aggregate-index clause))) (havingclause-value clause))) clauses))
 
-^{:line 972 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^QueryResult aggregate-result [db ^FindSpec find]
-  ^{:line 975 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [rows ^{:line 975 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 975 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (get db ^{:line 975 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-relation find) ^{:line 975 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{}))]
-  ^{:line 976 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 976 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? rows) ^{:line 977 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (success-result ^{:line 977 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} []) ^{:line 978 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [numeric-error ^{:line 978 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (numeric-column-error rows find)]
-  ^{:line 979 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 979 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? numeric-error) ^{:line 980 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (failure-result ^{:line 980 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [numeric-error]) ^{:line 981 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [groups ^{:line 981 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (group-rows rows ^{:line 981 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-grouping find))
-   aggregated ^{:line 983 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (reduce ^{:line 984 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [acc entry] ^{:line 987 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [key ^{:line 987 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth entry 0)
-   members ^{:line 988 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth entry 1)
-   values ^{:line 990 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (mapv ^{:line 990 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [spec] ^{:line 991 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregate-value members spec)) ^{:line 992 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-aggregates find))]
-  ^{:line 993 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (conj acc ^{:line 993 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 993 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (concat key values))))) ^{:line 994 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [] groups)
-   survivors ^{:line 996 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (filterv ^{:line 996 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [row] ^{:line 997 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (having-passes? row ^{:line 997 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count ^{:line 997 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-grouping find)) ^{:line 998 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-having find))) aggregated)
-   count-value ^{:line 1000 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count survivors)]
-  ^{:line 1001 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1001 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (> count-value max-results) ^{:line 1002 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (limited-result ^{:line 1003 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-result-limit ^{:line 1004 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "aggregate result has " count-value " groups, over limit " max-results)) count-value max-results) ^{:line 1007 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (success-result ^{:line 1007 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 1007 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (sort-by row-key survivors))))))))))
+(defn- ^QueryResult aggregate-result [db ^FindSpec find]
+  (let [rows (vec (get db (findspec-relation find) #{}))]
+  (if (empty? rows) (success-result []) (let [numeric-error (numeric-column-error rows find)]
+  (if (some? numeric-error) (failure-result [numeric-error]) (let [groups (group-rows rows (findspec-grouping find))
+   aggregated (reduce (fn [acc entry] (let [key (nth entry 0)
+   members (nth entry 1)
+   values (mapv (fn [spec] (aggregate-value members spec)) (findspec-aggregates find))]
+  (conj acc (vec (concat key values))))) [] groups)
+   survivors (filterv (fn [row] (having-passes? row (count (findspec-grouping find)) (findspec-having find))) aggregated)
+   count-value (count survivors)]
+  (if (> count-value max-results) (limited-result (query-error :query-result-limit (str "aggregate result has " count-value " groups, over limit " max-results)) count-value max-results) (success-result (vec (sort-by row-key survivors))))))))))
 
-^{:line 1009 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^QueryResult run-plan-projected! [^Projection projection ^QueryPlan plan]
-  ^{:line 1012 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [errors ^{:line 1012 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (validate-plan plan)]
-  ^{:line 1013 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1013 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 1013 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? errors)) ^{:line 1014 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (failure-result errors) ^{:line 1015 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (try
-  ^{:line 1016 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [db ^{:line 1016 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (evaluate-plan! projection plan)
-   find ^{:line 1017 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryplan-find plan)]
-  ^{:line 1018 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1018 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregate-find? find) ^{:line 1019 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregate-result db find) ^{:line 1020 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [rows ^{:line 1020 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (get db ^{:line 1020 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-relation find) ^{:line 1020 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{})
-   count-value ^{:line 1021 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count rows)]
-  ^{:line 1022 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1022 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (> count-value max-results) ^{:line 1023 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (limited-result ^{:line 1024 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-result-limit ^{:line 1025 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "result has " count-value " rows, over limit " max-results)) count-value max-results) ^{:line 1028 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (success-result ^{:line 1028 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (ordered-rows rows))))))
+(defn ^QueryResult run-plan-projected-controlled! [^Projection projection ^QueryPlan plan control]
+  (let [errors (validate-plan plan)]
+  (if (not (empty? errors)) (failure-result errors) (try
+  (let [db (evaluate-plan-controlled! projection plan control)
+   find (queryplan-find plan)]
+  (if (aggregate-find? find) (aggregate-result db find) (let [rows (get db (findspec-relation find) #{})
+   count-value (count rows)]
+  (if (> count-value max-results) (limited-result (query-error :query-result-limit (str "result has " count-value " rows, over limit " max-results)) count-value max-results) (success-result (ordered-rows rows))))))
   (catch Exception problem
-    ^{:line 1029 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (abort-result problem))))))
+    (abort-result problem))))))
 
-^{:line 1031 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^QueryResult run-projected! [^Projection projection ^QueryPlan plan]
-  ^{:line 1034 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (run-plan-projected! projection plan))
+(defn ^QueryResult run-plan-projected! [^Projection projection ^QueryPlan plan]
+  (run-plan-projected-controlled! projection plan *query-control*))
 
-^{:line 1036 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^QueryResult run! [propositions ^QueryPlan plan]
-  ^{:line 1039 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (run-plan-projected! ^{:line 1039 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (project propositions) plan))
+(defn ^QueryResult run-projected! [^Projection projection ^QueryPlan plan]
+  (run-plan-projected! projection plan))
 
-^{:line 1041 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^QueryResult run-syntax! [propositions form]
-  ^{:line 1044 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [compiled ^{:line 1044 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compile-query form)
-   plan ^{:line 1045 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compileresult-plan compiled)]
-  ^{:line 1046 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1046 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? plan) ^{:line 1047 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (run! propositions plan) ^{:line 1048 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (failure-result ^{:line 1048 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compileresult-errors compiled)))))
+(defn ^QueryResult run! [propositions ^QueryPlan plan]
+  (run-plan-projected! (project propositions) plan))
 
-^{:line 1051 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def max-page-limit 4096)
+(defn ^QueryResult run-syntax! [propositions form]
+  (let [compiled (compile-query form)
+   plan (compileresult-plan compiled)]
+  (if (some? plan) (run! propositions plan) (failure-result (compileresult-errors compiled)))))
 
-^{:line 1052 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def max-page-wire-bytes 1048576)
+(def max-page-limit 4096)
 
-^{:line 1053 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def max-page-payload-bytes ^{:line 1053 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (- max-page-wire-bytes 512))
+(def max-page-wire-bytes 1048576)
 
-^{:line 1054 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def max-page-cursor-bytes 524288)
+(def max-page-payload-bytes (- max-page-wire-bytes 512))
 
-^{:line 1055 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (def ^String page-cursor-prefix "fram-query-term-page-v1.")
+(def max-page-cursor-bytes 524288)
 
-^{:line 1057 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- utf8-size [^String value]
-  ^{:line 1057 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count ^{:line 1057 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (.getBytes value "UTF-8")))
+(def ^String page-cursor-prefix "fram-query-term-page-v1.")
 
-^{:line 1059 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^String page-cursor [row]
-  ^{:line 1060 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str page-cursor-prefix ^{:line 1060 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (row-key row)))
+(defn- utf8-size [^String value]
+  (count (.getBytes value "UTF-8")))
 
-^{:line 1062 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^CursorResult decode-page-cursor [cursor]
-  ^{:line 1063 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1063 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 1063 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (string? cursor)) ^{:line 1064 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->CursorResult nil ^{:line 1065 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-page-cursor "page cursor must be a string")) ^{:line 1067 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1067 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 1067 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (> ^{:line 1067 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (utf8-size cursor) max-page-cursor-bytes) ^{:line 1068 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 1068 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 1068 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str/starts-with? cursor page-cursor-prefix)) ^{:line 1069 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= cursor page-cursor-prefix))) ^{:line 1070 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->CursorResult nil ^{:line 1071 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-page-cursor "page cursor is not canonical")) ^{:line 1073 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->CursorResult ^{:line 1073 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (subs cursor ^{:line 1073 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count page-cursor-prefix)) nil))))
+(defn ^String page-cursor [row]
+  (str page-cursor-prefix (row-key row)))
 
-^{:line 1075 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^QueryPage page-envelope [window count-value]
-  ^{:line 1078 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [rows ^{:line 1078 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (subvec window 0 count-value)
-   more ^{:line 1079 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (> ^{:line 1079 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count window) count-value)
-   next ^{:line 1080 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1080 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and more ^{:line 1080 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (> count-value 0)) ^{:line 1081 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (page-cursor ^{:line 1081 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth rows ^{:line 1081 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (- count-value 1))) nil)]
-  ^{:line 1082 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (success-page rows next more)))
+(defn ^CursorResult decode-page-cursor [cursor]
+  (if (not (string? cursor)) (->CursorResult nil (query-error :query-page-cursor "page cursor must be a string")) (if (or (> (utf8-size cursor) max-page-cursor-bytes) (or (not (str/starts-with? cursor page-cursor-prefix)) (= cursor page-cursor-prefix))) (->CursorResult nil (query-error :query-page-cursor "page cursor is not canonical")) (->CursorResult (subs cursor (count page-cursor-prefix)) nil))))
 
-^{:line 1084 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- envelope-size [rows-size next ^Boolean more]
-  ^{:line 1088 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (+ ^{:line 1088 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (utf8-size "rows:") rows-size ^{:line 1088 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (utf8-size "|next:") ^{:line 1089 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (utf8-size ^{:line 1089 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (pr-str next)) ^{:line 1089 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (utf8-size "|more:") ^{:line 1090 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (utf8-size ^{:line 1090 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (pr-str more))))
+(defn- ^QueryPage page-envelope [window count-value]
+  (let [rows (subvec window 0 count-value)
+   more (> (count window) count-value)
+   next (if (and more (> count-value 0)) (page-cursor (nth rows (- count-value 1))) nil)]
+  (success-page rows next more)))
 
-^{:line 1092 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- fitting-prefix [window wanted]
-  ^{:line 1095 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (loop [index 0
+(defn- envelope-size [rows-size next ^Boolean more]
+  (+ (utf8-size "rows:") rows-size (utf8-size "|next:") (utf8-size (pr-str next)) (utf8-size "|more:") (utf8-size (pr-str more))))
+
+(defn- fitting-prefix [window wanted]
+  (loop [index 0
    rows-size 2
    best 0]
-  ^{:line 1096 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1096 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (>= index wanted) best ^{:line 1098 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [row ^{:line 1098 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nth window index)
-   count-value ^{:line 1099 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (+ index 1)
-   rows-size2 ^{:line 1100 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (+ rows-size ^{:line 1100 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1100 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= index 0) 0 1) ^{:line 1101 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (utf8-size ^{:line 1101 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (pr-str row)))
-   more ^{:line 1102 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (> ^{:line 1102 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count window) count-value)
-   next ^{:line 1103 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if more ^{:line 1103 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (page-cursor row) nil)
-   fits ^{:line 1104 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 1104 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 1104 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (nil? next) ^{:line 1105 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (<= ^{:line 1105 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (utf8-size next) max-page-cursor-bytes)) ^{:line 1106 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (<= ^{:line 1106 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (envelope-size rows-size2 next more) max-page-payload-bytes))]
-  ^{:line 1108 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (recur count-value rows-size2 ^{:line 1108 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if fits count-value best))))))
+  (if (>= index wanted) best (let [row (nth window index)
+   count-value (+ index 1)
+   rows-size2 (+ rows-size (if (= index 0) 0 1) (utf8-size (pr-str row)))
+   more (> (count window) count-value)
+   next (if more (page-cursor row) nil)
+   fits (and (or (nil? next) (<= (utf8-size next) max-page-cursor-bytes)) (<= (envelope-size rows-size2 next more) max-page-payload-bytes))]
+  (recur count-value rows-size2 (if fits count-value best))))))
 
-^{:line 1110 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn- ^QueryPage abort-page [problem]
-  ^{:line 1111 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [data ^{:line 1111 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (ex-data problem)]
-  ^{:line 1112 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1112 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= :fram-query-abort ^{:line 1112 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:type data)) ^{:line 1113 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (failure-page ^{:line 1113 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 1113 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error ^{:line 1113 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (:code data) ^{:line 1113 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (.getMessage problem))]) ^{:line 1114 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (throw problem))))
+(defn- ^QueryPage abort-page [problem]
+  (let [data (ex-data problem)]
+  (if (= :fram-query-abort (:type data)) (failure-page [(query-error (:code data) (.getMessage problem))]) (throw problem))))
 
-^{:line 1116 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^QueryPage run-page-plan-projected! [^Projection projection ^QueryPlan plan limit after]
-  ^{:line 1121 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [validation-errors ^{:line 1121 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (validate-plan plan)]
-  ^{:line 1122 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cond
-  ^{:line 1123 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 1123 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (empty? validation-errors)) ^{:line 1123 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (failure-page validation-errors)
-  ^{:line 1124 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (aggregate-find? ^{:line 1124 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryplan-find plan)) ^{:line 1125 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (failure-page ^{:line 1125 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 1125 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-aggregate-not-pageable "aggregate results are not pageable")])
-  ^{:line 1127 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 1127 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 1127 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (integer? limit)) ^{:line 1127 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (or ^{:line 1127 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (< limit 1) ^{:line 1127 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (> limit max-page-limit))) ^{:line 1128 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (failure-page ^{:line 1128 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 1128 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-page-limit ^{:line 1129 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (str "page limit must be from 1 through " max-page-limit))])
-  ^{:line 1130 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (and ^{:line 1130 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? after) ^{:line 1130 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (not ^{:line 1130 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (string? after))) ^{:line 1131 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (failure-page ^{:line 1131 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [^{:line 1131 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-page-cursor "page cursor must be a string or nil")])
-  :else ^{:line 1134 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [decoded ^{:line 1134 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1134 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? after) ^{:line 1135 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (decode-page-cursor after) ^{:line 1136 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (->CursorResult nil nil))
-   cursor-error ^{:line 1137 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cursorresult-error decoded)]
-  ^{:line 1138 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1138 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? cursor-error) ^{:line 1139 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (failure-page ^{:line 1139 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} [cursor-error]) ^{:line 1140 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (try
-  ^{:line 1141 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [db ^{:line 1141 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (evaluate-plan! projection plan)
-   relation ^{:line 1142 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (get db ^{:line 1142 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (findspec-relation ^{:line 1142 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (queryplan-find plan)) ^{:line 1142 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} #{})
-   ordered ^{:line 1143 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (ordered-rows relation)
-   after-key ^{:line 1144 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (cursorresult-key decoded)
-   eligible ^{:line 1146 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1146 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (some? after-key) ^{:line 1147 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (filterv ^{:line 1147 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fn [row] ^{:line 1148 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (pos? ^{:line 1148 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (compare ^{:line 1148 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (row-key row) after-key))) ordered) ordered)
-   window ^{:line 1151 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (vec ^{:line 1151 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (take ^{:line 1151 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (+ limit 1) eligible))
-   wanted ^{:line 1152 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (min limit ^{:line 1152 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (count window))]
-  ^{:line 1153 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1153 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= wanted 0) ^{:line 1154 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (page-envelope window 0) ^{:line 1155 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (let [count-value ^{:line 1155 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (fitting-prefix window wanted)]
-  ^{:line 1156 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (if ^{:line 1156 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (= count-value 0) ^{:line 1157 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (wire-failure-page ^{:line 1158 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (query-error :query-page-row-too-large "page contains a row too large for the bounded response") max-page-wire-bytes) ^{:line 1161 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (page-envelope window count-value)))))
+(defn ^QueryPage run-page-plan-projected! [^Projection projection ^QueryPlan plan limit after]
+  (let [validation-errors (validate-plan plan)]
+  (cond
+  (not (empty? validation-errors)) (failure-page validation-errors)
+  (aggregate-find? (queryplan-find plan)) (failure-page [(query-error :query-aggregate-not-pageable "aggregate results are not pageable")])
+  (or (not (integer? limit)) (or (< limit 1) (> limit max-page-limit))) (failure-page [(query-error :query-page-limit (str "page limit must be from 1 through " max-page-limit))])
+  (and (some? after) (not (string? after))) (failure-page [(query-error :query-page-cursor "page cursor must be a string or nil")])
+  :else (let [decoded (if (some? after) (decode-page-cursor after) (->CursorResult nil nil))
+   cursor-error (cursorresult-error decoded)]
+  (if (some? cursor-error) (failure-page [cursor-error]) (try
+  (let [db (evaluate-plan! projection plan)
+   relation (get db (findspec-relation (queryplan-find plan)) #{})
+   ordered (ordered-rows relation)
+   after-key (cursorresult-key decoded)
+   eligible (if (some? after-key) (filterv (fn [row] (pos? (compare (row-key row) after-key))) ordered) ordered)
+   window (vec (take (+ limit 1) eligible))
+   wanted (min limit (count window))]
+  (if (= wanted 0) (page-envelope window 0) (let [count-value (fitting-prefix window wanted)]
+  (if (= count-value 0) (wire-failure-page (query-error :query-page-row-too-large "page contains a row too large for the bounded response") max-page-wire-bytes) (page-envelope window count-value)))))
   (catch Exception problem
-    ^{:line 1162 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (abort-page problem))))))))
+    (abort-page problem))))))))
 
-^{:line 1164 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^QueryPage run-page-projected! [^Projection projection ^QueryPlan plan limit after]
-  ^{:line 1169 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (run-page-plan-projected! projection plan limit after))
+(defn ^QueryPage run-page-projected! [^Projection projection ^QueryPlan plan limit after]
+  (run-page-plan-projected! projection plan limit after))
 
-^{:line 1171 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (defn ^QueryPage run-page! [propositions ^QueryPlan plan limit after]
-  ^{:line 1176 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (run-page-plan-projected! ^{:line 1176 :file "/home/tom/code/fram/wt-text-search/src/fram/query.bclj"} (project propositions) plan limit after))
+(defn ^QueryPage run-page! [propositions ^QueryPlan plan limit after]
+  (run-page-plan-projected! (project propositions) plan limit after))

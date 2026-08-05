@@ -443,8 +443,7 @@
         projection: query/Projection
         (query/project-with-occurrences propositions occurrences)
         control: d/QueryControl (d/query-control query-step-limit timeout-ms)]
-    (binding [query/*query-control* control]
-      (query/run-plan-projected! projection plan))))
+    (query/run-plan-projected-controlled! projection plan control)))
 
 (defn query-row-position!
   [rows: (Vec d/Tuple)

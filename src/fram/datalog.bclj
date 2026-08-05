@@ -27,8 +27,8 @@
    head-arguments: (Vec QueryTerm)
    body: (Vec Literal)])
 (defrecord QueryControl
-  [steps: Any
-   cancelled: Any
+  [steps: (Atom Int)
+   cancelled: (Atom (U Keyword Nil))
    max-steps: Int
    deadline-ns: Int
    timeout-ms: Int])
@@ -77,14 +77,22 @@
 (def builtin-operators: (Set Keyword)
   #{:+ subtract-operator :* :/ :mod})
 
-(def ^:dynamic *query-control*: Any nil)
+(def ^:dynamic *query-control*: QueryControl? nil)
+
+(defn- next-query-step [steps: Int] -> Int
+  (inc steps))
+
+(defn- query-cancellation-cell [reason: (U Keyword Nil)] -> (Atom (U Keyword Nil))
+  (atom reason))
 
 (defn query-control
   [max-steps: Int
    timeout-ms: Int] -> QueryControl
   (if (and (> max-steps 0) (>= timeout-ms 0))
-    (->QueryControl (atom 0) (atom nil) max-steps
-                    (+ (System/nanoTime) (* timeout-ms 1000000)) timeout-ms)
+    (let [steps: (Atom Int) (atom 0)
+          cancelled: (Atom (U Keyword Nil)) (query-cancellation-cell nil)]
+      (->QueryControl steps cancelled max-steps
+                      (+ (System/nanoTime) (* timeout-ms 1000000)) timeout-ms))
     (throw (ex-info "fram: query limits must be positive steps and non-negative milliseconds"
                     {:type :invalid-query-control}))))
 
@@ -97,27 +105,26 @@
 (defn query-steps [control: QueryControl] -> Int
   (deref (querycontrol-steps control)))
 
-(defn- query-check! [] -> Any
-  (let [control *query-control*]
-    (if (nil? control)
-      nil
-      (let [steps (swap! (querycontrol-steps control) inc)
-            now (System/nanoTime)
-            cancelled (deref (querycontrol-cancelled control))
-            code (cond
-                   [(some? cancelled) :query-cancelled]
-                   [(> steps (querycontrol-max-steps control)) :query-work-limit]
-                   [(>= now (querycontrol-deadline-ns control)) :query-time-limit]
-                   [:else nil])]
-        (if (nil? code)
-          nil
-          (throw (ex-info (str "query evaluation stopped: " (name code))
-                          {:type :fram-query-abort
-                           :code code
-                           :reason cancelled
-                           :steps steps
-                           :max-steps (querycontrol-max-steps control)
-                           :timeout-ms (querycontrol-timeout-ms control)})))))))
+(defn- query-check! [control: QueryControl?] -> Any
+  (if (nil? control)
+    nil
+    (let [steps (swap! (querycontrol-steps control) next-query-step)
+          now (System/nanoTime)
+          cancelled (deref (querycontrol-cancelled control))
+          code (cond
+                 [(some? cancelled) :query-cancelled]
+                 [(> steps (querycontrol-max-steps control)) :query-work-limit]
+                 [(>= now (querycontrol-deadline-ns control)) :query-time-limit]
+                 [:else nil])]
+      (if (nil? code)
+        nil
+        (throw (ex-info (str "query evaluation stopped: " (name code))
+                        {:type :fram-query-abort
+                         :code code
+                         :reason cancelled
+                         :steps steps
+                         :max-steps (querycontrol-max-steps control)
+                         :timeout-ms (querycontrol-timeout-ms control)}))))))
 
 (defn variable [name: String] -> QueryTerm
   (if (pos? (count name))
@@ -212,11 +219,12 @@
         (assoc subst name value))
       (if (= (queryterm-value term) value) subst nil))))
 
-(defn- unify-arguments!
+(defn- unify-arguments-controlled!
   [arguments: (Vec QueryTerm)
    tuple: Tuple
-   subst: Substitution] -> (U Substitution Nil)
-  (query-check!)
+   subst: Substitution
+   control: QueryControl?] -> (U Substitution Nil)
+  (query-check! control)
   (if (not (= (count arguments) (count tuple)))
     nil
     (loop [position 0 current: (U Substitution Nil) subst]
@@ -226,6 +234,12 @@
                (unify (nth arguments position)
                       (nth tuple position)
                       current))))))
+
+(defn- unify-arguments!
+  [arguments: (Vec QueryTerm)
+   tuple: Tuple
+   subst: Substitution] -> (U Substitution Nil)
+  (unify-arguments-controlled! arguments tuple subst *query-control*))
 
 (defn- ground
   [arguments: (Vec QueryTerm)
@@ -323,16 +337,24 @@
           []
           [(assoc subst (literal-binding literal) result)])))))
 
+(defn- unify-tuples-controlled!
+  [arguments: (Vec QueryTerm)
+   tuples: (Vec Tuple)
+   subst: Substitution
+   control: QueryControl?] -> (Vec Substitution)
+  (reduce (fn
+            [acc: (Vec Substitution)
+             tuple: Tuple] -> (Vec Substitution)
+            (let [matched
+                  (unify-arguments-controlled! arguments tuple subst control)]
+              (if (some? matched) (conj acc matched) acc)))
+          [] tuples))
+
 (defn- unify-tuples!
   [arguments: (Vec QueryTerm)
    tuples: (Vec Tuple)
    subst: Substitution] -> (Vec Substitution)
-  (reduce (fn
-            [acc: (Vec Substitution)
-             tuple: Tuple] -> (Vec Substitution)
-            (let [matched (unify-arguments! arguments tuple subst)]
-              (if (some? matched) (conj acc matched) acc)))
-          [] tuples))
+  (unify-tuples-controlled! arguments tuples subst *query-control*))
 
 (defn- bound-term-value
   [term: QueryTerm
@@ -402,7 +424,7 @@
    sources: CandidateSources
    literal: Literal
    subst: Substitution] -> (Vec Substitution)
-  (query-check!)
+  (query-check! *query-control*)
   (cond
     [(= :relation (literal-kind literal))
      (relation-results! db sources literal subst)]
@@ -738,7 +760,8 @@
   [db: Db
    sources: CandidateSources
    literal: Literal
-   subst: Substitution] -> (Vec Substitution)
+   subst: Substitution
+   control: QueryControl?] -> (Vec Substitution)
   (let [relation (literal-relation literal)
         arguments (literal-arguments literal)
         source (get sources relation)]
@@ -749,29 +772,34 @@
         [] [subst])
       (cond
         [(instance? VirtualCandidateSource source)
-         (unify-tuples! arguments
-                        (virtual-source-rows! source true arguments subst)
-                        subst)]
+         (unify-tuples-controlled!
+          arguments
+          (virtual-source-rows! source true arguments subst)
+          subst control)]
         [(nil? source)
          (if (contains? text-relations relation)
            (missing-candidate-source! relation)
           (reduce (fn
                     [acc: (Vec Substitution)
                      tuple: Tuple] -> (Vec Substitution)
-                    (let [matched (unify-arguments! arguments tuple subst)]
+                    (let [matched
+                          (unify-arguments-controlled!
+                           arguments tuple subst control)]
                       (if (some? matched) (conj acc matched) acc)))
                   [] (vec (get db relation #{}))))]
         [:else
          (let [rows-value (candidatesource-rows source)
                handles (source-handles source relation arguments subst)]
            (if (nil? handles)
-             (unify-tuples! arguments rows-value subst)
+             (unify-tuples-controlled! arguments rows-value subst control)
              (reduce
               (fn
                 [acc: (Vec Substitution)
                  handle: Int] -> (Vec Substitution)
                 (let [tuple (source-row source handle)
-                      matched (unify-arguments! arguments tuple subst)]
+                      matched
+                      (unify-arguments-controlled!
+                       arguments tuple subst control)]
                   (if (some? matched) (conj acc matched) acc)))
               [] handles)))]))))
 
@@ -779,11 +807,12 @@
   [db: Db
    sources: CandidateSources
    literal: Literal
-   subst: Substitution] -> (Vec Substitution)
-  (query-check!)
+   subst: Substitution
+   control: QueryControl?] -> (Vec Substitution)
+  (query-check! control)
   (cond
     [(= :relation (literal-kind literal))
-     (relation-results-indexed! db sources literal subst)]
+     (relation-results-indexed! db sources literal subst control)]
     [(= :comparison (literal-kind literal))
      (if (comparison-result literal subst) [subst] [])]
     [(= :builtin (literal-kind literal)) (builtin-results literal subst)]
@@ -793,7 +822,8 @@
   [db: Db
    sources: CandidateSources
    body: (Vec Literal)
-   seed: Substitution] -> (Vec Substitution)
+   seed: Substitution
+   control: QueryControl?] -> (Vec Substitution)
   (reduce
    (fn
      [substitutions: (Vec Substitution)
@@ -801,19 +831,23 @@
      (reduce (fn
                [acc: (Vec Substitution)
                 subst: Substitution] -> (Vec Substitution)
-               (into acc (literal-results-indexed! db sources literal subst)))
+               (into acc
+                     (literal-results-indexed!
+                      db sources literal subst control)))
              [] substitutions))
    [seed] body))
 
 (defn- derive-rule-indexed!
   [db: Db
    sources: CandidateSources
-   value: Rule] -> (Set Tuple)
+   value: Rule
+   control: QueryControl?] -> (Set Tuple)
   (reduce (fn
             [acc: (Set Tuple)
              subst: Substitution] -> (Set Tuple)
             (conj acc (ground (rule-head-arguments value) subst)))
-          #{} (body-results-indexed! db sources (rule-body value) {})))
+          #{}
+          (body-results-indexed! db sources (rule-body value) {} control)))
 
 (defn- delta-relation-positions
   [body: (Vec Literal)
@@ -852,7 +886,8 @@
    delta: Db
    delta-sources: CandidateSources
    body: (Vec Literal)
-   pin: Int] -> (Vec Substitution)
+   pin: Int
+   control: QueryControl?] -> (Vec Substitution)
   (loop [position 0 remaining body substitutions: (Vec Substitution) [{}]]
     (if (empty? remaining)
       substitutions
@@ -869,7 +904,7 @@
                 subst: Substitution] -> (Vec Substitution)
                (into acc
                      (literal-results-indexed!
-                      read-db read-sources literal subst)))
+                      read-db read-sources literal subst control)))
              [] substitutions)]
         (recur (inc position) (rest remaining) next-substitutions)))))
 
@@ -879,7 +914,8 @@
    delta: Db
    delta-sources: CandidateSources
    delta-relations: (Set String)
-   value: Rule] -> (Set Tuple)
+   value: Rule
+   control: QueryControl?] -> (Set Tuple)
   (let [head (rule-head-arguments value)
         body (rule-body value)]
     (reduce
@@ -891,7 +927,8 @@
                   subst: Substitution] -> (Set Tuple)
                  (conj current (ground head subst)))
                derived
-               (body-results-pinned! db sources delta delta-sources body pin)))
+               (body-results-pinned!
+                db sources delta delta-sources body pin control)))
      #{} (delta-relation-positions body delta-relations))))
 
 (defn- db-new-only
@@ -949,7 +986,8 @@
    delta: Db
    rules: (Vec Rule)
    relations: (Vec String)
-   delta-relations: (Vec String)] -> Db
+   delta-relations: (Vec String)
+   control: QueryControl?] -> Db
   (let [delta-set (set delta-relations)
         delta-sources (build-candidate-sources delta delta-relations {})
         candidate
@@ -960,7 +998,7 @@
            (let [relation (rule-head-relation value)
                  derived
                  (derive-rule-delta!
-                  db sources delta delta-sources delta-set value)]
+                  db sources delta delta-sources delta-set value control)]
              (update current relation
                      (fn [known: (U (Set Tuple) Nil)] -> (Set Tuple)
                        (reduce (fn
@@ -971,10 +1009,11 @@
          {} rules)]
     (db-new-only candidate db relations)))
 
-(defn fixpoint-with-candidates!
+(defn fixpoint-with-candidates-controlled!
   [db0: Db
    rules: (Vec Rule)
-   candidates: CandidateSources] -> Db
+   candidates: CandidateSources
+   control: QueryControl?] -> Db
   (let [relations (rule-head-relations rules)
         read-relations (positive-relation-names rules)
         head-set (set relations)
@@ -989,7 +1028,8 @@
            [db: Db
             value: Rule] -> Db
            (let [relation (rule-head-relation value)
-                 derived (derive-rule-indexed! db0 initial-sources value)]
+                 derived
+                 (derive-rule-indexed! db0 initial-sources value control)]
              (update db relation
                      (fn [known: (U (Set Tuple) Nil)] -> (Set Tuple)
                        (reduce (fn
@@ -1005,10 +1045,17 @@
         db
         (let [next-delta
               (derive-delta!
-               db sources delta rules relations delta-relations)]
+               db sources delta rules relations delta-relations control)]
           (recur (db-merge-delta db next-delta relations)
                  (add-delta-sources sources next-delta read-relations)
                  next-delta))))))
+
+(defn fixpoint-with-candidates!
+  [db0: Db
+   rules: (Vec Rule)
+   candidates: CandidateSources] -> Db
+  (fixpoint-with-candidates-controlled!
+   db0 rules candidates *query-control*))
 
 (defn fixpoint!
   [db0: Db
@@ -1026,15 +1073,24 @@
    rules: (Vec Rule)] -> Db
   (fixpoint! (edb propositions) rules))
 
+(defn run-strata-db-with-candidates-controlled!
+  [db0: Db
+   strata: (Vec (Vec Rule))
+   candidates: CandidateSources
+   control: QueryControl?] -> Db
+  (reduce (fn
+            [db: Db
+             stratum: (Vec Rule)] -> Db
+            (fixpoint-with-candidates-controlled!
+             db stratum candidates control))
+          db0 strata))
+
 (defn run-strata-db-with-candidates!
   [db0: Db
    strata: (Vec (Vec Rule))
    candidates: CandidateSources] -> Db
-  (reduce (fn
-            [db: Db
-             stratum: (Vec Rule)] -> Db
-            (fixpoint-with-candidates! db stratum candidates))
-          db0 strata))
+  (run-strata-db-with-candidates-controlled!
+   db0 strata candidates *query-control*))
 
 (defn run-strata-db!
   [db0: Db

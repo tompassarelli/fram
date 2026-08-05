@@ -5,13 +5,13 @@
             [fram.text-index :as text-index]
             [fram.text-search :as text-search]))
 
-^{:line 15 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defrecord QueryTerm [variable value])
+(defrecord QueryTerm [variable value])
 
 (defn queryterm-variable [r] (:variable r))
 
 (defn queryterm-value [r] (:value r))
 
-^{:line 18 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defrecord Literal [kind relation arguments negated operator binding])
+(defrecord Literal [kind relation arguments negated operator binding])
 
 (defn literal-kind [r] (:kind r))
 
@@ -25,7 +25,7 @@
 
 (defn literal-binding [r] (:binding r))
 
-^{:line 25 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defrecord Rule [head-relation head-arguments body])
+(defrecord Rule [head-relation head-arguments body])
 
 (defn rule-head-relation [r] (:head-relation r))
 
@@ -33,7 +33,7 @@
 
 (defn rule-body [r] (:body r))
 
-^{:line 29 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defrecord QueryControl [steps cancelled max-steps deadline-ns timeout-ms])
+(defrecord QueryControl [steps cancelled max-steps deadline-ns timeout-ms])
 
 (defn querycontrol-steps [r] (:steps r))
 
@@ -45,7 +45,7 @@
 
 (defn querycontrol-timeout-ms [r] (:timeout-ms r))
 
-^{:line 43 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defrecord OccurrenceCandidateSource [root lower-exclusive upper-inclusive postings])
+(defrecord OccurrenceCandidateSource [root lower-exclusive upper-inclusive postings])
 
 (defn occurrencecandidatesource-root [r] (:root r))
 
@@ -55,7 +55,7 @@
 
 (defn occurrencecandidatesource-postings [r] (:postings r))
 
-^{:line 50 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defrecord CandidateSource [rows positions spo pos osp occurrence])
+(defrecord CandidateSource [rows positions spo pos osp occurrence])
 
 (defn candidatesource-rows [r] (:rows r))
 
@@ -69,471 +69,490 @@
 
 (defn candidatesource-occurrence [r] (:occurrence r))
 
-^{:line 57 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defrecord VirtualCandidateSource [relation source])
+(defrecord VirtualCandidateSource [relation source])
 
 (defn virtualcandidatesource-relation [r] (:relation r))
 
 (defn virtualcandidatesource-source [r] (:source r))
 
-^{:line 63 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def ^String triple-relation "triple")
+(def ^String triple-relation "triple")
 
-^{:line 64 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def ^String occurrence-relation "occurrence")
+(def ^String occurrence-relation "occurrence")
 
-^{:line 65 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def ^String text-match-relation "text-match")
+(def ^String text-match-relation "text-match")
 
-^{:line 66 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def ^String text-phrase-relation "text-phrase")
+(def ^String text-phrase-relation "text-phrase")
 
-^{:line 67 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def ^String text-substring-relation "text-substring")
+(def ^String text-substring-relation "text-substring")
 
-^{:line 68 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def ^String text-stem-relation "text-stem")
+(def ^String text-stem-relation "text-stem")
 
-^{:line 69 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def ^String text-search-relation "text-search")
+(def ^String text-search-relation "text-search")
 
-^{:line 70 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def text-relations ^{:line 71 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{text-match-relation text-phrase-relation text-substring-relation text-stem-relation text-search-relation})
+(def text-relations #{text-match-relation text-phrase-relation text-substring-relation text-stem-relation text-search-relation})
 
-^{:line 73 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def base-relations ^{:line 74 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj text-relations triple-relation occurrence-relation))
+(def base-relations (conj text-relations triple-relation occurrence-relation))
 
-^{:line 75 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def comparison-operators ^{:line 75 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{:eq :ne :lt :le :gt :ge})
+(def comparison-operators #{:eq :ne :lt :le :gt :ge})
 
-^{:line 76 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def subtract-operator ^{:line 76 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (keyword "-"))
+(def subtract-operator (keyword "-"))
 
-^{:line 77 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def builtin-operators ^{:line 78 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{:+ subtract-operator :* :/ :mod})
+(def builtin-operators #{:+ subtract-operator :* :/ :mod})
 
-^{:line 80 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (def ^:dynamic *query-control* nil)
+(def ^:dynamic *query-control* nil)
 
-^{:line 82 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn ^QueryControl query-control [max-steps timeout-ms]
-  ^{:line 85 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 85 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 85 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (> max-steps 0) ^{:line 85 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (>= timeout-ms 0)) ^{:line 86 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->QueryControl ^{:line 86 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (atom 0) ^{:line 86 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (atom nil) max-steps ^{:line 87 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (+ ^{:line 87 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (System/nanoTime) ^{:line 87 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (* timeout-ms 1000000)) timeout-ms) ^{:line 88 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (throw ^{:line 88 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ex-info "fram: query limits must be positive steps and non-negative milliseconds" ^{:line 89 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {:type :invalid-query-control}))))
+(defn- next-query-step [steps]
+  (inc steps))
 
-^{:line 91 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn cancel-query! [^QueryControl control reason]
-  ^{:line 94 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reset! ^{:line 94 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (querycontrol-cancelled control) reason)
+(defn- query-cancellation-cell [reason]
+  (atom reason))
+
+(defn ^QueryControl query-control [max-steps timeout-ms]
+  (if (and (> max-steps 0) (>= timeout-ms 0)) (let [steps (atom 0)
+   cancelled (query-cancellation-cell nil)]
+  (->QueryControl steps cancelled max-steps (+ (System/nanoTime) (* timeout-ms 1000000)) timeout-ms)) (throw (ex-info "fram: query limits must be positive steps and non-negative milliseconds" {:type :invalid-query-control}))))
+
+(defn cancel-query! [^QueryControl control reason]
+  (reset! (querycontrol-cancelled control) reason)
   nil)
 
-^{:line 97 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn query-steps [^QueryControl control]
-  ^{:line 98 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (deref ^{:line 98 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (querycontrol-steps control)))
+(defn query-steps [^QueryControl control]
+  (deref (querycontrol-steps control)))
 
-^{:line 100 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- query-check! []
-  ^{:line 101 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [control *query-control*]
-  ^{:line 102 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 102 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? control) nil ^{:line 104 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [steps ^{:line 104 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (swap! ^{:line 104 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (querycontrol-steps control) inc)
-   now ^{:line 105 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (System/nanoTime)
-   cancelled ^{:line 106 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (deref ^{:line 106 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (querycontrol-cancelled control))
-   code ^{:line 107 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 108 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? cancelled) :query-cancelled
-  ^{:line 109 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (> steps ^{:line 109 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (querycontrol-max-steps control)) :query-work-limit
-  ^{:line 110 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (>= now ^{:line 110 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (querycontrol-deadline-ns control)) :query-time-limit
+(defn- query-check! [control]
+  (if (nil? control) nil (let [steps (swap! (querycontrol-steps control) next-query-step)
+   now (System/nanoTime)
+   cancelled (deref (querycontrol-cancelled control))
+   code (cond
+  (some? cancelled) :query-cancelled
+  (> steps (querycontrol-max-steps control)) :query-work-limit
+  (>= now (querycontrol-deadline-ns control)) :query-time-limit
   :else nil)]
-  ^{:line 112 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 112 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? code) nil ^{:line 114 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (throw ^{:line 114 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ex-info ^{:line 114 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (str "query evaluation stopped: " ^{:line 114 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (name code)) ^{:line 115 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {:type :fram-query-abort :code code :reason cancelled :steps steps :max-steps ^{:line 115 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (querycontrol-max-steps control) :timeout-ms ^{:line 115 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (querycontrol-timeout-ms control)})))))))
+  (if (nil? code) nil (throw (ex-info (str "query evaluation stopped: " (name code)) {:type :fram-query-abort :code code :reason cancelled :steps steps :max-steps (querycontrol-max-steps control) :timeout-ms (querycontrol-timeout-ms control)}))))))
 
-^{:line 122 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn ^QueryTerm variable [^String name]
-  ^{:line 123 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 123 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (pos? ^{:line 123 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count name)) ^{:line 124 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->QueryTerm name nil) ^{:line 125 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (throw ^{:line 125 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ex-info "fram: query variable name must be non-empty" ^{:line 126 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {:type :invalid-query-variable}))))
+(defn ^QueryTerm variable [^String name]
+  (if (pos? (count name)) (->QueryTerm name nil) (throw (ex-info "fram: query variable name must be non-empty" {:type :invalid-query-variable}))))
 
-^{:line 128 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn ^QueryTerm constant [value]
-  ^{:line 129 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 129 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (t/term? value) ^{:line 130 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->QueryTerm nil value) ^{:line 131 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (throw ^{:line 131 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ex-info "fram: query constant must be a Term" ^{:line 132 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {:type :invalid-query-constant}))))
+(defn ^QueryTerm constant [value]
+  (if (t/term? value) (->QueryTerm nil value) (throw (ex-info "fram: query constant must be a Term" {:type :invalid-query-constant}))))
 
-^{:line 134 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn ^Boolean query-term? [value]
-  ^{:line 135 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 135 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (instance? QueryTerm value) ^{:line 136 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 136 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? ^{:line 136 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (queryterm-variable value)) ^{:line 137 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 137 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (pos? ^{:line 137 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count ^{:line 137 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (queryterm-variable value))) ^{:line 138 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? ^{:line 138 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (queryterm-value value))) ^{:line 139 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (t/term? ^{:line 139 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (queryterm-value value)))))
+(defn ^Boolean query-term? [value]
+  (and (instance? QueryTerm value) (if (some? (queryterm-variable value)) (and (pos? (count (queryterm-variable value))) (nil? (queryterm-value value))) (t/term? (queryterm-value value)))))
 
-^{:line 141 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn ^Literal relation-literal [^String relation arguments]
-  ^{:line 144 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->Literal :relation relation arguments false :none ""))
+(defn ^Literal relation-literal [^String relation arguments]
+  (->Literal :relation relation arguments false :none ""))
 
-^{:line 146 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn ^Literal negated-literal [^String relation arguments]
-  ^{:line 149 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->Literal :relation relation arguments true :none ""))
+(defn ^Literal negated-literal [^String relation arguments]
+  (->Literal :relation relation arguments true :none ""))
 
-^{:line 151 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn ^Literal comparison-literal [operator arguments]
-  ^{:line 154 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->Literal :comparison "" arguments false operator ""))
+(defn ^Literal comparison-literal [operator arguments]
+  (->Literal :comparison "" arguments false operator ""))
 
-^{:line 156 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn ^Literal builtin-literal [operator arguments ^String binding]
-  ^{:line 160 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->Literal :builtin "" arguments false operator binding))
+(defn ^Literal builtin-literal [operator arguments ^String binding]
+  (->Literal :builtin "" arguments false operator binding))
 
-^{:line 162 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn ^Rule rule [^String head-relation head-arguments body]
-  ^{:line 166 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->Rule head-relation head-arguments body))
+(defn ^Rule rule [^String head-relation head-arguments body]
+  (->Rule head-relation head-arguments body))
 
-^{:line 168 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- triple-row [value]
-  ^{:line 169 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [^{:line 169 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (t/triple-slot0 value) ^{:line 169 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (t/triple-slot1 value) ^{:line 169 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (t/triple-slot2 value)])
+(defn- triple-row [value]
+  [(t/triple-slot0 value) (t/triple-slot1 value) (t/triple-slot2 value)])
 
-^{:line 171 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- rows [triples]
-  ^{:line 172 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 172 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc value] ^{:line 175 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc ^{:line 175 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (triple-row value))) ^{:line 176 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{} triples))
+(defn- rows [triples]
+  (reduce (fn [acc value] (conj acc (triple-row value))) #{} triples))
 
-^{:line 180 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn edb [propositions]
-  ^{:line 181 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {triple-relation ^{:line 181 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rows propositions)})
+(defn edb [propositions]
+  {triple-relation (rows propositions)})
 
-^{:line 183 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn edb-with-occurrences [propositions occurrences]
-  ^{:line 186 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [checked ^{:line 187 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 187 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc value] ^{:line 190 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 190 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (kernel/operation-occurrence? value) ^{:line 191 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc value) ^{:line 192 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (throw ^{:line 192 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ex-info "fram: occurrence relation accepts only operation occurrences" ^{:line 193 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {:type :invalid-operation-occurrence})))) ^{:line 194 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] occurrences)]
-  ^{:line 195 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {triple-relation ^{:line 195 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rows propositions) occurrence-relation ^{:line 195 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rows checked)}))
+(defn edb-with-occurrences [propositions occurrences]
+  (let [checked (reduce (fn [acc value] (if (kernel/operation-occurrence? value) (conj acc value) (throw (ex-info "fram: occurrence relation accepts only operation occurrences" {:type :invalid-operation-occurrence})))) [] occurrences)]
+  {triple-relation (rows propositions) occurrence-relation (rows checked)}))
 
-^{:line 198 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- term-value [^QueryTerm term subst]
-  ^{:line 201 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [name ^{:line 201 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (queryterm-variable term)]
-  ^{:line 202 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 202 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? name) ^{:line 202 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get subst name) ^{:line 202 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (queryterm-value term))))
+(defn- term-value [^QueryTerm term subst]
+  (let [name (queryterm-variable term)]
+  (if (some? name) (get subst name) (queryterm-value term))))
 
-^{:line 204 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- unify [^QueryTerm term value subst]
-  ^{:line 208 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [name ^{:line 208 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (queryterm-variable term)]
-  ^{:line 209 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 209 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? name) ^{:line 210 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 210 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? subst name) ^{:line 211 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 211 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= ^{:line 211 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get subst name) value) subst nil) ^{:line 212 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc subst name value)) ^{:line 213 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 213 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= ^{:line 213 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (queryterm-value term) value) subst nil))))
+(defn- unify [^QueryTerm term value subst]
+  (let [name (queryterm-variable term)]
+  (if (some? name) (if (contains? subst name) (if (= (get subst name) value) subst nil) (assoc subst name value)) (if (= (queryterm-value term) value) subst nil))))
 
-^{:line 215 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- unify-arguments! [arguments tuple subst]
-  ^{:line 219 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (query-check!)
-  ^{:line 220 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 220 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (not ^{:line 220 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= ^{:line 220 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count arguments) ^{:line 220 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count tuple))) nil ^{:line 222 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [position 0
+(defn- unify-arguments-controlled! [arguments tuple subst control]
+  (query-check! control)
+  (if (not (= (count arguments) (count tuple))) nil (loop [position 0
    current subst]
-  ^{:line 223 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 223 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 223 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? current) ^{:line 223 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (>= position ^{:line 223 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count arguments))) current ^{:line 225 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 225 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (+ position 1) ^{:line 226 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (unify ^{:line 226 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth arguments position) ^{:line 227 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth tuple position) current))))))
+  (if (or (nil? current) (>= position (count arguments))) current (recur (+ position 1) (unify (nth arguments position) (nth tuple position) current))))))
 
-^{:line 230 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- ground [arguments subst]
-  ^{:line 233 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (mapv ^{:line 233 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [term] ^{:line 234 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [value ^{:line 234 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (term-value term subst)]
-  ^{:line 235 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 235 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? value) value ^{:line 237 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (throw ^{:line 237 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ex-info "fram: unbound query variable reached evaluation" ^{:line 238 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {:type :unbound-query-variable}))))) arguments))
+(defn- unify-arguments! [arguments tuple subst]
+  (unify-arguments-controlled! arguments tuple subst *query-control*))
 
-^{:line 241 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- integer-value [value]
-  ^{:line 242 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 243 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (integer? value) value
-  ^{:line 244 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (string? value) ^{:line 244 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (parse-long value)
+(defn- ground [arguments subst]
+  (mapv (fn [term] (let [value (term-value term subst)]
+  (if (some? value) value (throw (ex-info "fram: unbound query variable reached evaluation" {:type :unbound-query-variable}))))) arguments))
+
+(defn- integer-value [value]
+  (cond
+  (integer? value) value
+  (string? value) (parse-long value)
   :else nil))
 
-^{:line 247 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- numeric-value [value]
-  ^{:line 248 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 249 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (integer? value) ^{:line 249 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (double value)
-  ^{:line 250 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (number? value) ^{:line 250 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (double value)
-  ^{:line 251 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (string? value) ^{:line 252 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [integer-result ^{:line 252 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (parse-long value)]
-  ^{:line 253 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 253 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? integer-result) ^{:line 254 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (double integer-result) ^{:line 255 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (parse-double value)))
+(defn- numeric-value [value]
+  (cond
+  (integer? value) (double value)
+  (number? value) (double value)
+  (string? value) (let [integer-result (parse-long value)]
+  (if (some? integer-result) (double integer-result) (parse-double value)))
   :else nil))
 
-^{:line 258 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- ^Boolean comparison-result [^Literal literal subst]
-  ^{:line 261 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [arguments ^{:line 261 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-arguments literal)
-   left ^{:line 262 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (term-value ^{:line 262 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth arguments 0) subst)
-   right ^{:line 263 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (term-value ^{:line 263 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth arguments 1) subst)
-   operator ^{:line 264 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-operator literal)]
-  ^{:line 265 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 265 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 265 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? left) ^{:line 265 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? right)) false ^{:line 267 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 268 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :eq) ^{:line 268 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= left right)
-  ^{:line 269 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :ne) ^{:line 269 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (not ^{:line 269 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= left right))
-  :else ^{:line 271 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [left-number ^{:line 271 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (numeric-value left)
-   right-number ^{:line 272 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (numeric-value right)]
-  ^{:line 273 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 273 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 273 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? left-number) ^{:line 273 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? right-number)) false ^{:line 275 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 276 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :lt) ^{:line 276 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (< left-number right-number)
-  ^{:line 277 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :le) ^{:line 277 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (<= left-number right-number)
-  ^{:line 278 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :gt) ^{:line 278 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (> left-number right-number)
-  ^{:line 279 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :ge) ^{:line 279 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (>= left-number right-number)
+(defn- ^Boolean comparison-result [^Literal literal subst]
+  (let [arguments (literal-arguments literal)
+   left (term-value (nth arguments 0) subst)
+   right (term-value (nth arguments 1) subst)
+   operator (literal-operator literal)]
+  (if (or (nil? left) (nil? right)) false (cond
+  (= operator :eq) (= left right)
+  (= operator :ne) (not (= left right))
+  :else (let [left-number (numeric-value left)
+   right-number (numeric-value right)]
+  (if (or (nil? left-number) (nil? right-number)) false (cond
+  (= operator :lt) (< left-number right-number)
+  (= operator :le) (<= left-number right-number)
+  (= operator :gt) (> left-number right-number)
+  (= operator :ge) (>= left-number right-number)
   :else false)))))))
 
-^{:line 282 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- builtin-value [operator left right]
-  ^{:line 286 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [left-int ^{:line 286 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (integer-value left)
-   right-int ^{:line 287 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (integer-value right)
-   left-number ^{:line 288 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (numeric-value left)
-   right-number ^{:line 289 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (numeric-value right)]
-  ^{:line 290 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 291 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :mod) ^{:line 292 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 292 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 292 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? left-int) ^{:line 292 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? right-int) ^{:line 292 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= right-int 0)) nil ^{:line 294 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (mod left-int right-int))
-  ^{:line 295 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :/) ^{:line 296 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 296 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 296 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? left-number) ^{:line 296 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? right-number) ^{:line 296 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= right-number 0.0)) nil ^{:line 298 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (/ left-number right-number))
-  ^{:line 299 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 299 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :+) ^{:line 299 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 299 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator subtract-operator) ^{:line 299 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :*))) ^{:line 300 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 300 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 300 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? left-int) ^{:line 300 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? right-int)) ^{:line 301 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 302 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :+) ^{:line 302 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (+ left-int right-int)
-  ^{:line 303 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator subtract-operator) ^{:line 303 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (- left-int right-int)
-  :else ^{:line 304 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (* left-int right-int)) ^{:line 305 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 305 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 305 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? left-number) ^{:line 305 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? right-number)) nil ^{:line 307 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 308 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator :+) ^{:line 308 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (+ left-number right-number)
-  ^{:line 309 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= operator subtract-operator) ^{:line 309 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (- left-number right-number)
-  :else ^{:line 310 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (* left-number right-number))))
+(defn- builtin-value [operator left right]
+  (let [left-int (integer-value left)
+   right-int (integer-value right)
+   left-number (numeric-value left)
+   right-number (numeric-value right)]
+  (cond
+  (= operator :mod) (if (or (nil? left-int) (nil? right-int) (= right-int 0)) nil (mod left-int right-int))
+  (= operator :/) (if (or (nil? left-number) (nil? right-number) (= right-number 0.0)) nil (/ left-number right-number))
+  (or (= operator :+) (or (= operator subtract-operator) (= operator :*))) (if (and (some? left-int) (some? right-int)) (cond
+  (= operator :+) (+ left-int right-int)
+  (= operator subtract-operator) (- left-int right-int)
+  :else (* left-int right-int)) (if (or (nil? left-number) (nil? right-number)) nil (cond
+  (= operator :+) (+ left-number right-number)
+  (= operator subtract-operator) (- left-number right-number)
+  :else (* left-number right-number))))
   :else nil)))
 
-^{:line 313 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- builtin-results [^Literal literal subst]
-  ^{:line 316 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [arguments ^{:line 316 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-arguments literal)
-   left ^{:line 317 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (term-value ^{:line 317 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth arguments 0) subst)
-   right ^{:line 318 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (term-value ^{:line 318 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth arguments 1) subst)]
-  ^{:line 319 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 319 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 319 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? left) ^{:line 319 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? right)) ^{:line 320 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] ^{:line 321 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [result ^{:line 321 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (builtin-value ^{:line 321 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-operator literal) left right)]
-  ^{:line 322 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 322 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? result) ^{:line 323 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] ^{:line 324 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [^{:line 324 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc subst ^{:line 324 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-binding literal) result)])))))
+(defn- builtin-results [^Literal literal subst]
+  (let [arguments (literal-arguments literal)
+   left (term-value (nth arguments 0) subst)
+   right (term-value (nth arguments 1) subst)]
+  (if (or (nil? left) (nil? right)) [] (let [result (builtin-value (literal-operator literal) left right)]
+  (if (nil? result) [] [(assoc subst (literal-binding literal) result)])))))
 
-^{:line 326 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- unify-tuples! [arguments tuples subst]
-  ^{:line 330 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 330 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc tuple] ^{:line 333 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [matched ^{:line 333 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (unify-arguments! arguments tuple subst)]
-  ^{:line 334 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 334 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? matched) ^{:line 334 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc matched) acc))) ^{:line 335 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] tuples))
+(defn- unify-tuples-controlled! [arguments tuples subst control]
+  (reduce (fn [acc tuple] (let [matched (unify-arguments-controlled! arguments tuple subst control)]
+  (if (some? matched) (conj acc matched) acc))) [] tuples))
 
-^{:line 337 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- bound-term-value [^QueryTerm term subst]
-  ^{:line 340 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [name ^{:line 340 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (queryterm-variable term)]
-  ^{:line 341 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 341 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? name) ^{:line 342 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 342 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? subst name) ^{:line 342 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get subst name) nil) ^{:line 343 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (queryterm-value term))))
+(defn- unify-tuples! [arguments tuples subst]
+  (unify-tuples-controlled! arguments tuples subst *query-control*))
 
-^{:line 345 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- missing-candidate-source! [^String relation]
-  ^{:line 346 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (throw ^{:line 346 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ex-info ^{:line 346 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (str "candidate source is unavailable for relation '" relation "'") ^{:line 347 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {:type :fram-query-abort :code :query-text-index-unavailable})))
+(defn- bound-term-value [^QueryTerm term subst]
+  (let [name (queryterm-variable term)]
+  (if (some? name) (if (contains? subst name) (get subst name) nil) (queryterm-value term))))
 
-^{:line 350 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- virtual-source-rows! [^VirtualCandidateSource candidate ^Boolean indexed arguments subst]
-  ^{:line 355 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [relation ^{:line 355 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (virtualcandidatesource-relation candidate)
-   source ^{:line 356 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (virtualcandidatesource-source candidate)
-   needle ^{:line 357 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (bound-term-value ^{:line 357 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth arguments 2) subst)]
-  ^{:line 358 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 359 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation text-match-relation) ^{:line 360 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if indexed ^{:line 361 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/exact-indexed-rows source needle) ^{:line 362 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/exact-scan-rows source needle))
-  ^{:line 363 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation text-phrase-relation) ^{:line 364 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if indexed ^{:line 365 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/phrase-indexed-rows! source needle) ^{:line 366 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/phrase-scan-rows! source needle))
-  ^{:line 367 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation text-substring-relation) ^{:line 368 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if indexed ^{:line 369 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/substring-indexed-rows! source needle) ^{:line 370 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/substring-scan-rows! source needle))
-  ^{:line 371 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation text-stem-relation) ^{:line 372 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if indexed ^{:line 373 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/stem-indexed-rows! source needle) ^{:line 374 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/stem-scan-rows! source needle))
-  ^{:line 375 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation text-search-relation) ^{:line 376 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if indexed ^{:line 377 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/ranked-indexed-rows! source needle) ^{:line 378 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/ranked-scan-rows! source needle))
-  :else ^{:line 379 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (missing-candidate-source! relation))))
+(defn- missing-candidate-source! [^String relation]
+  (throw (ex-info (str "candidate source is unavailable for relation '" relation "'") {:type :fram-query-abort :code :query-text-index-unavailable})))
 
-^{:line 381 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- relation-results! [db sources ^Literal literal subst]
-  ^{:line 386 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [relation ^{:line 386 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-relation literal)
-   arguments ^{:line 387 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-arguments literal)
-   source ^{:line 388 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get sources relation)]
-  ^{:line 389 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 389 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-negated literal) ^{:line 390 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 390 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? ^{:line 390 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get db relation ^{:line 390 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{}) ^{:line 390 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ground arguments subst)) ^{:line 390 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] ^{:line 390 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [subst]) ^{:line 391 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 392 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (instance? VirtualCandidateSource source) ^{:line 393 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (unify-tuples! arguments ^{:line 394 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (virtual-source-rows! source false arguments subst) subst)
-  ^{:line 396 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 396 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? text-relations relation) ^{:line 396 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? source)) ^{:line 397 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (missing-candidate-source! relation)
-  :else ^{:line 398 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (unify-tuples! arguments ^{:line 398 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (vec ^{:line 398 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get db relation ^{:line 398 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{})) subst)))))
+(defn- virtual-source-rows! [^VirtualCandidateSource candidate ^Boolean indexed arguments subst]
+  (let [relation (virtualcandidatesource-relation candidate)
+   source (virtualcandidatesource-source candidate)
+   needle (bound-term-value (nth arguments 2) subst)]
+  (cond
+  (= relation text-match-relation) (if indexed (text-search/exact-indexed-rows source needle) (text-search/exact-scan-rows source needle))
+  (= relation text-phrase-relation) (if indexed (text-search/phrase-indexed-rows! source needle) (text-search/phrase-scan-rows! source needle))
+  (= relation text-substring-relation) (if indexed (text-search/substring-indexed-rows! source needle) (text-search/substring-scan-rows! source needle))
+  (= relation text-stem-relation) (if indexed (text-search/stem-indexed-rows! source needle) (text-search/stem-scan-rows! source needle))
+  (= relation text-search-relation) (if indexed (text-search/ranked-indexed-rows! source needle) (text-search/ranked-scan-rows! source needle))
+  :else (missing-candidate-source! relation))))
 
-^{:line 400 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- literal-results! [db sources ^Literal literal subst]
-  ^{:line 405 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (query-check!)
-  ^{:line 406 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 407 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= :relation ^{:line 407 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 408 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (relation-results! db sources literal subst)
-  ^{:line 409 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= :comparison ^{:line 409 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 410 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 410 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (comparison-result literal subst) ^{:line 410 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [subst] ^{:line 410 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [])
-  ^{:line 411 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= :builtin ^{:line 411 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 411 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (builtin-results literal subst)
-  :else ^{:line 412 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} []))
+(defn- relation-results! [db sources ^Literal literal subst]
+  (let [relation (literal-relation literal)
+   arguments (literal-arguments literal)
+   source (get sources relation)]
+  (if (literal-negated literal) (if (contains? (get db relation #{}) (ground arguments subst)) [] [subst]) (cond
+  (instance? VirtualCandidateSource source) (unify-tuples! arguments (virtual-source-rows! source false arguments subst) subst)
+  (and (contains? text-relations relation) (nil? source)) (missing-candidate-source! relation)
+  :else (unify-tuples! arguments (vec (get db relation #{})) subst)))))
 
-^{:line 414 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- body-results! [db sources body seed]
-  ^{:line 419 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 420 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [substitutions literal] ^{:line 423 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 423 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc subst] ^{:line 426 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (vec ^{:line 426 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (concat acc ^{:line 426 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-results! db sources literal subst)))) ^{:line 427 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] substitutions)) ^{:line 428 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [seed] body))
+(defn- literal-results! [db sources ^Literal literal subst]
+  (query-check! *query-control*)
+  (cond
+  (= :relation (literal-kind literal)) (relation-results! db sources literal subst)
+  (= :comparison (literal-kind literal)) (if (comparison-result literal subst) [subst] [])
+  (= :builtin (literal-kind literal)) (builtin-results literal subst)
+  :else []))
 
-^{:line 430 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- derive-rule! [db sources ^Rule value]
-  ^{:line 434 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 434 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc subst] ^{:line 437 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc ^{:line 437 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ground ^{:line 437 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-head-arguments value) subst))) ^{:line 438 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{} ^{:line 438 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (body-results! db sources ^{:line 438 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-body value) ^{:line 438 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {})))
+(defn- body-results! [db sources body seed]
+  (reduce (fn [substitutions literal] (reduce (fn [acc subst] (vec (concat acc (literal-results! db sources literal subst)))) [] substitutions)) [seed] body))
 
-^{:line 440 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- rule-head-relations [rules]
-  ^{:line 441 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (vec ^{:line 441 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 441 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc value] ^{:line 444 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc ^{:line 444 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-head-relation value))) ^{:line 445 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{} rules)))
+(defn- derive-rule! [db sources ^Rule value]
+  (reduce (fn [acc subst] (conj acc (ground (rule-head-arguments value) subst))) #{} (body-results! db sources (rule-body value) {})))
 
-^{:line 447 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- derive-round! [db sources rules]
-  ^{:line 451 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 452 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc value] ^{:line 455 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [relation ^{:line 455 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-head-relation value)
-   derived ^{:line 456 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (derive-rule! db sources value)]
-  ^{:line 457 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (update acc relation ^{:line 458 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [current] ^{:line 459 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 459 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [rows-value row] ^{:line 462 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj rows-value row)) ^{:line 463 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or current ^{:line 463 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{}) derived))))) db rules))
+(defn- rule-head-relations [rules]
+  (vec (reduce (fn [acc value] (conj acc (rule-head-relation value))) #{} rules)))
 
-^{:line 466 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- ^Boolean relations-stable? [before after relations]
-  ^{:line 470 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [remaining relations]
-  ^{:line 471 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 471 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty? remaining) true ^{:line 473 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [relation ^{:line 473 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (first remaining)]
-  ^{:line 474 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 474 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= ^{:line 474 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get before relation ^{:line 474 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{}) ^{:line 474 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get after relation ^{:line 474 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{})) ^{:line 475 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 475 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rest remaining)) false)))))
+(defn- derive-round! [db sources rules]
+  (reduce (fn [acc value] (let [relation (rule-head-relation value)
+   derived (derive-rule! db sources value)]
+  (update acc relation (fn [current] (reduce (fn [rows-value row] (conj rows-value row)) (or current #{}) derived))))) db rules))
 
-^{:line 478 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn fixpoint-oracle-with-candidates! [db0 rules sources]
-  ^{:line 482 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [relations ^{:line 482 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-head-relations rules)]
-  ^{:line 483 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [db db0]
-  ^{:line 484 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [next ^{:line 484 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (derive-round! db sources rules)]
-  ^{:line 485 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 485 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (relations-stable? db next relations) next ^{:line 487 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur next))))))
+(defn- ^Boolean relations-stable? [before after relations]
+  (loop [remaining relations]
+  (if (empty? remaining) true (let [relation (first remaining)]
+  (if (= (get before relation #{}) (get after relation #{})) (recur (rest remaining)) false)))))
 
-^{:line 489 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- fixpoint-oracle! [db0 rules]
-  ^{:line 492 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fixpoint-oracle-with-candidates! db0 rules ^{:line 492 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {}))
+(defn fixpoint-oracle-with-candidates! [db0 rules sources]
+  (let [relations (rule-head-relations rules)]
+  (loop [db db0]
+  (let [next (derive-round! db sources rules)]
+  (if (relations-stable? db next relations) next (recur next))))))
 
-^{:line 494 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- append-handle [index key handle]
-  ^{:line 498 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (update index key ^{:line 499 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [current] ^{:line 500 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj ^{:line 500 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or current ^{:line 500 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} []) handle))))
+(defn- fixpoint-oracle! [db0 rules]
+  (fixpoint-oracle-with-candidates! db0 rules {}))
 
-^{:line 502 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- add-position-handles [index tuple handle]
-  ^{:line 506 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [position 0
+(defn- append-handle [index key handle]
+  (update index key (fn [current] (conj (or current []) handle))))
+
+(defn- add-position-handles [index tuple handle]
+  (loop [position 0
    current index]
-  ^{:line 507 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 507 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (>= position ^{:line 507 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count tuple)) current ^{:line 509 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [bucket ^{:line 509 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get current position ^{:line 509 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {})]
-  ^{:line 510 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 510 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (inc position) ^{:line 511 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc current position ^{:line 512 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (append-handle bucket ^{:line 512 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth tuple position) handle)))))))
+  (if (>= position (count tuple)) current (let [bucket (get current position {})]
+  (recur (inc position) (assoc current position (append-handle bucket (nth tuple position) handle)))))))
 
-^{:line 514 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- trie-add [trie tuple order handle]
-  ^{:line 519 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [first-key ^{:line 519 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth tuple ^{:line 519 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth order 0))
-   second-key ^{:line 520 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth tuple ^{:line 520 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth order 1))
-   third-key ^{:line 521 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth tuple ^{:line 521 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth order 2))
-   first-node ^{:line 522 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get trie first-key ^{:line 522 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {})
-   second-node ^{:line 523 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get first-node second-key ^{:line 523 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {})
-   leaf ^{:line 524 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get second-node third-key ^{:line 524 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [])]
-  ^{:line 525 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc trie first-key ^{:line 526 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc first-node second-key ^{:line 527 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc second-node third-key ^{:line 527 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj leaf handle))))))
+(defn- trie-add [trie tuple order handle]
+  (let [first-key (nth tuple (nth order 0))
+   second-key (nth tuple (nth order 1))
+   third-key (nth tuple (nth order 2))
+   first-node (get trie first-key {})
+   second-node (get first-node second-key {})
+   leaf (get second-node third-key [])]
+  (assoc trie first-key (assoc first-node second-key (assoc second-node third-key (conj leaf handle))))))
 
-^{:line 529 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- trie-node-handles [node]
-  ^{:line 530 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 531 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? node) ^{:line 531 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} []
-  ^{:line 532 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (vector? node) node
-  ^{:line 533 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (map? node) ^{:line 534 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 534 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [handles child] ^{:line 537 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (into handles ^{:line 537 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (trie-node-handles child))) ^{:line 538 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] ^{:line 538 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (vec ^{:line 538 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (vals node)))
-  :else ^{:line 539 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} []))
+(defn- trie-node-handles [node]
+  (cond
+  (nil? node) []
+  (vector? node) node
+  (map? node) (reduce (fn [handles child] (into handles (trie-node-handles child))) [] (vec (vals node)))
+  :else []))
 
-^{:line 541 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- trie-probe [trie prefix]
-  ^{:line 544 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [node trie
+(defn- trie-probe [trie prefix]
+  (loop [node trie
    remaining prefix]
-  ^{:line 545 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 545 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 545 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? node) ^{:line 545 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty? remaining)) ^{:line 546 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (trie-node-handles node) ^{:line 547 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 547 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get node ^{:line 547 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (first remaining)) ^{:line 547 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rest remaining)))))
+  (if (or (nil? node) (empty? remaining)) (trie-node-handles node) (recur (get node (first remaining)) (rest remaining)))))
 
-^{:line 549 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- ^CandidateSource empty-candidate-source []
-  ^{:line 550 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->CandidateSource ^{:line 550 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] ^{:line 550 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {} ^{:line 550 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {} ^{:line 550 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {} ^{:line 550 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {} nil))
+(defn- ^CandidateSource empty-candidate-source []
+  (->CandidateSource [] {} {} {} {} nil))
 
-^{:line 552 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn ^CandidateSource occurrence-candidate-source [root lower-exclusive upper-inclusive]
-  ^{:line 556 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->CandidateSource ^{:line 556 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] ^{:line 556 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {} ^{:line 556 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {} ^{:line 556 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {} ^{:line 556 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {} ^{:line 557 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->OccurrenceCandidateSource root lower-exclusive upper-inclusive ^{:line 558 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (store/operation-postings root))))
+(defn ^CandidateSource occurrence-candidate-source [root lower-exclusive upper-inclusive]
+  (->CandidateSource [] {} {} {} {} (->OccurrenceCandidateSource root lower-exclusive upper-inclusive (store/operation-postings root))))
 
-^{:line 560 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- ^CandidateSource candidate-source-add [^String relation ^CandidateSource source tuple]
-  ^{:line 564 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [handle ^{:line 564 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count ^{:line 564 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-rows source))
-   with-row ^{:line 566 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc source :rows ^{:line 566 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj ^{:line 566 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-rows source) tuple))]
-  ^{:line 567 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 567 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 567 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation triple-relation) ^{:line 567 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= 3 ^{:line 567 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count tuple))) ^{:line 568 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc with-row :spo ^{:line 569 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (trie-add ^{:line 569 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-spo source) tuple ^{:line 569 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [0 1 2] handle) :pos ^{:line 570 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (trie-add ^{:line 570 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-pos source) tuple ^{:line 570 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [1 2 0] handle) :osp ^{:line 571 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (trie-add ^{:line 571 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-osp source) tuple ^{:line 571 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [2 0 1] handle)) ^{:line 572 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc with-row :positions ^{:line 573 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (add-position-handles ^{:line 574 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-positions source) tuple handle)))))
+(defn- ^CandidateSource candidate-source-add [^String relation ^CandidateSource source tuple]
+  (let [handle (count (candidatesource-rows source))
+   with-row (assoc source :rows (conj (candidatesource-rows source) tuple))]
+  (if (and (= relation triple-relation) (= 3 (count tuple))) (assoc with-row :spo (trie-add (candidatesource-spo source) tuple [0 1 2] handle) :pos (trie-add (candidatesource-pos source) tuple [1 2 0] handle) :osp (trie-add (candidatesource-osp source) tuple [2 0 1] handle)) (assoc with-row :positions (add-position-handles (candidatesource-positions source) tuple handle)))))
 
-^{:line 576 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- ^CandidateSource candidate-source-add-rows [^String relation ^CandidateSource source tuples]
-  ^{:line 580 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 580 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [current tuple] ^{:line 583 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidate-source-add relation current tuple)) source tuples))
+(defn- ^CandidateSource candidate-source-add-rows [^String relation ^CandidateSource source tuples]
+  (reduce (fn [current tuple] (candidate-source-add relation current tuple)) source tuples))
 
-^{:line 586 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- build-candidate-sources [db relations seed]
-  ^{:line 590 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 590 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [sources relation] ^{:line 593 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 593 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? sources relation) sources ^{:line 595 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc sources relation ^{:line 596 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidate-source-add-rows relation ^{:line 597 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty-candidate-source) ^{:line 597 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get db relation ^{:line 597 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{}))))) seed relations))
+(defn- build-candidate-sources [db relations seed]
+  (reduce (fn [sources relation] (if (contains? sources relation) sources (assoc sources relation (candidate-source-add-rows relation (empty-candidate-source) (get db relation #{}))))) seed relations))
 
-^{:line 600 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- add-delta-sources [sources delta relations]
-  ^{:line 604 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 604 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [current relation] ^{:line 607 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [tuples ^{:line 607 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get delta relation ^{:line 607 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{})
-   existing ^{:line 608 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get current relation)
-   base ^{:line 610 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 610 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (instance? CandidateSource existing) existing ^{:line 612 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty-candidate-source))]
-  ^{:line 613 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 613 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty? tuples) current ^{:line 615 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc current relation ^{:line 616 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidate-source-add-rows relation base tuples))))) sources relations))
+(defn- add-delta-sources [sources delta relations]
+  (reduce (fn [current relation] (let [tuples (get delta relation #{})
+   existing (get current relation)
+   base (if (instance? CandidateSource existing) existing (empty-candidate-source))]
+  (if (empty? tuples) current (assoc current relation (candidate-source-add-rows relation base tuples))))) sources relations))
 
-^{:line 620 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn ^Boolean text-relation-needle-valid? [^String relation needle]
-  ^{:line 623 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 624 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation text-match-relation) ^{:line 625 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-index/text-needle-valid? needle)
-  ^{:line 626 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 626 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation text-phrase-relation) ^{:line 627 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation text-stem-relation)) ^{:line 628 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/word-needle-valid? needle)
-  ^{:line 629 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 629 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation text-substring-relation) ^{:line 630 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation text-search-relation)) ^{:line 631 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/substring-needle-valid? needle)
+(defn ^Boolean text-relation-needle-valid? [^String relation needle]
+  (cond
+  (= relation text-match-relation) (text-index/text-needle-valid? needle)
+  (or (= relation text-phrase-relation) (= relation text-stem-relation)) (text-search/word-needle-valid? needle)
+  (or (= relation text-substring-relation) (= relation text-search-relation)) (text-search/substring-needle-valid? needle)
   :else false))
 
-^{:line 636 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn text-candidate-sources [source]
-  ^{:line 637 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {text-match-relation ^{:line 637 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->VirtualCandidateSource text-match-relation source) text-phrase-relation ^{:line 637 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->VirtualCandidateSource text-phrase-relation source) text-substring-relation ^{:line 637 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->VirtualCandidateSource text-substring-relation source) text-stem-relation ^{:line 637 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->VirtualCandidateSource text-stem-relation source) text-search-relation ^{:line 637 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (->VirtualCandidateSource text-search-relation source)})
+(defn text-candidate-sources [source]
+  {text-match-relation (->VirtualCandidateSource text-match-relation source) text-phrase-relation (->VirtualCandidateSource text-phrase-relation source) text-substring-relation (->VirtualCandidateSource text-substring-relation source) text-stem-relation (->VirtualCandidateSource text-stem-relation source) text-search-relation (->VirtualCandidateSource text-search-relation source)})
 
-^{:line 648 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn build-text-candidates [propositions]
-  ^{:line 649 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-candidate-sources ^{:line 650 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (text-search/build-source propositions text-index/text-index-max-bytes)))
+(defn build-text-candidates [propositions]
+  (text-candidate-sources (text-search/build-source propositions text-index/text-index-max-bytes)))
 
-^{:line 652 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- bound-prefix [arguments order subst]
-  ^{:line 656 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [remaining order
-   prefix ^{:line 656 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} []]
-  ^{:line 657 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 657 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty? remaining) prefix ^{:line 659 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [value ^{:line 659 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (bound-term-value ^{:line 659 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth arguments ^{:line 659 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (first remaining)) subst)]
-  ^{:line 660 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 660 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? value) prefix ^{:line 662 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 662 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rest remaining) ^{:line 662 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj prefix value)))))))
+(defn- bound-prefix [arguments order subst]
+  (loop [remaining order
+   prefix []]
+  (if (empty? remaining) prefix (let [value (bound-term-value (nth arguments (first remaining)) subst)]
+  (if (nil? value) prefix (recur (rest remaining) (conj prefix value)))))))
 
-^{:line 664 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- triple-prefix-handles [^CandidateSource source arguments subst]
-  ^{:line 668 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [spo-key ^{:line 668 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (bound-prefix arguments ^{:line 668 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [0 1 2] subst)
-   pos-key ^{:line 669 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (bound-prefix arguments ^{:line 669 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [1 2 0] subst)
-   osp-key ^{:line 670 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (bound-prefix arguments ^{:line 670 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [2 0 1] subst)
-   spo-count ^{:line 671 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count spo-key)
-   pos-count ^{:line 672 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count pos-key)
-   osp-count ^{:line 673 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count osp-key)]
-  ^{:line 674 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 675 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 675 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= 0 spo-count) ^{:line 675 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 675 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= 0 pos-count) ^{:line 675 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= 0 osp-count))) nil
-  ^{:line 676 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 676 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (>= spo-count pos-count) ^{:line 676 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (>= spo-count osp-count)) ^{:line 677 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (trie-probe ^{:line 677 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-spo source) spo-key)
-  ^{:line 678 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (>= pos-count osp-count) ^{:line 679 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (trie-probe ^{:line 679 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-pos source) pos-key)
-  :else ^{:line 680 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (trie-probe ^{:line 680 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-osp source) osp-key))))
+(defn- triple-prefix-handles [^CandidateSource source arguments subst]
+  (let [spo-key (bound-prefix arguments [0 1 2] subst)
+   pos-key (bound-prefix arguments [1 2 0] subst)
+   osp-key (bound-prefix arguments [2 0 1] subst)
+   spo-count (count spo-key)
+   pos-count (count pos-key)
+   osp-count (count osp-key)]
+  (cond
+  (and (= 0 spo-count) (and (= 0 pos-count) (= 0 osp-count))) nil
+  (and (>= spo-count pos-count) (>= spo-count osp-count)) (trie-probe (candidatesource-spo source) spo-key)
+  (>= pos-count osp-count) (trie-probe (candidatesource-pos source) pos-key)
+  :else (trie-probe (candidatesource-osp source) osp-key))))
 
-^{:line 682 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- positional-handles [^CandidateSource source arguments subst]
-  ^{:line 686 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [position 0
+(defn- positional-handles [^CandidateSource source arguments subst]
+  (loop [position 0
    best nil
    found false]
-  ^{:line 687 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 687 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (>= position ^{:line 687 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count arguments)) ^{:line 688 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if found best nil) ^{:line 689 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [value ^{:line 689 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (bound-term-value ^{:line 689 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth arguments position) subst)]
-  ^{:line 690 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 690 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? value) ^{:line 691 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 691 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (inc position) best found) ^{:line 692 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [candidate ^{:line 693 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get ^{:line 693 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get ^{:line 693 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-positions source) position ^{:line 693 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {}) value ^{:line 693 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [])]
-  ^{:line 694 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 694 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (inc position) ^{:line 695 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 695 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or ^{:line 695 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (not found) ^{:line 695 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (< ^{:line 695 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count candidate) ^{:line 695 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count best))) candidate best) true)))))))
+  (if (>= position (count arguments)) (if found best nil) (let [value (bound-term-value (nth arguments position) subst)]
+  (if (nil? value) (recur (inc position) best found) (let [candidate (get (get (candidatesource-positions source) position {}) value [])]
+  (recur (inc position) (if (or (not found) (< (count candidate) (count best))) candidate best) true)))))))
 
-^{:line 699 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- source-handles [^CandidateSource source ^String relation arguments subst]
-  ^{:line 704 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [occurrence ^{:line 704 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-occurrence source)]
-  ^{:line 705 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 705 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? occurrence) ^{:line 706 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (store/operation-candidate-positions ^{:line 707 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (occurrencecandidatesource-root occurrence) ^{:line 708 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (occurrencecandidatesource-lower-exclusive occurrence) ^{:line 709 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (occurrencecandidatesource-upper-inclusive occurrence) ^{:line 710 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (bound-term-value ^{:line 710 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth arguments 0) subst) ^{:line 711 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (bound-term-value ^{:line 711 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth arguments 2) subst) ^{:line 712 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (occurrencecandidatesource-postings occurrence)) ^{:line 713 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 713 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 713 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= relation triple-relation) ^{:line 713 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= 3 ^{:line 713 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count arguments))) ^{:line 714 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (triple-prefix-handles source arguments subst) ^{:line 715 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (positional-handles source arguments subst)))))
+(defn- source-handles [^CandidateSource source ^String relation arguments subst]
+  (let [occurrence (candidatesource-occurrence source)]
+  (if (some? occurrence) (store/operation-candidate-positions (occurrencecandidatesource-root occurrence) (occurrencecandidatesource-lower-exclusive occurrence) (occurrencecandidatesource-upper-inclusive occurrence) (bound-term-value (nth arguments 0) subst) (bound-term-value (nth arguments 2) subst) (occurrencecandidatesource-postings occurrence)) (if (and (= relation triple-relation) (= 3 (count arguments))) (triple-prefix-handles source arguments subst) (positional-handles source arguments subst)))))
 
-^{:line 717 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- source-row [^CandidateSource source handle]
-  ^{:line 720 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [occurrence ^{:line 720 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-occurrence source)]
-  ^{:line 721 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 721 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? occurrence) ^{:line 722 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (store/occurrence-tuple-at ^{:line 723 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (occurrencecandidatesource-root occurrence) handle) ^{:line 724 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth ^{:line 724 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-rows source) handle))))
+(defn- source-row [^CandidateSource source handle]
+  (let [occurrence (candidatesource-occurrence source)]
+  (if (some? occurrence) (store/occurrence-tuple-at (occurrencecandidatesource-root occurrence) handle) (nth (candidatesource-rows source) handle))))
 
-^{:line 726 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- ^Boolean source-contains? [^CandidateSource source ^String relation arguments subst]
-  ^{:line 731 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [wanted ^{:line 731 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ground arguments subst)
-   handles ^{:line 732 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (source-handles source relation arguments subst)]
-  ^{:line 733 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? ^{:line 733 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some ^{:line 733 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [handle] ^{:line 734 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 734 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= wanted ^{:line 734 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (source-row source handle)) ^{:line 734 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (do
-  handle))) ^{:line 735 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or handles ^{:line 735 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [])))))
+(defn- ^Boolean source-contains? [^CandidateSource source ^String relation arguments subst]
+  (let [wanted (ground arguments subst)
+   handles (source-handles source relation arguments subst)]
+  (some? (some (fn [handle] (if (= wanted (source-row source handle)) (do
+  handle))) (or handles [])))))
 
-^{:line 737 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- relation-results-indexed! [db sources ^Literal literal subst]
-  ^{:line 742 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [relation ^{:line 742 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-relation literal)
-   arguments ^{:line 743 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-arguments literal)
-   source ^{:line 744 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get sources relation)]
-  ^{:line 745 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 745 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-negated literal) ^{:line 746 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 746 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 746 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (instance? CandidateSource source) ^{:line 747 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (source-contains? source relation arguments subst) ^{:line 748 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? ^{:line 748 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get db relation ^{:line 748 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{}) ^{:line 748 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ground arguments subst))) ^{:line 749 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] ^{:line 749 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [subst]) ^{:line 750 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 751 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (instance? VirtualCandidateSource source) ^{:line 752 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (unify-tuples! arguments ^{:line 753 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (virtual-source-rows! source true arguments subst) subst)
-  ^{:line 755 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? source) ^{:line 756 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 756 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? text-relations relation) ^{:line 757 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (missing-candidate-source! relation) ^{:line 758 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 758 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc tuple] ^{:line 761 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [matched ^{:line 761 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (unify-arguments! arguments tuple subst)]
-  ^{:line 762 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 762 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? matched) ^{:line 762 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc matched) acc))) ^{:line 763 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] ^{:line 763 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (vec ^{:line 763 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get db relation ^{:line 763 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{}))))
-  :else ^{:line 765 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [rows-value ^{:line 765 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (candidatesource-rows source)
-   handles ^{:line 766 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (source-handles source relation arguments subst)]
-  ^{:line 767 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 767 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nil? handles) ^{:line 768 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (unify-tuples! arguments rows-value subst) ^{:line 769 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 770 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc handle] ^{:line 773 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [tuple ^{:line 773 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (source-row source handle)
-   matched ^{:line 774 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (unify-arguments! arguments tuple subst)]
-  ^{:line 775 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 775 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (some? matched) ^{:line 775 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc matched) acc))) ^{:line 776 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] handles)))))))
+(defn- relation-results-indexed! [db sources ^Literal literal subst control]
+  (let [relation (literal-relation literal)
+   arguments (literal-arguments literal)
+   source (get sources relation)]
+  (if (literal-negated literal) (if (if (instance? CandidateSource source) (source-contains? source relation arguments subst) (contains? (get db relation #{}) (ground arguments subst))) [] [subst]) (cond
+  (instance? VirtualCandidateSource source) (unify-tuples-controlled! arguments (virtual-source-rows! source true arguments subst) subst control)
+  (nil? source) (if (contains? text-relations relation) (missing-candidate-source! relation) (reduce (fn [acc tuple] (let [matched (unify-arguments-controlled! arguments tuple subst control)]
+  (if (some? matched) (conj acc matched) acc))) [] (vec (get db relation #{}))))
+  :else (let [rows-value (candidatesource-rows source)
+   handles (source-handles source relation arguments subst)]
+  (if (nil? handles) (unify-tuples-controlled! arguments rows-value subst control) (reduce (fn [acc handle] (let [tuple (source-row source handle)
+   matched (unify-arguments-controlled! arguments tuple subst control)]
+  (if (some? matched) (conj acc matched) acc))) [] handles)))))))
 
-^{:line 778 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- literal-results-indexed! [db sources ^Literal literal subst]
-  ^{:line 783 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (query-check!)
-  ^{:line 784 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 785 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= :relation ^{:line 785 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 786 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (relation-results-indexed! db sources literal subst)
-  ^{:line 787 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= :comparison ^{:line 787 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 788 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 788 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (comparison-result literal subst) ^{:line 788 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [subst] ^{:line 788 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [])
-  ^{:line 789 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= :builtin ^{:line 789 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 789 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (builtin-results literal subst)
-  :else ^{:line 790 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} []))
+(defn- literal-results-indexed! [db sources ^Literal literal subst control]
+  (query-check! control)
+  (cond
+  (= :relation (literal-kind literal)) (relation-results-indexed! db sources literal subst control)
+  (= :comparison (literal-kind literal)) (if (comparison-result literal subst) [subst] [])
+  (= :builtin (literal-kind literal)) (builtin-results literal subst)
+  :else []))
 
-^{:line 792 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- body-results-indexed! [db sources body seed]
-  ^{:line 797 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 798 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [substitutions literal] ^{:line 801 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 801 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc subst] ^{:line 804 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (into acc ^{:line 804 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-results-indexed! db sources literal subst))) ^{:line 805 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] substitutions)) ^{:line 806 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [seed] body))
+(defn- body-results-indexed! [db sources body seed control]
+  (reduce (fn [substitutions literal] (reduce (fn [acc subst] (into acc (literal-results-indexed! db sources literal subst control))) [] substitutions)) [seed] body))
 
-^{:line 808 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- derive-rule-indexed! [db sources ^Rule value]
-  ^{:line 812 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 812 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc subst] ^{:line 815 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc ^{:line 815 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ground ^{:line 815 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-head-arguments value) subst))) ^{:line 816 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{} ^{:line 816 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (body-results-indexed! db sources ^{:line 816 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-body value) ^{:line 816 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {})))
+(defn- derive-rule-indexed! [db sources ^Rule value control]
+  (reduce (fn [acc subst] (conj acc (ground (rule-head-arguments value) subst))) #{} (body-results-indexed! db sources (rule-body value) {} control)))
 
-^{:line 818 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- delta-relation-positions [body delta-relations]
-  ^{:line 821 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [position 0
+(defn- delta-relation-positions [body delta-relations]
+  (loop [position 0
    remaining body
-   positions ^{:line 821 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} []]
-  ^{:line 822 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 822 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty? remaining) positions ^{:line 824 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [literal ^{:line 824 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (first remaining)]
-  ^{:line 825 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 825 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (inc position) ^{:line 825 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rest remaining) ^{:line 826 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 826 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 826 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= :relation ^{:line 826 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 827 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (not ^{:line 827 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-negated literal)) ^{:line 828 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? delta-relations ^{:line 828 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-relation literal))) ^{:line 829 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj positions position) positions))))))
+   positions []]
+  (if (empty? remaining) positions (let [literal (first remaining)]
+  (recur (inc position) (rest remaining) (if (and (= :relation (literal-kind literal)) (not (literal-negated literal)) (contains? delta-relations (literal-relation literal))) (conj positions position) positions))))))
 
-^{:line 832 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- positive-relation-names [rules]
-  ^{:line 833 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (vec ^{:line 834 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (sort ^{:line 835 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 836 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [relations value] ^{:line 839 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 839 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [current literal] ^{:line 842 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 842 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 842 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= :relation ^{:line 842 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 843 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (not ^{:line 843 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-negated literal))) ^{:line 844 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj current ^{:line 844 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-relation literal)) current)) relations ^{:line 846 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-body value))) ^{:line 847 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{} rules))))
+(defn- positive-relation-names [rules]
+  (vec (sort (reduce (fn [relations value] (reduce (fn [current literal] (if (and (= :relation (literal-kind literal)) (not (literal-negated literal))) (conj current (literal-relation literal)) current)) relations (rule-body value))) #{} rules))))
 
-^{:line 849 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- body-results-pinned! [db sources delta delta-sources body pin]
-  ^{:line 856 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [position 0
+(defn- body-results-pinned! [db sources delta delta-sources body pin control]
+  (loop [position 0
    remaining body
-   substitutions ^{:line 856 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [^{:line 856 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {}]]
-  ^{:line 857 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 857 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty? remaining) substitutions ^{:line 859 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [literal ^{:line 859 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (first remaining)
-   pinned ^{:line 860 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 860 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= position pin) ^{:line 861 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= :relation ^{:line 861 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 862 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (not ^{:line 862 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-negated literal)))
-   read-db ^{:line 863 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if pinned delta db)
-   read-sources ^{:line 864 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if pinned delta-sources sources)
-   next-substitutions ^{:line 866 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 867 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc subst] ^{:line 870 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (into acc ^{:line 871 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-results-indexed! read-db read-sources literal subst))) ^{:line 873 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] substitutions)]
-  ^{:line 874 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 874 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (inc position) ^{:line 874 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rest remaining) next-substitutions)))))
+   substitutions [{}]]
+  (if (empty? remaining) substitutions (let [literal (first remaining)
+   pinned (and (= position pin) (= :relation (literal-kind literal)) (not (literal-negated literal)))
+   read-db (if pinned delta db)
+   read-sources (if pinned delta-sources sources)
+   next-substitutions (reduce (fn [acc subst] (into acc (literal-results-indexed! read-db read-sources literal subst control))) [] substitutions)]
+  (recur (inc position) (rest remaining) next-substitutions)))))
 
-^{:line 876 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- derive-rule-delta! [db sources delta delta-sources delta-relations ^Rule value]
-  ^{:line 883 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [head ^{:line 883 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-head-arguments value)
-   body ^{:line 884 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-body value)]
-  ^{:line 885 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 886 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [derived pin] ^{:line 889 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 889 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [current subst] ^{:line 892 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj current ^{:line 892 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (ground head subst))) derived ^{:line 894 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (body-results-pinned! db sources delta delta-sources body pin))) ^{:line 895 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{} ^{:line 895 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (delta-relation-positions body delta-relations))))
+(defn- derive-rule-delta! [db sources delta delta-sources delta-relations ^Rule value control]
+  (let [head (rule-head-arguments value)
+   body (rule-body value)]
+  (reduce (fn [derived pin] (reduce (fn [current subst] (conj current (ground head subst))) derived (body-results-pinned! db sources delta delta-sources body pin control))) #{} (delta-relation-positions body delta-relations))))
 
-^{:line 897 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- db-new-only [candidate db relations]
-  ^{:line 901 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 902 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [delta relation] ^{:line 905 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [new-tuples ^{:line 906 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 906 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [rows-value tuple] ^{:line 909 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 909 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? ^{:line 909 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get db relation ^{:line 909 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{}) tuple) rows-value ^{:line 911 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj rows-value tuple))) ^{:line 912 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{} ^{:line 912 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get candidate relation ^{:line 912 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{}))]
-  ^{:line 913 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 913 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty? new-tuples) delta ^{:line 913 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (assoc delta relation new-tuples)))) ^{:line 914 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {} relations))
+(defn- db-new-only [candidate db relations]
+  (reduce (fn [delta relation] (let [new-tuples (reduce (fn [rows-value tuple] (if (contains? (get db relation #{}) tuple) rows-value (conj rows-value tuple))) #{} (get candidate relation #{}))]
+  (if (empty? new-tuples) delta (assoc delta relation new-tuples)))) {} relations))
 
-^{:line 916 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- db-merge-delta [db delta relations]
-  ^{:line 920 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 921 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [current relation] ^{:line 924 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [new-tuples ^{:line 924 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get delta relation ^{:line 924 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{})]
-  ^{:line 925 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 925 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty? new-tuples) current ^{:line 927 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (update current relation ^{:line 928 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [known] ^{:line 929 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 929 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [rows-value tuple] ^{:line 932 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj rows-value tuple)) ^{:line 933 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or known ^{:line 933 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{}) new-tuples)))))) db relations))
+(defn- db-merge-delta [db delta relations]
+  (reduce (fn [current relation] (let [new-tuples (get delta relation #{})]
+  (if (empty? new-tuples) current (update current relation (fn [known] (reduce (fn [rows-value tuple] (conj rows-value tuple)) (or known #{}) new-tuples)))))) db relations))
 
-^{:line 936 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- ^Boolean delta-empty? [delta relations]
-  ^{:line 939 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [remaining relations]
-  ^{:line 940 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 940 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty? remaining) true ^{:line 942 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 942 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (empty? ^{:line 942 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get delta ^{:line 942 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (first remaining) ^{:line 942 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{})) ^{:line 943 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 943 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rest remaining)) false))))
+(defn- ^Boolean delta-empty? [delta relations]
+  (loop [remaining relations]
+  (if (empty? remaining) true (if (empty? (get delta (first remaining) #{})) (recur (rest remaining)) false))))
 
-^{:line 946 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- derive-delta! [db sources delta rules relations delta-relations]
-  ^{:line 953 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [delta-set ^{:line 953 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (set delta-relations)
-   delta-sources ^{:line 954 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (build-candidate-sources delta delta-relations ^{:line 954 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {})
-   candidate ^{:line 956 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 957 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [current value] ^{:line 960 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [relation ^{:line 960 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-head-relation value)
-   derived ^{:line 962 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (derive-rule-delta! db sources delta delta-sources delta-set value)]
-  ^{:line 964 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (update current relation ^{:line 965 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [known] ^{:line 966 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 966 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [rows-value tuple] ^{:line 969 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj rows-value tuple)) ^{:line 970 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or known ^{:line 970 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{}) derived))))) ^{:line 971 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {} rules)]
-  ^{:line 972 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (db-new-only candidate db relations)))
+(defn- derive-delta! [db sources delta rules relations delta-relations control]
+  (let [delta-set (set delta-relations)
+   delta-sources (build-candidate-sources delta delta-relations {})
+   candidate (reduce (fn [current value] (let [relation (rule-head-relation value)
+   derived (derive-rule-delta! db sources delta delta-sources delta-set value control)]
+  (update current relation (fn [known] (reduce (fn [rows-value tuple] (conj rows-value tuple)) (or known #{}) derived))))) {} rules)]
+  (db-new-only candidate db relations)))
 
-^{:line 974 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn fixpoint-with-candidates! [db0 rules candidates]
-  ^{:line 978 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [relations ^{:line 978 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-head-relations rules)
-   read-relations ^{:line 979 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (positive-relation-names rules)
-   head-set ^{:line 980 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (set relations)
-   delta-relations ^{:line 982 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (vec ^{:line 982 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (filter ^{:line 982 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [relation] ^{:line 983 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? head-set relation)) read-relations))
-   initial-sources ^{:line 985 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (build-candidate-sources db0 read-relations candidates)
-   seeded ^{:line 987 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 988 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [db value] ^{:line 991 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [relation ^{:line 991 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-head-relation value)
-   derived ^{:line 992 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (derive-rule-indexed! db0 initial-sources value)]
-  ^{:line 993 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (update db relation ^{:line 994 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [known] ^{:line 995 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 995 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [rows-value tuple] ^{:line 998 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj rows-value tuple)) ^{:line 999 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (or known ^{:line 999 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{}) derived))))) db0 rules)
-   delta0 ^{:line 1001 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (db-new-only seeded db0 relations)
-   seeded-sources ^{:line 1002 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (add-delta-sources initial-sources delta0 read-relations)]
-  ^{:line 1003 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [db seeded
+(defn fixpoint-with-candidates-controlled! [db0 rules candidates control]
+  (let [relations (rule-head-relations rules)
+   read-relations (positive-relation-names rules)
+   head-set (set relations)
+   delta-relations (vec (filter (fn [relation] (contains? head-set relation)) read-relations))
+   initial-sources (build-candidate-sources db0 read-relations candidates)
+   seeded (reduce (fn [db value] (let [relation (rule-head-relation value)
+   derived (derive-rule-indexed! db0 initial-sources value control)]
+  (update db relation (fn [known] (reduce (fn [rows-value tuple] (conj rows-value tuple)) (or known #{}) derived))))) db0 rules)
+   delta0 (db-new-only seeded db0 relations)
+   seeded-sources (add-delta-sources initial-sources delta0 read-relations)]
+  (loop [db seeded
    sources seeded-sources
    delta delta0]
-  ^{:line 1004 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 1004 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (delta-empty? delta delta-relations) db ^{:line 1006 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [next-delta ^{:line 1007 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (derive-delta! db sources delta rules relations delta-relations)]
-  ^{:line 1009 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 1009 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (db-merge-delta db next-delta relations) ^{:line 1010 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (add-delta-sources sources next-delta read-relations) next-delta))))))
+  (if (delta-empty? delta delta-relations) db (let [next-delta (derive-delta! db sources delta rules relations delta-relations control)]
+  (recur (db-merge-delta db next-delta relations) (add-delta-sources sources next-delta read-relations) next-delta))))))
 
-^{:line 1013 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn fixpoint! [db0 rules]
-  ^{:line 1016 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fixpoint-with-candidates! db0 rules ^{:line 1016 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {}))
+(defn fixpoint-with-candidates! [db0 rules candidates]
+  (fixpoint-with-candidates-controlled! db0 rules candidates *query-control*))
 
-^{:line 1018 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn fixpoint-sourced! [db0 registered rules]
-  ^{:line 1022 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fixpoint-with-candidates! db0 rules registered))
+(defn fixpoint! [db0 rules]
+  (fixpoint-with-candidates! db0 rules {}))
 
-^{:line 1024 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn run-rules! [propositions rules]
-  ^{:line 1027 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fixpoint! ^{:line 1027 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (edb propositions) rules))
+(defn fixpoint-sourced! [db0 registered rules]
+  (fixpoint-with-candidates! db0 rules registered))
 
-^{:line 1029 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn run-strata-db-with-candidates! [db0 strata candidates]
-  ^{:line 1033 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 1033 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [db stratum] ^{:line 1036 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fixpoint-with-candidates! db stratum candidates)) db0 strata))
+(defn run-rules! [propositions rules]
+  (fixpoint! (edb propositions) rules))
 
-^{:line 1039 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn run-strata-db! [db0 strata]
-  ^{:line 1042 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (run-strata-db-with-candidates! db0 strata ^{:line 1042 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} {}))
+(defn run-strata-db-with-candidates-controlled! [db0 strata candidates control]
+  (reduce (fn [db stratum] (fixpoint-with-candidates-controlled! db stratum candidates control)) db0 strata))
 
-^{:line 1044 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn run-strata-db-sourced! [db0 sources strata]
-  ^{:line 1048 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (run-strata-db-with-candidates! db0 strata sources))
+(defn run-strata-db-with-candidates! [db0 strata candidates]
+  (run-strata-db-with-candidates-controlled! db0 strata candidates *query-control*))
 
-^{:line 1050 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn run-strata! [propositions strata]
-  ^{:line 1053 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (run-strata-db! ^{:line 1053 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (edb propositions) strata))
+(defn run-strata-db! [db0 strata]
+  (run-strata-db-with-candidates! db0 strata {}))
 
-^{:line 1055 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn- negated-relations [stratum]
-  ^{:line 1056 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 1057 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc value] ^{:line 1060 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 1060 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [relations literal] ^{:line 1063 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 1063 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (and ^{:line 1063 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (= :relation ^{:line 1063 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 1064 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-negated literal)) ^{:line 1065 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj relations ^{:line 1065 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (literal-relation literal)) relations)) acc ^{:line 1067 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-body value))) ^{:line 1068 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} [] stratum))
+(defn run-strata-db-sourced! [db0 sources strata]
+  (run-strata-db-with-candidates! db0 strata sources))
 
-^{:line 1070 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn strata-violations [strata]
-  ^{:line 1071 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (loop [index 0
+(defn run-strata! [propositions strata]
+  (run-strata-db! (edb propositions) strata))
+
+(defn- negated-relations [stratum]
+  (reduce (fn [acc value] (reduce (fn [relations literal] (if (and (= :relation (literal-kind literal)) (literal-negated literal)) (conj relations (literal-relation literal)) relations)) acc (rule-body value))) [] stratum))
+
+(defn strata-violations [strata]
+  (loop [index 0
    lower base-relations
-   problems ^{:line 1071 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} []]
-  ^{:line 1072 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (if ^{:line 1072 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (>= index ^{:line 1072 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (count strata)) problems ^{:line 1074 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (let [stratum ^{:line 1074 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (nth strata index)
-   heads ^{:line 1076 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 1076 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc value] ^{:line 1079 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc ^{:line 1079 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (rule-head-relation value))) ^{:line 1080 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{} stratum)
-   problems2 ^{:line 1082 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 1083 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc relation] ^{:line 1086 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (cond
-  ^{:line 1087 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? heads relation) ^{:line 1088 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc ^{:line 1088 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (str "stratum " index ": negated '" relation "' is also derived in the same stratum"))
-  ^{:line 1090 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (not ^{:line 1090 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (contains? lower relation)) ^{:line 1091 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc ^{:line 1091 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (str "stratum " index ": negated '" relation "' is not a base or lower-stratum relation"))
-  :else acc)) problems ^{:line 1094 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (negated-relations stratum))]
-  ^{:line 1095 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (recur ^{:line 1095 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (+ index 1) ^{:line 1096 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (reduce ^{:line 1096 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (fn [acc relation] ^{:line 1099 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (conj acc relation)) lower heads) problems2)))))
+   problems []]
+  (if (>= index (count strata)) problems (let [stratum (nth strata index)
+   heads (reduce (fn [acc value] (conj acc (rule-head-relation value))) #{} stratum)
+   problems2 (reduce (fn [acc relation] (cond
+  (contains? heads relation) (conj acc (str "stratum " index ": negated '" relation "' is also derived in the same stratum"))
+  (not (contains? lower relation)) (conj acc (str "stratum " index ": negated '" relation "' is not a base or lower-stratum relation"))
+  :else acc)) problems (negated-relations stratum))]
+  (recur (+ index 1) (reduce (fn [acc relation] (conj acc relation)) lower heads) problems2)))))
 
-^{:line 1103 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (defn facts [db ^String relation]
-  ^{:line 1106 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (vec ^{:line 1106 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} (get db relation ^{:line 1106 :file "/home/tom/code/fram/wt-native-candidate-tags/src/fram/datalog.bclj"} #{})))
+(defn facts [db ^String relation]
+  (vec (get db relation #{})))

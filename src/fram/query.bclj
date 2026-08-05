@@ -46,7 +46,7 @@
   [key: String?
    error: QueryError?])
 
-(def ^:dynamic *query-control*: Any nil)
+(def ^:dynamic *query-control*: d/QueryControl? nil)
 
 (def base-rel-arities: (Map String Int)
   {d/triple-relation 3
@@ -832,14 +832,20 @@
         (if (and (some? raw) (not (= raw ""))) (parse-long raw) nil)]
     (if (and (some? parsed) (> parsed 0)) parsed 100000)))
 
+(defn- evaluate-plan-controlled!
+  [projection: Projection
+   plan: QueryPlan
+   control: d/QueryControl?] -> d/Db
+  (d/run-strata-db-with-candidates-controlled!
+   (projection-edb projection)
+   (queryplan-strata plan)
+   (projection-candidates projection)
+   control))
+
 (defn- evaluate-plan!
   [projection: Projection
    plan: QueryPlan] -> d/Db
-  (binding [d/*query-control* *query-control*]
-    (d/run-strata-db-with-candidates!
-     (projection-edb projection)
-     (queryplan-strata plan)
-     (projection-candidates projection))))
+  (evaluate-plan-controlled! projection plan *query-control*))
 
 (defn- abort-result [problem: Any] -> QueryResult
   (let [data (ex-data problem)]
@@ -1006,14 +1012,15 @@
                count-value max-results)
               (success-result (vec (sort-by row-key survivors))))))))))
 
-(defn run-plan-projected!
+(defn run-plan-projected-controlled!
   [projection: Projection
-   plan: QueryPlan] -> QueryResult
+   plan: QueryPlan
+   control: d/QueryControl?] -> QueryResult
   (let [errors (validate-plan plan)]
     (if (not (empty? errors))
       (failure-result errors)
       (try
-        (let [db (evaluate-plan! projection plan)
+        (let [db (evaluate-plan-controlled! projection plan control)
               find (queryplan-find plan)]
           (if (aggregate-find? find)
             (aggregate-result db find)
@@ -1027,6 +1034,11 @@
                  count-value max-results)
                 (success-result (ordered-rows rows))))))
         (catch Exception problem (abort-result problem))))))
+
+(defn run-plan-projected!
+  [projection: Projection
+   plan: QueryPlan] -> QueryResult
+  (run-plan-projected-controlled! projection plan *query-control*))
 
 (defn run-projected!
   [projection: Projection
