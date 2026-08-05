@@ -35,11 +35,12 @@
   (and (string? needle) (not (empty? (tokenize needle)))))
 
 (defn- postings-weight [postings: (Map String (Vec Int))] -> Int
-  (reduce (fn
-            [total: Int
-             entry: Any] -> Int (let [token: String (nth entry 0) handles: (Vec Int) (nth entry 1)] (+ total 84 (* 4 (count token)) (* 42 (count handles)))))
-    0
-    (vec postings)))
+  (reduce-kv (fn
+               [total: Int
+                token: String
+                handles: (Vec Int)] -> Int
+               (+ total 84 (* 4 (count token)) (* 42 (count handles))))
+             0 postings))
 
 (defn- index-limit
   [weight: Int
@@ -49,9 +50,9 @@
     nil))
 
 (defn build-source
-  [propositions: Any
+  [propositions: (Vec t/Triple)
    maximum: Int] -> TextCandidateSource
-  (let [rows: (Vec t/Triple) (vec propositions)
+  (let [rows: (Vec t/Triple) propositions
         row-count: Int (count rows)
         ;; One transient posting map for the whole corpus: the per-row persistent
         ;; assoc dominated the build at corpus scale.
