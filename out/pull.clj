@@ -36,72 +36,89 @@
 
 (defn run [store-atom root pattern opts]
   (let [errs (validate root pattern opts)]
-  (if (seq errs) {:error errs} (let [st store-atom
-   co0 {:store store-atom}
-   asof (:as-of opts)
-   asof-set (if (some? asof) (coord/live-as-of co0 asof) nil)
+  (if (seq errs) {:error errs} (let [schema (s/session store-atom)
+   history (c/operation-occurrences store-atom)
+   live-now (c/live-occurrences store-atom)
+   withdrawals (c/withdrawal-triples store-atom)
+   asof (let [candidate (:as-of opts)]
+  (if (integer? candidate) candidate nil))
    prov? (boolean (:provenance opts))
    max-depth (clamp (:max-depth opts) default-max-depth)
    max-nodes (clamp (:max-nodes opts) default-max-nodes)
    state (atom 0)]
-  (letfn [(pid-of [p] (c/value-id st p))
-          (nm-of [id] (or (s/name-of st id) id))
-          (flive [cids] (if (some? asof-set) (filterv (fn [x] (contains? asof-set x)) cids) (filterv (fn [x] (c/live? st x)) cids)))
-          (raw-lp [lid pid] (let [m (deref st)]
-  (get (:idx-by-lp m) [lid pid] [])))
-          (raw-pr [pid rid] (let [m (deref st)]
-  (get (:idx-by-pr m) [pid rid] [])))
-          (raw-l [lid] (let [m (deref st)]
-  (get (:idx-by-l m) lid [])))
-          (fwd-cids [lid pid] (cond
-  (some? asof-set) (flive (raw-lp lid pid))
-  prov? (vec (coord/live-members co0 lid pid :add-wins))
-  :else (flive (raw-lp lid pid))))
-          (rev-cids [pid rid] (flive (raw-pr pid rid)))
-          (leaf [cid] (let [cl (c/fact-of st cid)
-   r (:r cl)
-   v (if (c/value-object? st r) (c/literal st r) (nm-of r))]
-  (if prov? (let [tx (c/fact-tx st cid)
-   wd (if (some? asof) nil (coord/withdrawn? co0 cid))
-   ts (coord/ts-of co0 cid)
-   base (cond-> {:val v :cid cid :by (coord/agent-of co0 cid) :seq (if (some? tx) (c/tx-seq st tx) 0) :withdrawn (boolean wd)} (some? ts) (assoc :ts ts))]
-  (if wd (let [w (coord/withdrawal-of co0 cid)]
-  (assoc base :withdrawn_by (:by w) :withdrawn_at (:at w) :withdrawn_reason (:reason w))) base)) v)))
-          (values [pname pid lid] (let [cids (fwd-cids lid pid)]
-  (if (seq cids) (do
-  (let [vs (mapv (fn [x] (leaf x)) cids)]
-  (if (= "single" (s/cardinality st pname)) (first vs) vs))))))
-          (subpat->pattern [k sp] (cond
-  (vector? sp) sp
-  (integer? sp) (if (> sp 1) [{k (dec sp)}] [])
-  (= sp :...) [{k :...}]
+  (letfn [(event-occurrence [event] (t/triple-slot0 event))
+          (event-proposition [event] (t/triple-slot2 event))
+          (event-sequence [event] (let [occurrence (event-occurrence event)
+   transaction (t/triple-slot0 occurrence)]
+  (t/triple-slot2 transaction)))
+          (assertion-event? [event] (= t/asserts (t/triple-slot1 event)))
+          (events-at [cutoff] (reduce (fn [active event] (if (> (event-sequence event) cutoff) active (if (assertion-event? event) (conj active event) (let [proposition (event-proposition event)
+   target (last (filterv (fn [candidate] (= proposition (event-proposition candidate))) active))]
+  (if (nil? target) active (filterv (fn [candidate] (not= (event-occurrence target) (event-occurrence candidate))) active)))))) [] history))
+          (snapshot-events [] (if (some? asof) (events-at asof) live-now))
+          (live-event? [event] (boolean (some (fn [candidate] (= (event-occurrence event) (event-occurrence candidate))) live-now)))
+          (withdrawal-for [occurrence] (let [withdrawal (first (filterv (fn [candidate] (and (= t/withdraws (t/triple-slot1 candidate)) (= occurrence (t/triple-slot2 candidate)))) withdrawals))]
+  withdrawal))
+          (metadata-value [owner predicate] (let [event (last (filterv (fn [candidate] (if (assertion-event? candidate) (let [proposition (event-proposition candidate)]
+  (and (= owner (t/triple-slot0 proposition)) (= predicate (t/triple-slot1 proposition)) (or (nil? asof) (<= (event-sequence candidate) asof)))) false)) (snapshot-events)))]
+  (if (nil? event) nil (t/triple-slot2 (event-proposition event)))))
+          (agent-of [occurrence] (or (metadata-value occurrence :kernel/asserted-by) (metadata-value (t/triple-slot0 occurrence) :kernel/asserted-by)))
+          (recorded-at-of [occurrence] (or (metadata-value occurrence :kernel/recorded-at) (metadata-value (t/triple-slot0 occurrence) :kernel/recorded-at)))
+          (pid-of [p] (s/resolve-predicate schema p))
+          (nm-of [term] (or (s/name-of schema term) term))
+          (fwd-events [left predicate] (let [candidates (cond
+  (some? asof) (snapshot-events)
+  prov? (filterv (fn [event] (and (assertion-event? event) (or (live-event? event) (some? (withdrawal-for (event-occurrence event)))))) history)
+  :else live-now)]
+  (filterv (fn [event] (if (assertion-event? event) (let [proposition (event-proposition event)]
+  (and (= left (t/triple-slot0 proposition)) (= predicate (t/triple-slot1 proposition)))) false)) candidates)))
+          (rev-events [predicate right] (filterv (fn [event] (if (assertion-event? event) (let [proposition (event-proposition event)]
+  (and (= predicate (t/triple-slot1 proposition)) (= right (t/triple-slot2 proposition)))) false)) (snapshot-events)))
+          (subject-events [left] (filterv (fn [event] (and (assertion-event? event) (= left (t/triple-slot0 (event-proposition event))))) (snapshot-events)))
+          (leaf [predicate event] (let [proposition (event-proposition event)
+   right (t/triple-slot2 proposition)
+   value (if (= s/ref-kind (s/lookup schema predicate s/value-kind-predicate)) (nm-of right) right)]
+  (if prov? (let [occurrence (event-occurrence event)
+   withdrawal (if (some? asof) nil (withdrawal-for occurrence))
+   recorded-at (recorded-at-of occurrence)
+   base (cond-> {:val value :cid occurrence :by (agent-of occurrence) :seq (event-sequence event) :withdrawn (boolean withdrawal)} (some? recorded-at) (assoc :ts recorded-at))]
+  (if (nil? withdrawal) base (let [retraction (t/triple-slot0 withdrawal)]
+  (assoc base :withdrawn_by (agent-of retraction) :withdrawn_at retraction)))) value)))
+          (values [pname predicate left] (let [events (fwd-events left predicate)]
+  (if (seq events) (do
+  (let [rendered (mapv (fn [event] (leaf predicate event)) events)]
+  (if (= "single" (s/cardinality schema pname)) (last rendered) rendered))))))
+          (subpat->pattern [key subpattern] (cond
+  (vector? subpattern) subpattern
+  (integer? subpattern) (if (> subpattern 1) [{key (dec subpattern)}] [])
+  (= subpattern :...) [{key :...}]
   :else []))
-          (recur-target [tid subpat depth visited] (if (> (inc depth) max-depth) {:fram/id (nm-of tid) :fram/truncated true} (node tid (nm-of tid) subpat (inc depth) visited)))
-          (elem [acc lid depth visited e] (cond
-  (= e :*) (reduce (fn [a pid] (let [pname (c/literal st pid)]
-  (if (reserved-pred? pname) a (let [v (values pname pid lid)]
-  (if (some? v) (assoc a pname v) a))))) acc (distinct (map (fn [x] (:p (c/fact-of st x))) (flive (raw-l lid)))))
-  (and (string? e) (str/starts-with? e "_")) (let [pid (pid-of (subs e 1))]
-  (if (nil? pid) acc (let [ls (mapv (fn [x] (:l (c/fact-of st x))) (rev-cids pid lid))]
-  (assoc acc e (mapv (fn [l] (node l (nm-of l) [] (inc depth) visited)) ls)))))
-  (string? e) (let [pid (pid-of e)]
-  (if (nil? pid) acc (let [v (values e pid lid)]
-  (if (some? v) (assoc acc e v) acc))))
-  (map? e) (reduce (fn [a k] (let [sp (get e k)]
-  (if (str/starts-with? k "_") (let [pid (pid-of (subs k 1))]
-  (if (nil? pid) a (let [ls (mapv (fn [x] (:l (c/fact-of st x))) (rev-cids pid lid))]
-  (assoc a k (mapv (fn [l] (recur-target l (subpat->pattern k sp) depth visited)) ls))))) (let [pid (pid-of k)]
-  (if (nil? pid) a (let [cids (fwd-cids lid pid)
-   rendered (mapv (fn [cid] (let [r (:r (c/fact-of st cid))]
-  (if (c/value-object? st r) (c/literal st r) (recur-target r (subpat->pattern k sp) depth visited)))) cids)]
-  (if (seq rendered) (assoc a k (if (= "single" (s/cardinality st k)) (first rendered) rendered)) a))))))) acc (keys e))
+          (recur-target [target subpattern depth visited] (if (> (inc depth) max-depth) {:fram/id (nm-of target) :fram/truncated true} (node target (nm-of target) subpattern (inc depth) visited)))
+          (elem [acc left depth visited element] (cond
+  (= element :*) (reduce (fn [result predicate] (let [pname (s/predicate-name schema predicate)]
+  (if (reserved-pred? pname) result (let [value (values pname predicate left)]
+  (if (nil? value) result (assoc result pname value)))))) acc (distinct (mapv (fn [event] (t/triple-slot1 (event-proposition event))) (subject-events left))))
+  (and (string? element) (str/starts-with? element "_")) (let [predicate (pid-of (subs element 1))]
+  (if (nil? predicate) acc (let [subjects (mapv (fn [event] (t/triple-slot0 (event-proposition event))) (rev-events predicate left))]
+  (assoc acc element (mapv (fn [subject] (node subject (nm-of subject) [] (inc depth) visited)) subjects)))))
+  (string? element) (let [predicate (pid-of element)]
+  (if (nil? predicate) acc (let [value (values element predicate left)]
+  (if (nil? value) acc (assoc acc element value)))))
+  (map? element) (reduce (fn [result key] (let [subpattern (get element key)]
+  (if (str/starts-with? key "_") (let [predicate (pid-of (subs key 1))]
+  (if (nil? predicate) result (let [subjects (mapv (fn [event] (t/triple-slot0 (event-proposition event))) (rev-events predicate left))]
+  (assoc result key (mapv (fn [subject] (recur-target subject (subpat->pattern key subpattern) depth visited)) subjects))))) (let [predicate (pid-of key)]
+  (if (nil? predicate) result (let [rendered (mapv (fn [event] (let [right (t/triple-slot2 (event-proposition event))
+   target-name (s/name-of schema right)]
+  (if (nil? target-name) right (recur-target right (subpat->pattern key subpattern) depth visited)))) (fwd-events left predicate))]
+  (if (seq rendered) (assoc result key (if (= "single" (s/cardinality schema key)) (first rendered) rendered)) result))))))) acc (keys element))
   :else acc))
-          (node [rid nm pat depth visited] (cond
-  (contains? visited rid) {:fram/id nm :fram/cycle true}
-  (>= (deref state) max-nodes) {:fram/id nm :fram/truncated true}
+          (node [subject name requested depth visited] (cond
+  (contains? visited subject) {:fram/id name :fram/cycle true}
+  (>= (deref state) max-nodes) {:fram/id name :fram/truncated true}
   :else (do
-  (swap! state (fn [n] (inc n)))
-  (reduce (fn [acc e] (elem acc rid depth (conj visited rid) e)) {:fram/id nm} pat))))]
-  (let [one (fn [r] (let [rid (s/resolve-name st r)]
-  (if (nil? rid) {:fram/id r} (node rid r pattern 0 #{}))))]
-  (if (vector? root) (mapv (fn [r] (one r)) root) (one root))))))))
+  (swap! state (fn [count] (inc count)))
+  (reduce (fn [acc element] (elem acc subject depth (conj visited subject) element)) {:fram/id name} requested))))]
+  (let [one (fn [name] (let [subject (s/resolve-name schema name)]
+  (if (nil? subject) {:fram/id name} (node subject name pattern 0 #{}))))]
+  (if (vector? root) (mapv (fn [name] (one name)) root) (one root))))))))
