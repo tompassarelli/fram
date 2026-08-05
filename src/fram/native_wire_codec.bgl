@@ -120,10 +120,11 @@
   (read-presence! decoder context))
 
 (defn append-u8! [encoder: Encoder value: Int] -> Nil
+  ;; Both arms end in nil so the native join has one declared alternative.
   (if (byte-value? value)
-    (swap! (encoder-bytes encoder) conj value)
-    (encoder-error! encoder "FRAMRPC encoder produced a value outside u8"))
-  nil)
+    (do (swap! (encoder-bytes encoder) conj value) nil)
+    (do (encoder-error! encoder "FRAMRPC encoder produced a value outside u8")
+        nil)))
 
 (defn append-u16-le! [encoder: Encoder value: Int] -> Nil
   (loop [offset 0]
@@ -552,7 +553,8 @@
       (do
         (append-u8! encoder 1)
         (append-u32-le! encoder (count space-bytes))
-        (swap! (encoder-bytes encoder) into space-bytes))
+        (swap! (encoder-bytes encoder) into space-bytes)
+        nil)
       nil))
   (append-term! encoder (t/rpcresponse-op response) 0)
   (append-i64-le! encoder (t/rpcresponse-served-version response))

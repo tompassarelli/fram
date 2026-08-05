@@ -546,7 +546,9 @@
 (defn occurrence-sequence [occurrence: Any] -> Int
   (if (and (t/occurrence-coordinate? occurrence)
            (t/transaction-coordinate? (t/triple-t1 occurrence)))
-    (t/triple-t3 (t/triple-t1 occurrence))
+    ;; The coordinate predicate does not narrow t3 to Int for the native join.
+    (let [sequence (t/triple-t3 (t/triple-t1 occurrence))]
+      (if (integer? sequence) sequence 0))
     0))
 
 (defn lease-event? [event: t/Triple] -> Bool
