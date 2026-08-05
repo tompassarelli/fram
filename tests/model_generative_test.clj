@@ -352,7 +352,7 @@
     file))
 
 (defn run-sequence
-  "Replay OPS against a fresh log-backed coordinator and the oracle, comparing
+  "Replay OPS against a fresh log-backed server and the oracle, comparing
    after every op and after a cold restart. Returns {:mismatch …} or {:stats …}."
   [ops]
   (let [file (fresh-log!)

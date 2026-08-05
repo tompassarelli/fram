@@ -84,7 +84,7 @@
        {:mcpServers
         {:fram {:command (str root "/bin/fram-mcp")
                 :env {:FRAM_CODE_PORT (str port)}}}}))
-;; The edit gate is launch-sealed: a coordinator started without FRAM_EDIT_VERIFIER
+;; The edit gate is launch-sealed: a server started without FRAM_EDIT_VERIFIER
 ;; rejects every graph edit as verification-unavailable.
 (def daemon
   (p/process {:dir root
@@ -96,10 +96,10 @@
                                  ;; before/after version comparisons need a quiescent log:
                                  ;; post-boot snapshot metadata is a legitimate async writer.
                                  "FRAM_SNAPSHOT_BOOT" "0"})}
-             "bin/fram-daemon" "serve-flat" (str port) code-log))
+             "bin/fram-server" "serve" (str port) code-log))
 
 (defn database [req] (rt/database-request-for-log port code-log req))
-;; Sized for a JVM coordinator boot, not for a quiet machine: readiness is the only
+;; Sized for a JVM server boot, not for a quiet machine: readiness is the only
 ;; thing polled here, and a 10s budget flakes whenever the box is loaded.
 (defn eventually [f]
   (loop [remaining 2400]
@@ -150,7 +150,7 @@
 
 (try
   (when-not (eventually #(integer? (version)))
-    (throw (ex-info "code coordinator did not become ready" {:daemon-log (slurp (str tmp "/daemon.log"))})))
+    (throw (ex-info "code server did not become ready" {:daemon-log (slurp (str tmp "/daemon.log"))})))
 
   (let [path-response (database {:op :module-path :module "src.plangrep.model"})]
     (check! ":module-path resolves the exact registered nested source"

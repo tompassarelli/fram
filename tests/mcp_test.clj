@@ -56,7 +56,7 @@
 (def daemon
   (proc/process {:dir root :env (assoc inherited "FRAM_SNAPSHOT_BOOT" "0")
                  :out :inherit :err :inherit}
-                "bin/fram-daemon" "serve" (str port) log-path space))
+                "bin/fram-server" "serve" (str port) log-path space))
 
 (try
   (check! "real JVM daemon starts on FRAMRPC"

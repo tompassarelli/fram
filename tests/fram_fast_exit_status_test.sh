@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # bin/north:684-706 dispatches on fram-fast's exit status: 3 = unresolved
-# id-like ref, 4 = coordinator unreachable, else 1.
+# id-like ref, 4 = server unreachable, else 1.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -32,7 +32,7 @@ for _ in $(seq 1 200); do
   sleep 0.05
 done
 if [[ "$ready" -ne 1 ]]; then
-  printf 'fram_fast_exit_status: coordinator failed to start\n' >&2
+  printf 'fram_fast_exit_status: server failed to start\n' >&2
   sed -n '1,80p' "$scratch/daemon.log" >&2
   exit 1
 fi
@@ -59,14 +59,14 @@ status3=$?
 set -e
 check_exit "unresolved id-like ref (tell-existing on absent subject)" 3 "$status3"
 
-# exit 4: coordinator unreachable (nothing listening on this port).
+# exit 4: server unreachable (nothing listening on this port).
 dead_port=1
 set +e
 run_fast "$dead_port" tell-existing \
   '@019fa4d4-93aa-7447-aae5-0a5bcfca9999' title "ghost" >"$scratch/out4" 2>&1
 status4=$?
 set -e
-check_exit "coordinator unreachable" 4 "$status4"
+check_exit "server unreachable" 4 "$status4"
 
 # exit 1 preserved: a genuinely unclassified failure (CLI usage error).
 set +e

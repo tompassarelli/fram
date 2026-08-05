@@ -43,7 +43,7 @@ cold_ms="$(( (cold_stopped - cold_started) / 1000000 ))"
   exit 1
 }
 (( cold_ms < 5000 )) || {
-  printf 'daemon_read_perf_ratchet: unreachable coordinator amplified to %dms\n' "$cold_ms" >&2
+  printf 'daemon_read_perf_ratchet: unreachable server amplified to %dms\n' "$cold_ms" >&2
   exit 1
 }
 
@@ -62,7 +62,7 @@ for _ in $(seq 1 200); do
   sleep 0.05
 done
 if [[ "$ready" -ne 1 ]]; then
-  printf 'daemon_read_perf_ratchet: coordinator failed to start\n' >&2
+  printf 'daemon_read_perf_ratchet: server failed to start\n' >&2
   sed -n '1,80p' "$scratch/daemon.log" >&2
   exit 1
 fi
@@ -124,7 +124,7 @@ measure_ms() {
 }
 
 # Fixed N=10, nearest-rank p95 = the maximum sample. Warm each command once so
-# the ratchet measures short-lived CLI startup + warm coordinator work.
+# the ratchet measures short-lived CLI startup + warm server work.
 run_show
 show_samples=()
 for _ in $(seq 1 10); do

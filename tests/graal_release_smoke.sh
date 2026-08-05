@@ -42,13 +42,13 @@ start() {
       break
     fi
     [[ "$attempt" -eq 5 ]] && {
-      echo "graal release smoke: could not publish coordinator port" >&2
+      echo "graal release smoke: could not publish server port" >&2
       exit 1
     }
   done
   port="$("$docker_bin" inspect --format '{{(index (index .NetworkSettings.Ports "7977/tcp") 0).HostPort}}' "$name")"
   [[ "$port" =~ ^[0-9]+$ ]] || {
-    echo "graal release smoke: could not resolve mapped coordinator port" >&2
+    echo "graal release smoke: could not resolve mapped server port" >&2
     "$docker_bin" logs "$name" >&2 || true
     exit 1
   }
@@ -86,8 +86,8 @@ for (let attempt = 0; attempt < 120; attempt += 1) {
     await new Promise(resolve => setTimeout(resolve, 250));
   }
 }
-assert(status, `coordinator never became ready: ${lastError?.stack || lastError}`);
-assert.equal(status.result.engine, 'rpc/graal', 'release image did not boot the Graal coordinator');
+assert(status, `server never became ready: ${lastError?.stack || lastError}`);
+assert.equal(status.result.engine, 'rpc/graal', 'release image did not boot the Graal server');
 assert.equal((await fram.version()).servedVersion, expectedVersion, 'unexpected durable version');
 
 if (expectFact) {

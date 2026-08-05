@@ -13,7 +13,7 @@
 ;; GREEN: after insert-comment, the note renders DIRECTLY ABOVE `(defn lookup ...)`.
 ;;
 ;; SAFE: isolated /tmp COPY of .fram/code.log, --no-commit (renders only, commits
-;; NOTHING). Never the canonical log, never a coordinator/port.
+;; NOTHING). Never the canonical log, never a server/port.
 ;; ============================================================================
 (require '[babashka.process :as proc] '[clojure.java.io :as io] '[clojure.string :as str])
 (def root (System/getProperty "user.dir"))

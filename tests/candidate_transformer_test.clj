@@ -1,4 +1,4 @@
-;; Pure candidate construction: no coordinator, socket, log, or filesystem mutation.
+;; Pure candidate construction: no server, socket, log, or filesystem mutation.
 ;;   cd ~/code/fram/main && bb -cp ~/code/fram/main/out ~/code/fram/main/tests/candidate_transformer_test.clj
 (require '[clojure.set :as set]
          '[fram.candidate-transformer :as candidate])

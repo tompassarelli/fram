@@ -33,7 +33,7 @@
 
 (defn checked [response operation]
   (when-not (:ok response)
-    (throw (ex-info "benchmark coordinator operation failed"
+    (throw (ex-info "benchmark server operation failed"
                     {:operation operation :response response})))
   response)
 
@@ -233,12 +233,12 @@
        (str port) (.getPath log))]
   (try
     (when (or (< port 7978) (= port 7977))
-      (throw (ex-info "benchmark refused unsafe coordinator port"
+      (throw (ex-info "benchmark refused unsafe server port"
                       {:port port})))
     (when-not
      (eventually
       #(integer? (:version (wire-request port {:op :version}))))
-      (throw (ex-info "scratch coordinator did not start"
+      (throw (ex-info "scratch server did not start"
                       {:port port :log (.getPath log)})))
     (println (format "scratch_port=%d scratch_log=%s trials=%d"
                      port (.getPath log) trials))

@@ -161,7 +161,7 @@
   (let [st (store db)]
     (apply max (live-cids-lp db (s/resolve-name st subj) (c/value-id st pred)))))
 
-;; The subject-is-a-cid write is now the real coordinator verb — database.clj
+;; The subject-is-a-cid write is now the real server verb — database.clj
 ;; `about!` (loaded above). :link takes the target's NAME (about! resolves it);
 ;; a fresh write returns {:ok seq :subject-cid cid :cid new-fact-cid}.
 

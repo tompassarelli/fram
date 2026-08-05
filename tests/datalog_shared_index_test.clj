@@ -2,7 +2,7 @@
 ;; d/fixpoint-bi) must produce the SAME least fixpoint as the classic per-call
 ;; d/fixpoint (which datalog_diff_test already pins to the scan-join oracle).
 ;;
-;; This is the engine half of the coordinator's per-version projection cache: a
+;; This is the engine half of the server's per-version projection cache: a
 ;; base index built ONCE over an immutable EDB is threaded, unchanged, through
 ;; every query and every stratum. The safety invariant is that base-relation
 ;; tuples are invariant across a whole stratified evaluation (base rels are never

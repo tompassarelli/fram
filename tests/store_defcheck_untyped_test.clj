@@ -2,7 +2,7 @@
 ;; store_defcheck_untyped_test.clj — UNTYPED-mode def-check selftest (EXP-025).
 ;; ============================================================================
 ;; Unit-drives the graph-authored in-process untyped analyzer directly on
-;; plain-Clojure source strings — NO coordinator, NO sidecar, NO beagle spawn, so
+;; plain-Clojure source strings — NO server, NO sidecar, NO beagle spawn, so
 ;; it runs anywhere `clojure -M` does and is sub-millisecond per check.
 ;;
 ;; PROVES (deliverable: FRAM_DEFCHECK usable on UNTYPED Clojure):

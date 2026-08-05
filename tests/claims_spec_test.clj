@@ -137,7 +137,7 @@
     (apply max (live-cids-lp db (s/resolve-name st te) (c/value-id st pred)))))
 
 ;; The subject-is-a-cid write helper this spec once carried inline became the
-;; real coordinator verb — database.clj `about!` (the generic seam this doc's
+;; real server verb — database.clj `about!` (the generic seam this doc's
 ;; "one integration seam" section anticipated). The spec now exercises THAT
 ;; verb, so the 90 bars are the contract for the shipped write path. Note the
 ;; signature difference from the old fixture: :link takes the target's NAME

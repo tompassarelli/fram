@@ -85,7 +85,7 @@
 (try
   (check! "native ingest creates the scratch code corpus"
           (zero? (:exit ingest)))
-  (check! "native coordinator serves the ingested corpus"
+  (check! "native server serves the ingested corpus"
           (some? (and server
                       (eventually
                        #(rt/native-call! port space :rpc/version

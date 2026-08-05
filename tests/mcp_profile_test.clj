@@ -12,7 +12,7 @@
 ;;   C. GRAPH-EDIT STARTUP FENCE — graph-edit-v1, and full whenever
 ;;      FRAM_GRAPH_EDIT=1, refuse to start unless FRAM_FLIP=1; FRAM_SERVER_PORT and
 ;;      FRAM_CODE_PORT are valid/equal; canonical FRAM_LOG and FRAM_CODE_LOG are
-;;      equal; and one LIVE STRICT-FENCED coordinator serves that exact in-tree
+;;      equal; and one LIVE STRICT-FENCED server serves that exact in-tree
 ;;      log with the candidate protocol.
 ;;   D. RESTRICTED SURFACE — tools/list is EXACTLY the seven graph-edit verbs;
 ;;      tools/call DENIES tell/retract/show/ask/validate, the query/untell
@@ -20,11 +20,11 @@
 ;;      ZERO mutation (both logs byte-identical across the denial batch); a
 ;;      module whose rendered target escapes FRAM_SRC is refused pre-dispatch.
 ;;   E. AUTHORIZED VERBS STILL WORK — a real set-body lands through the
-;;      restricted surface (warm :edit-min via the strict-fenced coordinator),
+;;      restricted surface (warm :edit-min via the strict-fenced server),
 ;;      proving the profile authorizes exactly the seven, not zero.
 ;;
 ;;   bb -cp out tests/mcp_profile_test.clj      (run from the repo root)
-;; Needs: bb + out/. Parts C-E boot throwaway coordinators (clojure JVM).
+;; Needs: bb + out/. Parts C-E boot throwaway servers (clojure JVM).
 ;; Part E additionally needs Beagle plus the Racket-backed facts-check-emit gate
 ;; and SKIPS with a message when absent.
 (require '[babashka.process :as p] '[cheshire.core :as json]
@@ -95,7 +95,7 @@
           (def beagle-ok? false))))
   (spit code-log "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"test\"}\n"))
 
-;; --- throwaway coordinators ---------------------------------------------------
+;; --- throwaway servers ---------------------------------------------------
 (defn port-free? [p]
   (try (with-open [s (java.net.Socket.)]
          (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int p)) 300) false)
@@ -120,7 +120,7 @@
                       (throw (ex-info (str "daemon on :" port " never came up") {:log outf})))
         :else (do (Thread/sleep 500) (recur (inc i)))))))
 
-(println "booting throwaway coordinators (strict:" strict-port " permissive:" perm-port ") …")
+(println "booting throwaway servers (strict:" strict-port " permissive:" perm-port ") …")
 (def strict-daemon (boot-daemon! strict-port code-log true))
 (def perm-daemon   (boot-daemon! perm-port permissive-log false))
 
@@ -249,14 +249,14 @@
 (fence-refuses "full-profile graph-edit read/edit logs diverge"
                (assoc good-env "FRAM_MCP_PROFILE" "full" "FRAM_LOG" facts-log)
                "same canonical file")
-(fence-refuses "dead coordinator port"
+(fence-refuses "dead server port"
                (assoc good-env
                       "FRAM_SERVER_PORT" (str dead-port)
                       "FRAM_CODE_PORT" (str dead-port))
                "strict-fenced")
-(fence-refuses "coordinator serves a DIFFERENT log"
+(fence-refuses "server serves a DIFFERENT log"
                (assoc good-env "FRAM_LOG" other-log "FRAM_CODE_LOG" other-log) "DIFFERENT")
-(fence-refuses "coordinator is PERMISSIVE (no strict log fence)"
+(fence-refuses "server is PERMISSIVE (no strict log fence)"
                (assoc good-env
                       "FRAM_SERVER_PORT" (str perm-port)
                       "FRAM_CODE_PORT" (str perm-port)
@@ -274,7 +274,7 @@
   (run-mcp good-env
            [init-req list-req
             ;; excluded KB verbs with COMPLETE, WOULD-MUTATE arguments: if any of
-            ;; these dispatched, tell/retract would reach the coordinator.
+            ;; these dispatched, tell/retract would reach the server.
             (call-req 10 "tell"     {:subject "a" :predicate "note" :object "n"})
             (call-req 11 "retract"  {:subject "a" :predicate "title" :object "A"})
             (call-req 12 "show"     {:subject "a"})
@@ -292,7 +292,7 @@
 
 (let [{:keys [by-id exit]} denial-run
       names (set (map :name (get-in (get by-id 2) [:result :tools])))]
-  (chk "D: restricted startup serves (exit 0) against the strict-fenced coordinator" (zero? exit))
+  (chk "D: restricted startup serves (exit 0) against the strict-fenced server" (zero? exit))
   (chk "D: initialize instructions declare the restricted profile"
        (str/includes? (str (get-in (get by-id 1) [:result :instructions])) "graph-edit-v1"))
   (chk "D: tools/list is EXACTLY the seven graph-edit verbs" (= names seven))
@@ -303,11 +303,11 @@
            (and (rerr? r)
                 (str/includes? t "not authorized")
                 ;; none of the post-dispatch shapes appear: tl/call's unknown-tool,
-                ;; the param checker, a commit, or a coordinator refusal.
+                ;; the param checker, a commit, or a server refusal.
                 (not (str/includes? t "unknown tool"))
                 (not (str/includes? t "missing required param"))
                 (not (str/includes? t "committed"))
-                (not (str/includes? t "coordinator"))))))
+                (not (str/includes? t "server"))))))
   (let [r (get by-id 18) t (or (rtext r) "")]
     (chk "D: set-body module '../escape' -> refused, target outside the source root"
          (and (rerr? r) (str/includes? t "outside the source root"))))
@@ -327,7 +327,7 @@
 
 ;; ============================================================================
 ;; E. AUTHORIZED VERBS STILL WORK — a REAL set-body through the restricted
-;;    surface (warm :edit-min via the strict-fenced coordinator).
+;;    surface (warm :edit-min via the strict-fenced server).
 ;; ============================================================================
 (if-not beagle-ok?
   (println "E: SKIP — beagle/racket prerequisites missing (restricted denial + fence fully proven above)")
@@ -340,7 +340,7 @@
     (chk "E: set-body on the ingested module SUCCEEDS under graph-edit-v1"
          (and (some? r) (not (rerr? r))))
     (chk "E: reply reports a committed warm graph edit" (str/includes? t "committed"))
-    (chk "E: the code log GREW (AST delta committed through the coordinator)"
+    (chk "E: the code log GREW (AST delta committed through the server)"
          (> (count (slurp code-log)) (count code-log-before)))
     (chk "E: rendered .bclj view landed INSIDE the source root with the new body"
          (and (.exists (io/file rendered))

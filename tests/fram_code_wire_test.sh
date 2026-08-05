@@ -50,14 +50,14 @@ assert_code_on_line "fram-code-on passes SpaceId to native ingest" \
   '--root "$SRC" --out "$CODE_LOG" --space-id "$SPACE_ID"'
 assert_code_on_line "fram-code-on binds FRAM_SPACE_ID into MCP configuration" \
   '"FRAM_SPACE_ID": "$SPACE_ID"'
-assert_code_on_line "fram-code-on binds the native coordinator port" \
+assert_code_on_line "fram-code-on binds the native server port" \
   '"FRAM_SERVER_PORT": "$PORT"'
 assert_code_on_line "fram-code-on binds the native FRAMLOG path" \
   '"FRAM_LOG": "$CODE_LOG"'
-assert_code_on_line "fram-code-on excludes inherited telemetry from graph coordinators" \
+assert_code_on_line "fram-code-on excludes inherited telemetry from graph servers" \
   'exec env -u FRAM_TELEMETRY_LOG \'
 assert_code_on_line "fram-code-on launches the native daemon with SpaceId" \
-  'bin/fram-daemon serve "$PORT" "$CODE_LOG" "$SPACE_ID"'
+  'bin/fram-server serve "$PORT" "$CODE_LOG" "$SPACE_ID"'
 assert_code_on_line "fram-code-on probes native rpc/status" \
   'native_status_line() {'
 assert_code_on_line "fram-code-on validates the typed native status shape" \
@@ -66,8 +66,8 @@ assert_code_on_line "fram-code-on reserves L3 for graph control" \
   'Level 3 stays'
 assert_code_on_line "fram-code-on proves the complete native stack before success" \
   'fram-code-on: FAILED final native stack postcondition:'
-assert_code_on_line "fram-code-on stops immediately when its coordinator exits" \
-  'FAILED to boot — coordinator exited; see $DIR/.fram/database-$PORT.log'
+assert_code_on_line "fram-code-on stops immediately when its server exits" \
+  'FAILED to boot — server exited; see $DIR/.fram/server-$PORT.log'
 assert_code_on_line "fram-code-on excludes singular test trees from the authoring corpus" \
   "-not -path '*/test/*'"
 assert_code_on_line "fram-code-on excludes plural tests trees from the authoring corpus" \
@@ -106,7 +106,7 @@ assert "mcp.json gains mcpServers.fram" \
   '[ "$(jq -r ".mcpServers.fram.command" "$DIR/.mcp.json")" = "/fake/fram-mcp" ]'
 assert "mcp.json preserves stable SpaceId" \
   '[ "$(jq -r ".mcpServers.fram.env.FRAM_SPACE_ID" "$DIR/.mcp.json")" = "wire-test-space" ]'
-assert "mcp.json preserves native coordinator port" \
+assert "mcp.json preserves native server port" \
   '[ "$(jq -r ".mcpServers.fram.env.FRAM_SERVER_PORT" "$DIR/.mcp.json")" = "31337" ]'
 assert "mcp.json preserves native FRAMLOG" \
   '[ "$(jq -r ".mcpServers.fram.env.FRAM_LOG" "$DIR/.mcp.json")" = "/canonical/fram/.fram/code.log" ]'
@@ -118,7 +118,7 @@ assert "config.toml fram command matches" \
   'grep -A2 "^\[mcp_servers.fram\]$" "$DIR/.codex/config.toml" | grep -q "/fake/fram-mcp"'
 assert "config.toml preserves stable SpaceId" \
   'grep -q "^FRAM_SPACE_ID = \"wire-test-space\"$" "$DIR/.codex/config.toml"'
-assert "config.toml preserves native coordinator port" \
+assert "config.toml preserves native server port" \
   'grep -q "^FRAM_SERVER_PORT = \"31337\"$" "$DIR/.codex/config.toml"'
 assert "config.toml preserves native FRAMLOG" \
   'grep -q "^FRAM_LOG = \"/canonical/fram/.fram/code.log\"$" "$DIR/.codex/config.toml"'

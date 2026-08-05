@@ -1,6 +1,6 @@
 ;; top_level_insert_test.clj — true top-level insertion through the graph/MCP gate.
 ;; ============================================================================
-;; Drives one isolated code log, one throwaway strict-fenced coordinator, and the
+;; Drives one isolated code log, one throwaway strict-fenced server, and the
 ;; real MCP server. It proves:
 ;;
 ;;   A. `insert-before` is a dedicated MCP tool with a closed string schema.
@@ -137,7 +137,7 @@
               :out (io/file daemon-log)
               :err (io/file daemon-log)
               :env (assoc process-env "FRAM_REQUIRE_LOG_FENCE" "1")}
-             (str root "/bin/fram-daemon")
+             (str root "/bin/fram-server")
              "serve-flat" (str port) code-log))
 
 (defn database [req]
@@ -219,7 +219,7 @@
 (try
   (when-not (eventually #(integer? (version)))
     (throw
-     (ex-info "throwaway coordinator did not become ready"
+     (ex-info "throwaway server did not become ready"
               {:daemon-log (when (.exists (io/file daemon-log))
                              (slurp daemon-log))})))
 

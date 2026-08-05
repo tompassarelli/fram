@@ -1,5 +1,5 @@
 ;; cascade_test.clj — the-model §9 atomic terminal-transition cascade. On a
-;; successful, non-idempotent terminal assert (outcome|abandoned) the coordinator,
+;; successful, non-idempotent terminal assert (outcome|abandoned) the server,
 ;; IN THE SAME serialized turn, retracts any live driver and closes any running
 ;; clock session on that thread. Driven through the real socket write path (so it
 ;; exercises do-assert -> terminal-cascade! exactly as production does).

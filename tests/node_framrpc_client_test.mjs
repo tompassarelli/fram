@@ -42,7 +42,7 @@ async function freePort() {
 }
 
 async function startDaemon(port, log, space) {
-  const child = spawn(resolve(root, 'bin/fram-daemon'), ['serve', String(port), log, space], {
+  const child = spawn(resolve(root, 'bin/fram-server'), ['serve', String(port), log, space], {
     cwd: root,
     env: {
       ...process.env,
@@ -58,7 +58,7 @@ async function startDaemon(port, log, space) {
     const timer = setTimeout(() => reject(new Error(`daemon startup timeout\n${output}`)), 60000);
     const consume = chunk => {
       output += chunk.toString();
-      if (!ready && output.includes('TermStore coordinator listening')) {
+      if (!ready && output.includes('Fram server listening')) {
         ready = true;
         clearTimeout(timer);
         resolveReady();

@@ -19,7 +19,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DAEMON = ROOT / "bin" / "fram-daemon"
+DAEMON = ROOT / "bin" / "fram-server"
 SUBJECT = "@m6-handover"
 PREDICATE = "note"
 
@@ -117,7 +117,7 @@ class Daemon:
                 _, line = self.lines.get(timeout=0.1)
             except queue.Empty:
                 continue
-            if "reified coordinator listening on " in line:
+            if "reified server listening on " in line:
                 return
         raise AssertionError(f"daemon did not become ready\n{self.diagnostics()}")
 
@@ -287,7 +287,7 @@ def main() -> None:
         check(all(count == 1 for count in counts.values()), f"duplicate appends: {counts}")
 
         print(
-            "coord_handover: PASS — "
+            "server_handover: PASS — "
             f"writes={len(acked)} reads={read_count} refused={refused_count} "
             "lost=0 duplicated=0 queued-replay=snapshot"
         )

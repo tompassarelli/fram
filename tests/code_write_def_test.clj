@@ -2,7 +2,7 @@
 ;; code_write_def_test.clj — thread A1 acceptance: S-profile text-bridge verbs.
 ;; ============================================================================
 ;; Boots ONE warm code daemon over a /tmp COPY of .fram/code.log on a verified-free
-;; port >= 49010 (NEVER 7977/48942/48950 — live coordinators), then drives the new
+;; port >= 49010 (NEVER 7977/48942/48950 — live servers), then drives the new
 ;; write-def / read-def / index wire verbs THROUGH the socket, asserting each of the
 ;; spec's known authoring fumbles either canonicalizes OR returns a structured error
 ;; whose :suggestion names the fix. Runs on the JVM (clojure -M) so the reader is the

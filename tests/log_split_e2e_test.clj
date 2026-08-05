@@ -24,7 +24,7 @@
 (spit telemetry (str (pr-str {:tx 6 :op "assert" :l "@run-e2e" :p "seed" :r "telemetry" :frame "test"}) "\n"))
 
 (def child
-  (p/process [(str (System/getProperty "user.dir") "/bin/fram-daemon")
+  (p/process [(str (System/getProperty "user.dir") "/bin/fram-server")
               (str port) database]
              {:dir (System/getProperty "user.dir")
               :extra-env {"FRAM_TELEMETRY_LOG" telemetry}

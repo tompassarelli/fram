@@ -86,7 +86,7 @@
       up (file-source "bin/fram-up")
       selfcheck-runner (file-source "bin/fram-selfcheck")
       selfcheck (file-source "bin/fram-selfcheck-probe.clj")]
-  (check! "CLI data client has no legacy coordinator helper"
+  (check! "CLI data client has no legacy server helper"
           (absent? fast ["database-request-for-log" "database-version-for-log"
                          "database-assert-for-log" "database-retract-for-log"])
           nil)
@@ -110,14 +110,14 @@
                (str/includes? selfcheck "(= expected-engine engine)"))
           nil))
 
-(let [launcher (file-source "bin/fram-daemon")
+(let [launcher (file-source "bin/fram-server")
       migration (file-source "bin/fram-migrate-triple-log")
       code-on (file-source "bin/fram-code-on")
       ingest (file-source "bin/fram-ingest-code")
       status (file-source "bin/fram-code-status")]
   (check! "flat serving is migration-only; code ingest and launch are native"
           (and (str/includes? launcher "serve-flat was removed")
-               (str/includes? launcher "FRAM_DAEMON_RUNTIME:-native")
+               (str/includes? launcher "FRAM_SERVER_RUNTIME:-native")
                (str/includes? launcher "artifact_dir/READY")
                (str/includes? launcher "FRAM_GRAAL_ARTIFACT")
                (str/includes? launcher "exec \"$graal_artifact\"")
@@ -125,7 +125,7 @@
                (str/includes? launcher "exec \"$native_daemon\"")
                (str/includes? migration "migrate-triple-log")
                (= 2 (count (re-seq #"serve-flat" launcher)))
-               (str/includes? code-on "bin/fram-daemon serve")
+               (str/includes? code-on "bin/fram-server serve")
                (str/includes? code-on "--space-id \"$SPACE_ID\"")
                (absent? code-on ["serve-flat" "edn/read" ":edit-protocol"])
                (every? #(str/includes? ingest %)

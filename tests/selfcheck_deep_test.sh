@@ -8,7 +8,7 @@
 #       [FAIL] socket line, with the other subsystems still named, and deterministic
 #       cleanup on the failure path.
 #
-# Never contacts the live coordinator (127.0.0.1:7977) or ~/.local/state/north.
+# Never contacts the live server (127.0.0.1:7977) or ~/.local/state/north.
 # Run from the repo ROOT:  bash tests/selfcheck_deep_test.sh
 set -uo pipefail
 

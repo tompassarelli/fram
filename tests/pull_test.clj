@@ -188,9 +188,9 @@
                               (.getMessage t))
                      false))]
   (when loaded?
-    ;; Daemon globals don't exist at THIS file's analysis time (coord_daemon loads at
+    ;; Server globals don't exist at THIS file's analysis time (server loads at
     ;; runtime), so reach them through runtime `resolve` — keeps the core suite above
-    ;; decoupled from coord_daemon's own load-time dependencies.
+    ;; decoupled from server's own load-time dependencies.
     (let [db-var     (resolve 'db)
           schema-var (resolve 'schema-view)
           cache-var  (resolve 'cache)
@@ -200,7 +200,7 @@
           dco  (new-database dlog)]
       (register-pred! dco "title" "single" "literal")
       (commit! dco "u" "@w1" "title" :assert "Wired" nil)
-      (reset! @db-var dco)                      ; the daemon's global coordinator atom
+      (reset! @db-var dco)                      ; the daemon's global server atom
       (reset! @schema-var {})
       (reset! @cache-var {:index nil :version -1})
       (let [roots (capture)

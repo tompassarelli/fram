@@ -1,11 +1,11 @@
 #!/usr/bin/env bb
 ;; ============================================================================
 ;; show_reporter_join_test.clj — thread 019f9ab9: `show` must name the lane that
-;; REPORTED an evidence observation, not the coordinator that appended the
+;; REPORTED an evidence observation, not the server that appended the
 ;; projection for it.
 ;;
 ;; A thread's bar_evidence fact is a non-authoritative projection written by the
-;; coordinator, so its :by is always "database". The mechanically bound proof is the
+;; server, so its :by is always "database". The mechanically bound proof is the
 ;; run subject's `run_bar_evidence` JSON (run/thread/reporter/bar/observed);
 ;; cmd-show joins the projection literal — exactly (bar " → " observed) — back to
 ;; it at read time. This test pins the join AND its three honest degradations.

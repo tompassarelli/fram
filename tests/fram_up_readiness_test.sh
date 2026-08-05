@@ -43,7 +43,7 @@ if [[ "${TEST_MODE:-}" == "slow-start" ]]; then
 fi
 STUB
 
-  cat >"$case_dir/bin/fram-daemon" <<'STUB'
+  cat >"$case_dir/bin/fram-server" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s|%s\n' "$1" "$2" >>"$TEST_STATE/daemon.calls"
@@ -68,7 +68,7 @@ STUB
 exit 0
 STUB
 
-  chmod +x "$case_dir/bin/bb" "$case_dir/bin/fram-daemon" \
+  chmod +x "$case_dir/bin/bb" "$case_dir/bin/fram-server" \
     "$case_dir/bin/fram" "$case_dir/bin/ss" "$case_dir/bin/sleep"
   : >"$case_dir/state/bb.calls"
   : >"$case_dir/state/daemon.calls"
@@ -100,7 +100,7 @@ ready_log="$ready_dir/work/coordination.log"
 printf '%s\n' test-space >"$ready_dir/state/served-space"
 ready_output="$(run_up "$ready_dir" ready "$ready_log")" ||
   fail "exact-log ready daemon was rejected"
-[[ "$ready_output" == *"coordinator already up"* ]] ||
+[[ "$ready_output" == *"server already up"* ]] ||
   fail "exact-log ready daemon was not recognized"
 [[ ! -s "$ready_dir/state/daemon.calls" ]] ||
   fail "exact-log ready daemon was unnecessarily restarted"
@@ -121,8 +121,8 @@ slow_log="$slow_dir/work/coordination.log"
 : >"$slow_log"
 slow_output="$(run_up "$slow_dir" slow-start "$slow_log" 2)" ||
   fail "delayed healthy daemon missed the configured deadline"
-[[ "$slow_output" == *"starting coordinator"* &&
-   "$slow_output" == *"coordinator up"* ]] ||
+[[ "$slow_output" == *"starting server"* &&
+   "$slow_output" == *"server up"* ]] ||
   fail "delayed healthy daemon did not complete the startup path"
 
 down_dir="$(make_case unavailable)"
@@ -133,7 +133,7 @@ if run_up "$down_dir" unavailable "$down_log" 1 >"$down_dir/state/output" 2>&1; 
   fail "unavailable daemon was accepted as ready"
 fi
 down_elapsed_ms="$(( $(date +%s%3N) - down_started_ms ))"
-grep -q "daemon did not come up" "$down_dir/state/output" ||
+grep -q "server did not come up" "$down_dir/state/output" ||
   fail "unavailable daemon did not report the readiness deadline"
 (( down_elapsed_ms >= 800 && down_elapsed_ms < 3000 )) ||
   fail "readiness deadline was not absolute (elapsed ${down_elapsed_ms}ms)"

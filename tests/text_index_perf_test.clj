@@ -98,10 +98,10 @@
                    (str "common group" (mod i 500) " unique" i)))))
 
 (database/create-triple-log! log-path space)
-(def seed-coordinator (database/open-database! log-path space))
+(def seed-server (database/open-database! log-path space))
 (def seed-result
   (database/commit!
-   seed-coordinator
+   seed-server
    {:operations (mapv store/assert-operation corpus-10k)}))
 (when-not (:ok seed-result)
   (throw (ex-info "failed to seed text performance corpus" seed-result)))

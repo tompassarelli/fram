@@ -1,6 +1,6 @@
 ;; tools_test.clj — the CLOSED, O(1) tool catalog + dispatch.
 ;; Proves: (1) the catalog is exactly TWELVE tools, never minted per-predicate;
-;; (2) tell/retract lower to a coordinator-routable {:write} intent (@-normalized
+;; (2) tell/retract lower to a server-routable {:write} intent (@-normalized
 ;; refs), with `untell` accepted as an alias for `retract`; (3) reads (show/validate)
 ;; return rows from a TermStore snapshot; (4) `ask`/`query` reach fram.query; (5) unknown tool +
 ;; missing required param -> :error; (6) the seven graph-AST edit verbs dispatch to the
@@ -48,7 +48,7 @@
           (not (has-tool? "threads")) (not (has-tool? "dependents-of"))))
 (chk "catalog has no duplicate tool names" (= (count (map :name cat)) (count (set (map :name cat)))))
 
-;; (2) tell/retract -> coordinator {:write} intent, refs @-normalized by value_kind
+;; (2) tell/retract -> server {:write} intent, refs @-normalized by value_kind
 (chk "tell (literal pred) -> assert intent, value verbatim"
      (= (:write (call "tell" {:subject "x" :predicate "owner" :object "work"}))
         {:op "assert" :l "@x" :p "owner" :r "work"}))
@@ -70,7 +70,7 @@
           {:op "retract" :l "@x" :p "tag" :r "plainword"})))
 
 ;; A declaration governs the FIRST value; aliases normalize to the canonical
-;; spelling before the write intent reaches the coordinator.
+;; spelling before the write intent reaches the server.
 (let [df (vec (concat facts
                       [(terms/triple "@friend" "predicate_name" "friend")
                        (terms/triple "@friend" "predicate_alias" ":friend")

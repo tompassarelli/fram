@@ -90,7 +90,7 @@
    {:label :oversized :value (apply str (repeat (inc w/max-name-bytes) "n"))
     :expect :world-name-too-long}
    ;; World names are logical graph keys, not paths. Traversal spelling is safe
-   ;; to accept so long as the coordinator returns a typed outcome and never
+   ;; to accept so long as the server returns a typed outcome and never
    ;; interprets it as a filesystem path.
    {:label :traversal-spelling :value "../logical-world" :expect nil}])
 
@@ -124,7 +124,7 @@
                                {:op :delete :slot value}))})
    hostile-slots))
 
-;; These are malformed EDN *values* at the coordinator's record boundary. A
+;; These are malformed EDN *values* at the server's record boundary. A
 ;; keyword lookup on each must remain total and route to a typed slot reject.
 (def malformed-records
   [nil 0 true :keyword "not-a-record" [] [[:slot "x"]] #{}])

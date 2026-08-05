@@ -1,4 +1,4 @@
-;; tls_test.clj — engine-terminated mutual TLS on the coordinator.
+;; tls_test.clj — engine-terminated mutual TLS on the server.
 ;; The JVM daemon, given FRAM_TLS_*, REQUIRES + verifies a client cert
 ;; (SSLServerSocket + setNeedClientAuth). Proves: a trusted-cert client gets
 ;; through; a plaintext client and a wrong-cert client are rejected. The client
@@ -18,7 +18,7 @@
 
 ;; --- certs: server + client keypairs, cross-trusted truststores; plus a rogue ---
 (kt "-genkeypair" "-alias" "server" "-keyalg" "RSA" "-keysize" "2048" "-validity" "1"
-    "-dname" "CN=coordinator" "-keystore" (path "server.p12") "-storetype" "PKCS12" "-storepass" PW "-keypass" PW)
+    "-dname" "CN=server" "-keystore" (path "server.p12") "-storetype" "PKCS12" "-storepass" PW "-keypass" PW)
 (kt "-genkeypair" "-alias" "client" "-keyalg" "RSA" "-keysize" "2048" "-validity" "1"
     "-dname" "CN=gateway" "-keystore" (path "client.p12") "-storetype" "PKCS12" "-storepass" PW "-keypass" PW)
 (kt "-genkeypair" "-alias" "rogue" "-keyalg" "RSA" "-keysize" "2048" "-validity" "1"
@@ -57,7 +57,7 @@
 ;; --- start the JVM daemon with mTLS on ---
 (def log (path "facts.log")); (spit log "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"t\"}\n")
 (spit log "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"t\"}\n")
-(def proc (p/process ["bin/fram-daemon" (str PORT) log]
+(def proc (p/process ["bin/fram-server" (str PORT) log]
                      {:out (io/file (path "d.out")) :err (io/file (path "d.err"))
                       :extra-env {"FRAM_BIND" "127.0.0.1"
                                   "FRAM_TLS_KEYSTORE" (path "server.p12")

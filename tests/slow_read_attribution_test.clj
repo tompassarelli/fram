@@ -3,7 +3,7 @@
 ;;
 ;; Why this exists: on 2026-07-29 an identical query showed a 24ms median with
 ;; 23% of samples at 4.7-6.6s, and three of four stall episodes had no
-;; corresponding daemon log entry at all. The coordinator was busy with
+;; corresponding daemon log entry at all. The server was busy with
 ;; something it never named, which is the whole reason the cause stayed unknown.
 ;;   bb -cp out tests/slow_read_attribution_test.clj
 ;; ============================================================================
@@ -31,7 +31,7 @@
     (with-out-str (report! :query t0 t1 t2 t3))))
 
 ;; --- silence is the default -------------------------------------------------
-;; This runs on every read, so a healthy coordinator must produce no output at
+;; This runs on every read, so a healthy server must produce no output at
 ;; all; a log line per query would be its own performance problem.
 (check! "fast read prints nothing" (= "" (emit 1 2 3)))
 (check! "read just under the threshold prints nothing"
@@ -94,7 +94,7 @@
 ;; :show was the UNINSTRUMENTED route, and that gap hid the worst incident of
 ;; 2026-07-29: `north show @swarm` took 57.8s on an idle box and produced no
 ;; slow-read line at all, so the hunt for the cause took hours. The cause was a
-;; coordinator GC death spiral, which on this path shows as execute time with
+;; server GC death spiral, which on this path shows as execute time with
 ;; zero reload and zero lock-wait — the signature that separates "the JVM cannot
 ;; allocate" from "this query is expensive".
 (let [events (atom [])

@@ -150,7 +150,7 @@
     (binding [*out* *err*] (println (:err ingest))))
   (check! "N2.6a ingests the scratch fixture into native FRAMLOG"
           (zero? (:exit ingest)))
-  (check! "scratch native coordinator serves the ingested corpus"
+  (check! "scratch native server serves the ingested corpus"
           (some? (and server (eventually #(version! port space)))))
   (when server
     (spit (io/file scratch ".mcp.json")

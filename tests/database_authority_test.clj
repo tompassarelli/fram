@@ -74,7 +74,7 @@
 (def spki-a (a/sha256-text "client-a-spki"))
 (def spki-b (a/sha256-text "client-b-spki"))
 
-(println "## authority coordinator kernel — two-boot adversarial matrix")
+(println "## authority server kernel — two-boot adversarial matrix")
 
 ;; ===========================================================================
 ;; GENERATION IDENTITY — changing instanceId alone changes binding + descriptor.

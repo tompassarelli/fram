@@ -160,7 +160,7 @@
 ;; ---------------------------------------------------------------------------
 ;; (f) THE FLIP path (FRAM_FLIP=1): the post-edit .bclj comes from render-from-log,
 ;;     NOT io/copy. We ingest the hermetic module into a per-corpus code log, boot a
-;;     THROWAWAY code coordinator on it (verified-free high port; NEVER 7977), point
+;;     THROWAWAY code server on it (verified-free high port; NEVER 7977), point
 ;;     the edit channel at it (FRAM_FLIP=1 + FRAM_CODE_PORT), run a set-body, and
 ;;     assert: the reply says "(FLIP)", the .bclj changed, the new body is present
 ;;     (so render-from-log ran), and the AST delta is DURABLE in the code log.
@@ -173,7 +173,7 @@
                                     (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int p)) 300) false)
                                   (catch Exception _ true)))
           port (or (some #(when (port-free? %) %) [7993 7994 7991 7999 7992]) 7993)
-          ;; The graph edit gate is launch-sealed: a coordinator started without
+          ;; The graph edit gate is launch-sealed: a server started without
           ;; FRAM_EDIT_VERIFIER rejects every FLIP edit as verification-unavailable.
           daemon (p/process {:extra-env (merge base-env
                                                {"FRAM_EDIT_VERIFIER" (str root "/bin/fram-edit-verifier")
@@ -181,7 +181,7 @@
                              :out (str tmp "/code-daemon.log") :err (str tmp "/code-daemon.log")}
                             "clojure" "-M" "server.clj" "serve-flat" (str port) code-log)]
       (try
-        ;; Wait for the coordinator to answer, never a constant: this corpus folds a
+        ;; Wait for the server to answer, never a constant: this corpus folds a
         ;; ~300k-fact code log, so any fixed sleep races the boot fold on a busy box.
         (let [ready?
               (fn []
@@ -195,7 +195,7 @@
                       (.flush writer)
                       (integer? (:version (edn/read reader)))))
                   (catch Exception _ false)))]
-          (chk "FLIP: code coordinator answers before the edit"
+          (chk "FLIP: code server answers before the edit"
                (loop [remaining 360]
                  (cond (ready?) true
                        (zero? remaining) false

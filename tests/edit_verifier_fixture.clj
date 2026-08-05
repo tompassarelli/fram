@@ -1,7 +1,7 @@
 #!/usr/bin/env bb
-;; Closed-protocol verifier fixture for coordinator state-machine tests.
+;; Closed-protocol verifier fixture for server state-machine tests.
 ;; It is selected only by pointing the production FRAM_EDIT_VERIFIER launch seam
-;; at this executable; the coordinator contains no test-success mode.
+;; at this executable; the server contains no test-success mode.
 (require '[cheshire.core :as json]
          '[clojure.string :as str]
          '[babashka.process :as process])

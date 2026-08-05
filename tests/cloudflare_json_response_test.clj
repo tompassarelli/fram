@@ -127,7 +127,7 @@
                 (proc/process
                  {:dir root :env (assoc inherited "FRAM_SNAPSHOT_BOOT" "0")
                   :out :inherit :err :inherit}
-                 "bin/fram-daemon" "serve" (str daemon-port) log-path space)))]
+                 "bin/fram-server" "serve" (str daemon-port) log-path space)))]
   (try
     (let [node @(proc/process {:dir root :out :string :err :string}
                               "node" "tests/cloudflare_worker_client_test.mjs")]
@@ -137,7 +137,7 @@
       (check! "Worker client typed JSON contract" (zero? (:exit node))))
 
     (start-daemon!)
-    (check! "coordinator starts on FRAMRPC"
+    (check! "server starts on FRAMRPC"
             (eventually #(= 0 (direct-version daemon-port space))))
     (reset! shim
             (proc/process
@@ -272,7 +272,7 @@
     (let [wrong-space
           (http-post shim-port "/q" token "application/json"
                      (request-json "another-space" :rpc/version wire/rpc-unit))]
-      (check! "coordinator errors remain typed JSON response envelopes"
+      (check! "server errors remain typed JSON response envelopes"
               (and (= 200 (:status wrong-space))
                    (string? (get-in wrong-space [:json "error" "code"]))
                    (= "another-space" (get-in wrong-space [:json "space"])))))

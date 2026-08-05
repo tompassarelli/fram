@@ -1,5 +1,5 @@
 ;; torn_tail_daemon_test.clj — parity of the daemon's incremental tail reader
-;; (coord_daemon read-log-tail*) with fram.rt/read-log's torn/fail-closed policy
+;; (server read-log-tail*) with fram.rt/read-log's torn/fail-closed policy
 ;; (thread 019f791c). Run from the worktree root:
 ;;
 ;;   bb -cp out tests/torn_tail_daemon_test.clj

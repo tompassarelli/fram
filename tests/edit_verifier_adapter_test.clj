@@ -1,6 +1,6 @@
 #!/usr/bin/env bb
 ;; Real closed-protocol adapter smoke. This uses Beagle's coherent-world checker,
-;; not the coordinator's controlled verifier fixture.
+;; not the server's controlled verifier fixture.
 
 (require '[babashka.fs :as fs]
          '[babashka.process :as p]
@@ -196,7 +196,7 @@
               (json/parse-string (:out partial) true))]
         ;; Unknown host/runtime requires remain a legal Beagle compatibility
         ;; surface, so a deliberately incomplete request can parse as an
-        ;; external dependency. The coordinator—not this stateless adapter—owns
+        ;; external dependency. The server—not this stateless adapter—owns
         ;; proof that :overlay is the complete graph. What the adapter must prove
         ;; is that every supplied overlay row participates in the world receipt.
         (check! "complete overlay is bound into the world digest"

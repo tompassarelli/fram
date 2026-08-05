@@ -20,7 +20,7 @@
 (def scratch-dir
   (.toFile
    (java.nio.file.Files/createTempDirectory
-    "fram-daemon-small-order-"
+    "fram-server-small-order-"
     (make-array java.nio.file.attribute.FileAttribute 0))))
 (def log-path (.getCanonicalPath (io/file scratch-dir "facts.log")))
 (def subject "@small-order")

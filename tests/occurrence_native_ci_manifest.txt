@@ -54,8 +54,8 @@ run-shell	current-boundary	tests/zig_rpc_source_ratchet.sh	-
 run-node	current-cloudflare	tests/cloudflare_worker_client_test.mjs	-
 run-node	current-node-client	tests/node_framrpc_client_test.mjs	-
 aggregate-nix	package-closure	tests/package_daemon_smoke.sh	flake.nix#package_daemon_smoke
-aggregate-zig	zig-bootstrap	tests/zig_daemon_bootstrap_test.sh	build.zig#fram-daemon-zig
-aggregate-zig	zig-oracle	tests/zig_occ_oracle_test.sh	build.zig#fram-daemon-zig
+aggregate-zig	zig-bootstrap	tests/zig_daemon_bootstrap_test.sh	build.zig#fram-server-zig
+aggregate-zig	zig-oracle	tests/zig_occ_oracle_test.sh	build.zig#fram-server-zig
 baseline-shell	vocab-residue	tests/vocab_ratchet_test.sh	tests/vocab_ratchet_test.sh#REGROWTH
 
 exclude-gate	removed-flat-cli	scripts/readme-check.sh	scripts/readme-check.sh#core.engine.loop
@@ -69,7 +69,6 @@ exclude	removed-serve-flat	tests/assert_batch_flat_log_test.clj	tests/assert_bat
 exclude	moved-graph-control	tests/authority_graph_authoring_test.clj	tests/authority_graph_authoring_test.clj#graph.?author
 exclude	moved-graph-control	tests/authority_primitives_test.clj	tests/authority_primitives_test.clj#graph-edit
 exclude	removed-flat-log	tests/bind_test.clj	tests/bind_test.clj#facts\.log
-exclude	removed-coordinator-v1	tests/cascade_test.clj	tests/cascade_test.clj#coord_daemon\.clj
 exclude	removed-serve-flat	tests/claims_daemon_test.clj	tests/claims_daemon_test.clj#serve-flat
 exclude	moved-world-service	tests/claims_spec_test.clj	tests/claims_spec_test.clj#fram\.world
 exclude	moved-world-service	tests/coherence_doctor_test.clj	tests/coherence_doctor_test.clj#world[_-]
@@ -105,7 +104,6 @@ exclude	removed-flat-store	tests/commit_fenced_write_kernel_test.clj	tests/commi
 exclude	removed-serve-flat	tests/commit_fenced_write_test.clj	tests/commit_fenced_write_test.clj#serve-flat
 exclude	removed-flat-store	tests/server_flip_test.clj	tests/server_flip_test.clj#c/entity!
 exclude	removed-flat-log	tests/commit_group_queue_bound_test.clj	tests/commit_group_queue_bound_test.clj#facts\.log
-exclude	removed-coordinator-v1	tests/snapshot_honesty_pass_test.clj	tests/snapshot_honesty_pass_test.clj#coord_daemon\.clj
 exclude	removed-serve-flat	tests/writer_lease_external_freshness_test.clj	tests/writer_lease_external_freshness_test.clj#serve-flat
 exclude	removed-serve-flat	tests/writer_lease_flat_durability_test.clj	tests/writer_lease_flat_durability_test.clj#serve-flat
 exclude	removed-flat-store	tests/writer_lease_test.clj	tests/writer_lease_test.clj#fram\.store
@@ -130,7 +128,6 @@ exclude	moved-graph-control	tests/snapshot_boot_test.clj	tests/snapshot_boot_tes
 exclude	removed-flat-log	tests/snapshot_split_boot_test.clj	tests/snapshot_split_boot_test.clj#coordination\.log
 exclude	removed-flat-store	tests/snapshot_test.clj	tests/snapshot_test.clj#fram\.store
 exclude	removed-flat-log	tests/server_split_log_reload_test.clj	tests/server_split_log_reload_test.clj#coordination\.log
-exclude	removed-coordinator-v1	tests/server_telemetry_shed_test.clj	tests/server_telemetry_shed_test.clj#coord_daemon\.clj
 exclude	removed-serve-flat	tests/database_torn_tail_repair_test.clj	tests/database_torn_tail_repair_test.clj#serve-flat
 exclude	removed-flat-store	tests/snapshot_views_resolve_test.clj	tests/snapshot_views_resolve_test.clj#c/value!
 exclude	removed-flat-store	tests/snapshot_views_test.clj	tests/snapshot_views_test.clj#c/value-id

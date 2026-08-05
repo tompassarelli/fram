@@ -313,8 +313,8 @@
                    "bin/fram" "doctor")
         o (str (:out r) (:err r))]
     (check "doctor CLI exit 0 after healing" (zero? (:exit r)))
-    (check "doctor FIRST line stays the coordinator health contract (North lifecycle probe)"
-           (str/starts-with? (first (str/split-lines (:out r))) "coordinator "))
+    (check "doctor FIRST line stays the server health contract (North lifecycle probe)"
+           (str/starts-with? (first (str/split-lines (:out r))) "server "))
     (check "doctor CLI reports the HEAL (rolled back) + exact recorded mode"
            (and (str/includes? o "HEALED") (str/includes? o "384")))  ; 0600 = 384 decimal, as recorded
     (check "doctor CLI prints the queryable floor" (str/includes? o "rollback_floor vGUARD"))

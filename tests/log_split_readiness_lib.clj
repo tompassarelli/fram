@@ -1,5 +1,5 @@
 ;; Shared test-harness readiness contract for spawning a scratch child
-;; process (e.g. a split-log JVM coordinator) and waiting for it to become
+;; process (e.g. a split-log JVM server) and waiting for it to become
 ;; live and speaking the wire protocol — replacing a fixed sleep budget with
 ;; an observable, bounded loop. Test-only: no production behavior changes.
 ;;
@@ -56,7 +56,7 @@
   "An OS-assigned ephemeral port, free at the instant of the call. Used in
   place of a random guess so concurrent test runs (this harness's own
   parallel instances, or unrelated processes on a shared box) don't
-  collide on a scratch coordinator port — a bind failure is a different
+  collide on a scratch server port — a bind failure is a different
   defect than a slow/dead boot and would otherwise masquerade as one."
   []
   (with-open [s (java.net.ServerSocket. 0)]

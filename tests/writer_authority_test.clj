@@ -124,7 +124,7 @@
               (= :durability-ambiguous (response-error failure)))
       (check! "reconciled ambiguity retains lock but removes write authority"
               (and (= :recovery-required
-                      (get-in status [:coordinator-recovery :status]))
+                      (get-in status [:server-recovery :status]))
                    (true? (:lock-held status))
                    (false? (:write-authorized status))))
       (check! "retry remains fenced while physical writer lock is held"

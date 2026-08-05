@@ -105,7 +105,7 @@
 (try
   (check! "native ingest creates the scratch code corpus"
           (zero? (:exit ingest)))
-  (check! "scratch native coordinator starts"
+  (check! "scratch native server starts"
           (some? (and server (eventually version!))))
   (when server
     (let [before

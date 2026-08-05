@@ -9,7 +9,7 @@
 #
 # Harness patterns (free port, readiness probe, fingerprint sort) follow
 # tests/zig_occ_oracle_test.sh; the Zig binaries are used, never rebuilt here
-# when FRAM_ZIG_DAEMON / FRAM_RPC_CLIENT are supplied.
+# when FRAM_ZIG_SERVER / FRAM_RPC_CLIENT are supplied.
 set -euo pipefail
 
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,13 +27,13 @@ trap cleanup EXIT
 
 zig=(direnv exec "${BEAGLE_HOME:-$HOME/code/beagle/main}" zig) # world:allow
 install_dir="$test_dir/install"
-if [[ -z "${FRAM_ZIG_DAEMON:-}" || -z "${FRAM_RPC_CLIENT:-}" ]]; then
+if [[ -z "${FRAM_ZIG_SERVER:-}" || -z "${FRAM_RPC_CLIENT:-}" ]]; then
   (
     cd "$repo"
     "${zig[@]}" build -Doptimize=ReleaseSafe --prefix "$install_dir"
   )
 fi
-daemon_bin="${FRAM_ZIG_DAEMON:-$install_dir/bin/fram-daemon-zig}"
+daemon_bin="${FRAM_ZIG_SERVER:-$install_dir/bin/fram-server-zig}"
 client_bin="${FRAM_RPC_CLIENT:-$install_dir/bin/fram-rpc-client}"
 [[ -x "$daemon_bin" ]]
 [[ -x "$client_bin" ]]

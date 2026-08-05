@@ -1,7 +1,7 @@
 ;; doctor_fingerprint_test.clj — `fram doctor` surfaces the FACTS-DERIVED cardinality
 ;; source (the finding #23 operator cross-check). Drives the real CLI over a synthetic
 ;; log with a `@<pred> cardinality single` fact (FRAM_SERVER_PORT points at a dead port so the
-;; live coordinator can't leak in) and asserts doctor reports the facts-derived count,
+;; live server can't leak in) and asserts doctor reports the facts-derived count,
 ;; the cardinality-overlay fingerprint (which reflects the fact), and the fact > env >
 ;; fallback precedence note.
 ;;   bb -cp out tests/doctor_fingerprint_test.clj

@@ -1,4 +1,4 @@
-;; bind_test.clj — the coordinator's configurable bind (FRAM_BIND). Asserts the two
+;; bind_test.clj — the server's configurable bind (FRAM_BIND). Asserts the two
 ;; modes from the gateway hand-off: default loopback (unchanged), and FRAM_BIND=0.0.0.0
 ;; binding all interfaces while local loopback clients keep working + a startup warning.
 ;;   bb bind_test.clj   (run from the repo root)
@@ -38,7 +38,7 @@
               :err (io/file err-path)
               :env (scratch-process-env
                     (cond-> {} bind (assoc "FRAM_BIND" bind)))}
-        child (p/process ["bin/fram-daemon" (str port) log] opts)]
+        child (p/process ["bin/fram-server" (str port) log] opts)]
     (try
       ;; These are independent scenarios. Running them one at a time avoids
       ;; making two cold JVM boots contend and then calling that contention a

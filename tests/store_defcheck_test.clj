@@ -3,7 +3,7 @@
 ;; store_defcheck_test.clj — the incremental def-level check selftest (A2).
 ;; ============================================================================
 ;; Drives the graph-authored defcheck gate + bin/fram-defcheck-server
-;; over a THROWAWAY coordinator booted on a /tmp arena log, with trap-kill and a
+;; over a THROWAWAY server booted on a /tmp arena log, with trap-kill and a
 ;; :status sanity assertion (the daemon's :log MUST be our selftest log before any
 ;; result is trusted). NEVER touches 7977/48942/48950. Boots its own sidecar on a
 ;; dedicated port and tears it down.
@@ -66,7 +66,7 @@
   (swap! results conj [label (boolean pass?) detail])
   (log! (format "  [%s] %s%s" (if pass? "PASS" "FAIL") label (if detail (str " — " detail) ""))))
 
-;; --- boot arena + coordinator ------------------------------------------------
+;; --- boot arena + server ------------------------------------------------
 (proc/sh "bash" "-c" (str "rm -rf " arena))
 (io/make-parents (io/file (str arena "/gw/x")))
 (doseq [[m src] modules] (spit (str arena "/gw/" m ".bclj") src))
@@ -86,7 +86,7 @@
   (when-not (zero? (:exit r)) (log! "INGEST FAILED:" (:err r)) (System/exit 3)))
 
 (def database-port (free-port))
-(log! "booting throwaway coordinator on" database-port)
+(log! "booting throwaway server on" database-port)
 (proc/sh {:dir repo :extra-env {"FRAM_SERVER_PORT" (str database-port) "FRAM_LOG" code-log}} "bin/fram-up")
 (Thread/sleep 3000)
 
@@ -101,8 +101,8 @@
   ;; SAFETY: refuse to run unless the daemon serves OUR selftest log.
   (let [st (database {:op :status})]
     (when-not (str/includes? (str (:log st)) "fram-a2-selftest")
-      (log! "SAFETY ABORT: coordinator :" database-port " serves" (:log st) "— not the selftest arena") (System/exit 4))
-    (log! "coordinator OK —" (pr-str (select-keys st [:version :log]))))
+      (log! "SAFETY ABORT: server :" database-port " serves" (:log st) "— not the selftest arena") (System/exit 4))
+    (log! "server OK —" (pr-str (select-keys st [:version :log]))))
 
   ;; Load the primitive with explicit scratch ports + a private gwdir.
   (load-file (str repo "/out/defcheck_gate.clj"))
@@ -161,7 +161,7 @@
   (try (run)
        (catch Throwable t (log! "EXCEPTION:" (.getMessage t)) (swap! results conj ["harness" false (.getMessage t)]))
        (finally
-         (log! "teardown: killing coordinator" database-port "+ sidecar" sidecar-port)
+         (log! "teardown: killing server" database-port "+ sidecar" sidecar-port)
          (kill-port! database-port) (kill-port! sidecar-port)))
   (let [fails (filter (comp not second) @results)]
     (log! (format "\n=== %d/%d checks passed ===" (- (count @results) (count fails)) (count @results)))

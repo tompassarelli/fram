@@ -20,7 +20,7 @@
 
 (def temp-dir
   (.toFile (java.nio.file.Files/createTempDirectory
-            "fram-daemon-read-cli-"
+            "fram-server-read-cli-"
             (make-array java.nio.file.attribute.FileAttribute 0))))
 (def log-path (str (io/file temp-dir "coordination.log")))
 (def subject "@019fa4d4-93aa-7447-aae5-0a5bcfca6849")
@@ -116,8 +116,8 @@
                     fram-fast/database-version-for-log (fn [& _] -1)
                     fram-fast/retry-delays (constantly [100 250 500])
                     fram-fast/*sleep!* #(swap! sleeps conj %)]
-        (#'fram-fast/coordinator-show 7977 log-path subject))]
-  (check! "unreachable coordinator retries until a complete response"
+        (#'fram-fast/server-show 7977 log-path subject))]
+  (check! "unreachable server retries until a complete response"
           (= response result))
   (check! "restart retry uses bounded ordered backoff"
           (= [100 250] @sleeps)))
@@ -130,7 +130,7 @@
                     fram-fast/database-version-for-log (fn [& _] -3)
                     fram-fast/retry-delays (constantly [100 250])
                     fram-fast/*sleep!* #(swap! sleeps conj %)]
-        (#'fram-fast/coordinator-show 7977 log-path subject))]
+        (#'fram-fast/server-show 7977 log-path subject))]
   (check! "reachable incompatible daemon selects cold fallback" (nil? result))
   (check! "reachable incompatible daemon is not retried"
           (and (= 1 @show-calls) (empty? @sleeps))))
@@ -143,11 +143,11 @@
   (let [result
         (with-redefs [fram-fast/database-show-for-log (fn [& _] malformed)
                       fram-fast/database-version-for-log (fn [& _] 1)]
-          (#'fram-fast/coordinator-show 7977 log-path subject))]
+          (#'fram-fast/server-show 7977 log-path subject))]
     (check! (str "malformed daemon response rejected " (pr-str malformed))
             (nil? result))))
 
-(check! "default retry window does not amplify coordinator absence"
+(check! "default retry window does not amplify server absence"
         (empty? (#'fram-fast/retry-delays)))
 
 (let [scan-called? (atom false)
@@ -205,12 +205,12 @@
                    "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
                    "progress" "cli-fix probe"))))]
   (check! "warm write never selects read-log" (not @read-called?))
-  (check! "warm write keeps exact fenced coordinator request"
+  (check! "warm write keeps exact fenced server request"
           (= [7977 log-path subject "progress" "cli-fix probe" 8]
              @write-call))
   (check! "warm write keeps CLI receipt"
           (str/includes? output
-                         "committed via coordinator (v9): 019fa4d4-93aa-7447-aae5-0a5bcfca6849 progress = cli-fix probe")))
+                         "committed via server (v9): 019fa4d4-93aa-7447-aae5-0a5bcfca6849 progress = cli-fix probe")))
 
 (let [read-called? (atom false)
       output
@@ -222,15 +222,15 @@
                       (reset! read-called? true)
                       (throw (ex-info "rejected write selected fallback" {})))]
         (with-out-str
-          (check! "coordinator rejection is terminal"
+          (check! "server rejection is terminal"
                   (fram-fast/fast-write!
                    log-path "assert"
                    "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
                    "progress" "rejected probe"))))]
-  (check! "coordinator rejection never falls through to a cold write"
+  (check! "server rejection never falls through to a cold write"
           (not @read-called?))
-  (check! "coordinator rejection remains visible"
-          (str/includes? output "REJECTED by coordinator: reject:cycle")))
+  (check! "server rejection remains visible"
+          (str/includes? output "REJECTED by server: reject:cycle")))
 
 (check! "ambiguous single-token write preserves cold normalization fallback"
         (false? (fram-fast/fast-write!
@@ -253,13 +253,13 @@
                       log-path "assert"
                       "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
                       "progress" "one client")))))]
-  (check! "existing exact write uses one atomic coordinator operation"
+  (check! "existing exact write uses one atomic server operation"
           (= [:assert 7977 log-path subject "progress" "one client"]
              @write-call))
   (check! "existing exact write keeps CLI receipt"
           (str/includes?
            output
-           "committed via coordinator (v22): 019fa4d4-93aa-7447-aae5-0a5bcfca6849 progress = one client")))
+           "committed via server (v22): 019fa4d4-93aa-7447-aae5-0a5bcfca6849 progress = one client")))
 
 (let [request (atom nil)
       response
@@ -269,7 +269,7 @@
                       {:ok 23})]
         (#'fram-fast/database-write-existing-for-log
          :retract 7977 log-path subject "progress" "one client"))]
-  (check! "existing write sends one atomic coordinator request"
+  (check! "existing write sends one atomic server request"
           (and (= "ok:23" response)
                (= {:op :retract-existing
                    :te subject
@@ -288,7 +288,7 @@
 
 (let [write-call (atom nil)]
   (with-redefs [fram-fast/database-port (constantly 7977)
-                fram-fast/coordinator-show
+                fram-fast/server-show
                 (fn [& _]
                   (throw
                    (ex-info
@@ -299,7 +299,7 @@
                   (reset! write-call
                           [operation port log requested predicate value])
                   "ok:24")]
-    (check! "bare-token exact write stays on the atomic coordinator path"
+    (check! "bare-token exact write stays on the atomic server path"
             (= :handled
                (fram-fast/fast-write-existing!
                 log-path "assert"
@@ -321,7 +321,7 @@
                 log-path "assert"
                 "019fa4d4-93aa-7447-aae5-0a5bcfca6800"
                 "progress" "missing probe")))
-    (check! "missing exact subject uses the atomic coordinator seam"
+    (check! "missing exact subject uses the atomic server seam"
             @write-called?)))
 
 (check! "daemon absence preserves cold show fallback signal"
@@ -395,7 +395,7 @@
           (false? (fram-fast/fast-show! log-path "missing-prefix" false))))
 
 (let [fallback-args (atom nil)]
-  (with-redefs [fram-fast/coordinator-show (fn [& _] nil)
+  (with-redefs [fram-fast/server-show (fn [& _] nil)
                 fram-fast/cold-main! #(reset! fallback-args %)]
     (fram-fast/-main "show" "019fa4d4"))
   (check! "substring show preserves full resolver fallback"
@@ -483,7 +483,7 @@
               (with-redefs [fram-fast/database-port (constantly 7977)
                             fram-fast/debug-enabled? (constantly true)
                             fram-fast/database-request-for-log
-                            (fn [& _] {:reject ["log mismatch: client expects /a but coordinator serves /b"]})]
+                            (fn [& _] {:reject ["log mismatch: client expects /a but server serves /b"]})]
                 (fram-fast/fast-query! log-path sample-query))))]
   (check! "a rejected request names the rejection at DEBUG"
           (and (str/includes? out "falling back to the cold path")

@@ -257,7 +257,7 @@
     (proc/shell {:continue true :extra-env base-env :out :string :err :string}
                 "bb" "-cp" "out" "bin/fram-commit-code" "schema" kc-newbclj "--port" (str port))))
 (def kc-commit-ok (and kc-commit (zero? (:exit kc-commit))))
-(chk "KEYSTONE-C: set-body delta COMMITTED through the coordinator (log mutated)" kc-commit-ok)
+(chk "KEYSTONE-C: set-body delta COMMITTED through the server (log mutated)" kc-commit-ok)
 ;; render-from-log over the NOW-UPDATED daemon log (flat), recompile.
 (def kc-render (str kc-work "/schema-from-log.bclj"))
 (when kc-commit-ok

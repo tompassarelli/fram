@@ -214,7 +214,7 @@
   (future-cancel worker)
   (check! "silent accepted peer reaches the absolute response deadline"
           (and (true? (deref accepted 1000 false))
-               (failed-with? result "coordinator response deadline exceeded")
+               (failed-with? result "server response deadline exceeded")
                (>= elapsed-ms 100.0)
                (< elapsed-ms 2000.0))))
 
@@ -233,7 +233,7 @@
                (Thread/sleep 40))
              (catch Throwable _ nil)))))]
   (check! "drip peer cannot extend the absolute response deadline"
-          (and (failed-with? result "coordinator response deadline exceeded")
+          (and (failed-with? result "server response deadline exceeded")
                (>= elapsed-ms 100.0)
                (< elapsed-ms 2000.0))))
 
@@ -245,7 +245,7 @@
          (request-line! socket)
          (write-text! socket (str (apply str (repeat 65 "x")) "\n"))))]
   (check! "oversized response is rejected before parsing"
-          (failed-with? result "coordinator response line exceeds 64 bytes")))
+          (failed-with? result "server response line exceeds 64 bytes")))
 
 (let [{:keys [result]}
       (run-peer
@@ -258,18 +258,18 @@
                        (unchecked-byte 0x28)
                        (unchecked-byte 0x0A)]))))]
   (check! "malformed UTF-8 response is rejected deterministically"
-          (failed-with? result "coordinator response line is not valid UTF-8")))
+          (failed-with? result "server response line is not valid UTF-8")))
 
 (doseq [[label response expected]
         [["malformed EDN response is rejected"
           "{:version\n"
-          "coordinator response line is not exactly one valid EDN form"]
+          "server response line is not exactly one valid EDN form"]
          ["two EDN values in one line are rejected"
           "{:version 1} {:version 2}\n"
-          "coordinator response line is not exactly one valid EDN form"]
+          "server response line is not exactly one valid EDN form"]
          ["two terminal response lines are rejected"
           "{:version 1}\n{:version 2}\n"
-          "coordinator sent more than one terminal response frame"]]]
+          "server sent more than one terminal response frame"]]]
   (let [{:keys [result]}
         (run-peer
          "edn"
@@ -286,7 +286,7 @@
          (write-text! socket "{:version 1}\n")
          (Thread/sleep 1000)))]
   (check! "terminal response requires peer EOF inside the same deadline"
-          (and (failed-with? result "coordinator response deadline exceeded")
+          (and (failed-with? result "server response deadline exceeded")
                (>= elapsed-ms 100.0)
                (< elapsed-ms 2000.0))))
 
@@ -328,7 +328,7 @@
          (write-text! socket
                       (str handshake "\n" (apply str (repeat 65 "x"))))))]
   (check! "post-handshake event stream remains byte-capped"
-          (failed-with? result "coordinator response line exceeds 64 bytes")))
+          (failed-with? result "server response line exceeds 64 bytes")))
 
 ;; Feed a syntactically plausible TLS record header declaring a 16 KiB record,
 ;; then drip its body. The small-response timeout is deliberately shorter than
@@ -357,7 +357,7 @@
                  (Thread/sleep 40))
                (catch Throwable _ nil))))))]
   (check! "TLS handshake drip uses its own absolute timeout"
-          (and (failed-with? result "coordinator TLS handshake deadline exceeded")
+          (and (failed-with? result "server TLS handshake deadline exceeded")
                (>= elapsed-ms 100.0)
                (< elapsed-ms 2000.0))))
 
@@ -390,7 +390,7 @@
   (println (format "  [%s] %s" (if ok? "PASS" "FAIL") label)))
 (let [failed (remove second @checks)]
   (println
-   (format "\ncoordinator client wire boundary: %d / %d PASS"
+   (format "\nserver client wire boundary: %d / %d PASS"
            (- (count @checks) (count failed))
            (count @checks)))
   (.delete (io/file test-log))

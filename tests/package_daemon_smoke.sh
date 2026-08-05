@@ -17,7 +17,7 @@ case "$package_root" in /nix/store/*) ;; *)
 
 runtime="$package_root/libexec/fram"
 required=(
-  "$package_root/bin/fram" "$package_root/bin/fram-daemon"
+  "$package_root/bin/fram" "$package_root/bin/fram-server"
   "$package_root/bin/fram-mcp" "$package_root/bin/fram-primer"
   "$runtime/bin/fram-fast.clj" "$runtime/bin/fram-migrate-triple-log"
   "$runtime/database.clj" "$runtime/server.clj"
@@ -68,13 +68,13 @@ port="$(free_port)"
 
 native_error="$work/native-error.out"
 if "$env_bin" -i FRAM_SPACE_ID="$space" \
-    "$package_root/bin/fram-daemon" serve "$port" "$log" \
+    "$package_root/bin/fram-server" serve "$port" "$log" \
     >"$native_error" 2>&1; then
   echo "fram package smoke: default launch silently fell back from native" >&2
   exit 1
 fi
 "$grep_bin" -Fxq \
-  "fram-daemon: FRAM_NATIVE_ARTIFACT_DIR is required for FRAM_DAEMON_RUNTIME=native" \
+  "fram-server: FRAM_NATIVE_ARTIFACT_DIR is required for FRAM_SERVER_RUNTIME=native" \
   "$native_error" || {
     echo "fram package smoke: missing native artifact did not fail exactly" >&2
     sed -n '1,40p' "$native_error" >&2
@@ -82,14 +82,14 @@ fi
   }
 
 graal_error="$work/graal-error.out"
-if "$env_bin" -i FRAM_SPACE_ID="$space" FRAM_DAEMON_RUNTIME=graal \
-    "$package_root/bin/fram-daemon" serve "$port" "$log" \
+if "$env_bin" -i FRAM_SPACE_ID="$space" FRAM_SERVER_RUNTIME=graal \
+    "$package_root/bin/fram-server" serve "$port" "$log" \
     >"$graal_error" 2>&1; then
   echo "fram package smoke: Graal launch silently ran without an artifact" >&2
   exit 1
 fi
 "$grep_bin" -Fxq \
-  "fram-daemon: FRAM_GRAAL_ARTIFACT is required for FRAM_DAEMON_RUNTIME=graal" \
+  "fram-server: FRAM_GRAAL_ARTIFACT is required for FRAM_SERVER_RUNTIME=graal" \
   "$graal_error" || {
     echo "fram package smoke: missing Graal artifact did not fail exactly" >&2
     sed -n '1,40p' "$graal_error" >&2
@@ -101,8 +101,8 @@ start_daemon() {
     cd "$work/cwd"
     exec "$env_bin" -i HOME="$home" XDG_CACHE_HOME="$home/.cache" \
       FRAM_BIND=127.0.0.1 FRAM_SPACE_ID="$space" \
-      FRAM_DAEMON_RUNTIME=jvm-oracle \
-      "$package_root/bin/fram-daemon" serve "$port" "$log"
+      FRAM_SERVER_RUNTIME=jvm-oracle \
+      "$package_root/bin/fram-server" serve "$port" "$log"
   ) >"$daemon_output" 2>&1 &
   pid=$!
 }
@@ -166,7 +166,7 @@ fi
 
 cli_env=("$env_bin" -i FRAM_SERVER_PORT="$port" FRAM_SPACE_ID="$space")
 tell_output="$("${cli_env[@]}" "$package_root/bin/fram" tell package title installed)"
-"$grep_bin" -Fq "committed via coordinator" <<<"$tell_output" || {
+"$grep_bin" -Fq "committed via server" <<<"$tell_output" || {
   echo "fram package smoke: native CLI tell failed" >&2; printf '%s\n' "$tell_output" >&2; exit 1; }
 show_output="$("${cli_env[@]}" "$package_root/bin/fram" show package)"
 "$grep_bin" -Fq "title  installed" <<<"$show_output" || {
@@ -245,8 +245,8 @@ daemon_output="$work/state-daemon.out"
   cd "$work/cwd"
   exec "$env_bin" -i HOME="$home" FRAM_STATE_DIR="$state_dir" \
     FRAM_BIND=127.0.0.1 FRAM_SPACE_ID="$space" \
-    FRAM_DAEMON_RUNTIME=jvm-oracle \
-    "$package_root/bin/fram-daemon" serve "$port"
+    FRAM_SERVER_RUNTIME=jvm-oracle \
+    "$package_root/bin/fram-server" serve "$port"
 ) >"$daemon_output" 2>&1 &
 pid=$!
 wait_ready >/dev/null
@@ -256,7 +256,7 @@ wait_ready >/dev/null
   echo "fram package smoke: default state created a retired log" >&2; exit 1; }
 stop_daemon
 
-if "$package_root/bin/fram-daemon" serve-flat 9999 "$work/legacy.log" \
+if "$package_root/bin/fram-server" serve-flat 9999 "$work/legacy.log" \
    >"$work/legacy.out" 2>&1; then
   echo "fram package smoke: serve-flat unexpectedly remained available" >&2; exit 1
 fi

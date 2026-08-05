@@ -62,7 +62,7 @@
   {:core-manifest-path manifest
    :checkout-root checkout
    :source-root source
-   :code-log (:log db)          ; the coordinator's own on-disk log is the code log
+   :code-log (:log db)          ; the server's own on-disk log is the code log
    :closure-digest north-digest
    :db db})
 
@@ -232,7 +232,7 @@
   (let [saved @edit-durability-state]
     (try
       (reset! edit-durability-state {:state :poisoned})
-      (check "negative: poisoned coordinator cannot advertise a lifecycle"
+      (check "negative: poisoned server cannot advertise a lifecycle"
              (throws? #(derive-authority-snapshot ok-inputs)))
       (finally (reset! edit-durability-state saved)))))
 

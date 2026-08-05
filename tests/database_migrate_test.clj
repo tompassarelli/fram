@@ -73,7 +73,7 @@
 (def checks
   [["v2-log round-trip is identity on live id-triples" (= (live-id-triples ctx) (live-id-triples ctx2))]
    ["replayed domain view == flat fold (lossless migration)" (and (empty? only-flat) (empty? only-reif))]
-   ["replayed next-id recovered (coordinator can append)" (= (:next-id @ctx) (:next-id @ctx2))]
+   ["replayed next-id recovered (server can append)" (= (:next-id @ctx) (:next-id @ctx2))]
    ["replayed next-seq recovered" (= (:next-seq @ctx) (:next-seq @ctx2))]
    ["supersedes-pred recovered (supersession intact)" (some? (:supersedes-pred @ctx2))]])
 

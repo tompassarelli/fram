@@ -1,4 +1,4 @@
-;; Real coordinator/client proof for the internal bounded query-page protocol.
+;; Real server/client proof for the internal bounded query-page protocol.
 ;; Run: bb -cp out tests/query_page_wire_test.clj
 (require '[babashka.process :as proc]
          '[cheshire.core :as json]
@@ -84,7 +84,7 @@
     (check! "query-page wire and client publish the exact same byte limit"
             (= q/max-page-wire-bytes
                rt/query-page-response-byte-limit))
-    (check! "real coordinator starts"
+    (check! "real server starts"
             (eventually #(integer?
                           (:version
                            (rt/database-query-page-for-log
@@ -113,7 +113,7 @@
           expected
           (vec (sort-by pr-str
                         [["@z"] ["@a"] ["@m"] ["@🐢"] ["@10"] ["@2"]]))]
-      (check! "real coordinator pages drain exact canonical relation"
+      (check! "real server pages drain exact canonical relation"
               (= expected all-rows))
       (check! "query-page is always canonical scan, with snapshot version"
               (every?
@@ -184,7 +184,7 @@
       (stop-process! daemon)
       (future-cancel watchdog))))
 
-;; The page client lowers the general 64MiB coordinator response ceiling to the
+;; The page client lowers the general 64MiB server response ceiling to the
 ;; page protocol's 1MiB contract. A hostile/buggy peer cannot make it buffer more.
 (let [{:keys [port worker]}
       (start-one-shot-server
@@ -193,10 +193,10 @@
           (nil? (rt/database-query-page port page-q 1 nil)))
   @worker)
 
-;; Capability handshake remains explicit against a pre-page coordinator.
+;; Capability handshake remains explicit against a pre-page server.
 (let [{:keys [port worker]}
       (start-one-shot-server (pr-str {:error "unknown op"}))]
-  (check! "query-page client returns nil against an older coordinator"
+  (check! "query-page client returns nil against an older server"
           (nil? (rt/database-query-page port page-q 1 nil)))
   @worker)
 

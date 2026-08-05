@@ -1,4 +1,4 @@
-;; Pure authority-v1 contract tests. No filesystem, coordinator, MCP, or Nix IO.
+;; Pure authority-v1 contract tests. No filesystem, server, MCP, or Nix IO.
 ;;   bb -cp out tests/authority_primitives_test.clj
 (require '[fram.authority :as a]
          '[fram.tools :as tools]
@@ -502,7 +502,7 @@
             #(a/seal-phase-receipt!
               (assoc-in completed-unsigned ["projection" "actualSha256"]
                         (a/sha256-text "other"))))
-(chk-reject "projection must cite committed coordinator receipt"
+(chk-reject "projection must cite committed server receipt"
             #(a/seal-phase-receipt!
               (assoc-in completed-unsigned ["projection" "coordinatorReceiptDigest"]
                         (a/sha256-text "other"))))

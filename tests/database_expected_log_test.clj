@@ -231,9 +231,9 @@
               (and (= -2 (rt/database-version-for-log port (.getPath log-b)))
                    (str/includes?
                     (rt/database-status-for-log port (.getPath log-b))
-                    "coordinator WRONG LOG")
-                   (str/includes? (:out cli-doctor) "coordinator WRONG LOG")
-                   (not (str/includes? (:out cli-doctor) "coordinator UP"))))
+                    "server WRONG LOG")
+                   (str/includes? (:out cli-doctor) "server WRONG LOG")
+                   (not (str/includes? (:out cli-doctor) "server UP"))))
       (check! "CLI tell/retract/call writes fail closed"
               (every? #(str/includes? (:out %) "different log")
                       [cli-tell cli-retract cli-call]))
@@ -281,7 +281,7 @@
               (and (not (neg? version))
                    (re-find
                     (re-pattern
-                     (str "^coordinator UP on 127\\.0\\.0\\.1:"
+                     (str "^server UP on 127\\.0\\.0\\.1:"
                           port " \\(v[0-9]+\\)$"))
                     status)
                    (str/starts-with? asserted "ok:")

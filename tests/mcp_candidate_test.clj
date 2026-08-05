@@ -1,6 +1,6 @@
 ;; mcp_candidate_test.clj — graph-edit-candidate-v1: the ATOMIC CANDIDATE GATE.
 ;; ============================================================================
-;; Drives the REAL coordinator (:edit-prepare/:edit-commit/:edit-protocol) and the
+;; Drives the REAL server (:edit-prepare/:edit-commit/:edit-protocol) and the
 ;; REAL bin/fram-mcp over stdio against a hermetic NESTED corpus, and proves the
 ;; corrective contract of thread 019f8741-5b28 end to end:
 ;;
@@ -50,7 +50,7 @@
 ;;   F. PROJECTION-STALE — a commit whose tracked-view write fails reports the
 ;;      stale projection loudly (log canonical, repair command included), and
 ;;      warm render-from-log repairs the file.
-;;   G. PROTOCOL FENCE — a coordinator that cannot answer :edit-protocol with
+;;   G. PROTOCOL FENCE — a server that cannot answer :edit-protocol with
 ;;      graph-edit-candidate-v1 (legacy/wrong protocol) is refused AT STARTUP.
 ;;   H. TRACKED-PATH PATHOLOGIES — missing, duplicate, relative, outside-root,
 ;;      traversal, and symlink-escape file facts each reject BEFORE mutation,
@@ -66,7 +66,7 @@
 ;;   FRAM_SERVER_READ_TIMEOUT_MS=180000 bb -cp out tests/mcp_candidate_test.clj
 ;;   (run from the repo root; coherent-world verification owns the long bound)
 ;; Needs: bb + out/ + clojure (JVM daemons) + racket + beagle. Boots throwaway
-;; coordinators; NEVER touches a live daemon (fresh high ports, hermetic tmp).
+;; servers; NEVER touches a live daemon (fresh high ports, hermetic tmp).
 (require '[babashka.process :as p] '[cheshire.core :as json]
          '[clojure.string :as str] '[clojure.java.io :as io]
          '[clojure.edn :as edn]
@@ -224,7 +224,7 @@
 (def scrub-env
   (cond-> {"PATH" (System/getenv "PATH") "HOME" home "BEAGLE_HOME" beagle-home
            ;; A coherent full-world verification is deliberately allowed to
-           ;; take as long as its coordinator-side 120s verifier budget.
+           ;; take as long as its server-side 120s verifier budget.
            "FRAM_SERVER_READ_TIMEOUT_MS" "180000"}
     fram-racket (assoc "FRAM_RACKET" fram-racket)))
 
@@ -270,7 +270,7 @@
 (write-bytes slow-log (read-bytes code-log))
 (write-bytes overlay-log (read-bytes code-log))
 
-;; --- throwaway coordinators ---------------------------------------------------
+;; --- throwaway servers ---------------------------------------------------
 (defn port-free? [pt]
   (try (with-open [s (java.net.Socket.)]
          (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int pt)) 300) false)
@@ -327,7 +327,7 @@
       (recur (inc i))))
   (not (and proc (.isAlive ^Process (:proc proc)))))
 
-(println "booting throwaway coordinators (main:" main-port " pathology:" bad-port ") …")
+(println "booting throwaway servers (main:" main-port " pathology:" bad-port ") …")
 (def main-daemon (boot-daemon! main-port code-log))
 (def bad-daemon  (boot-daemon! bad-port bad-log))
 (def transaction-daemon (boot-daemon! transaction-port transaction-log))
@@ -340,7 +340,7 @@
    ;; Keep legacy candidate regressions focused on their original durability/OCC
    ;; subject while exercising the new hard gate. An exact first commit attempt
    ;; must say :candidate-unverified; only then does this test helper request
-   ;; coordinator-owned verification and retry the byte-identical commit.
+   ;; server-owned verification and retry the byte-identical commit.
    (if (= :edit-commit (:op req))
      (let [first-result (database-raw port log req)]
        (if (= :candidate-unverified (:code first-result))
@@ -364,13 +364,13 @@
     0))
 
 ;; ============================================================================
-;; V0. COORDINATOR-OWNED VERIFICATION LIFECYCLE — no caller proof can authorize
+;; V0. SERVER-OWNED VERIFICATION LIFECYCLE — no caller proof can authorize
 ;;     commit; one launch-sealed verification is cached; a proof is exact-version
 ;;     scoped; and selected checks still receive the complete provider overlay.
 ;; ============================================================================
 (let [configured (:configured-logs
                   (transaction-database {:op :edit-protocol}))]
-  (chk "V0: edit protocol exposes the exact single-log coordinator identity"
+  (chk "V0: edit protocol exposes the exact single-log server identity"
        (= {:coordination (.getCanonicalPath (io/file transaction-log))
            :telemetry nil}
           configured)))
@@ -413,7 +413,7 @@
             preverify-unchanged?))
   (chk "V0: caller-supplied verification fields cannot authorize commit"
        (= :candidate-unverified (:code fake)))
-  (chk "V0: coordinator invokes its launch-sealed verifier exactly once and caches success"
+  (chk "V0: server invokes its launch-sealed verifier exactly once and caches success"
        (and (true? (:ok verified))
             (false? (:cached verified))
             (true? (:ok cached))
@@ -438,7 +438,7 @@
                          (:world-digest proof)
                          (:toolchain-closure-digest proof)
                          (:modules proof)])))))
-  (chk "V0: only the coordinator-verified candidate commits"
+  (chk "V0: only the server-verified candidate commits"
        (and (true? (:ok commit)) (true? (:committed commit)))))
 
 ;; REQUIRE_SOURCE is scoped to this daemon: the overlay is the forward closure of
@@ -578,7 +578,7 @@
        (= :stale-version (:code stale-commit))))
 
 ;; ============================================================================
-;; T0. COORDINATOR MULTI-DEFINITION CANDIDATE — one end-state projection,
+;; T0. SERVER MULTI-DEFINITION CANDIDATE — one end-state projection,
 ;;     one sealed emission, and exact-version serialization against a single edit.
 ;; ============================================================================
 (let [specs [{:op "set-body" :module "src.fram.wkfix"
@@ -604,7 +604,7 @@
                          (alength ^bytes log0)
                          (alength ^bytes (read-bytes transaction-log)))
                         "UTF-8")]
-  (chk "T0: coordinator accepts two distinct definition edits as one candidate"
+  (chk "T0: server accepts two distinct definition edits as one candidate"
        (and (true? (:ok prep)) (= 2 (:edits prep)) (pos? (:ops prep))))
   (chk "T0: one-module prepare preserves legacy scalars and publishes coherent-world metadata"
        (and (= "src.fram.wkfix" (:module prep))
@@ -672,7 +672,7 @@
 (def base-env
   (cond-> {"PATH" (System/getenv "PATH") "HOME" home
            "FRAM_SERVER_READ_TIMEOUT_MS" "180000"
-           ;; graph-edit mode fences the adapter to ONE coordinator: FRAM_SERVER_PORT/FRAM_LOG
+           ;; graph-edit mode fences the adapter to ONE server: FRAM_SERVER_PORT/FRAM_LOG
            ;; must name the same port and canonical file as their FRAM_CODE_* twins.
            "FRAM_LOG" code-log "FRAM_THREADS" tmp "FRAM_SERVER_PORT" (str main-port)
            "FRAM_MCP_PROFILE" "graph-edit-v1"
@@ -727,7 +727,7 @@
       single-text (or (rtext single) "")]
   (chk "T1: one legal definition edit is rejected while the module end state stays red"
        (and (rerr? single)
-            (str/includes? single-text "coordinator TYPE/WORLD check")
+            (str/includes? single-text "server TYPE/WORLD check")
             (str/includes? single-text "nothing committed")))
   (chk "T1: rejected single edit leaves the red baseline byte-identical"
        (and (= log0 (vec (read-bytes transaction-log)))
@@ -768,7 +768,7 @@
       text (or (rtext result) "")]
   (chk "T1: transaction whose end state stays red is rejected by the one sealed check"
        (and (rerr? result)
-            (str/includes? text "coordinator TYPE/WORLD check")
+            (str/includes? text "server TYPE/WORLD check")
             (str/includes? text "nothing committed")))
   (chk "T1: rejected red transaction records nothing and leaves projection unchanged"
        (and (= log0 (vec (read-bytes transaction-log)))
@@ -781,7 +781,7 @@
 ;; candidate gate as one final-state transaction. Upserts derive their target
 ;; from the form when :name is omitted; a supplied :name is only an assertion.
 ;; A second schema/signature evolution proves retained leaf identity warm and
-;; after a cold coordinator restart.
+;; after a cold server restart.
 (def typedtxn-file (str nested-dir "/typedtxn.bclj"))
 (def rewrite-error-form
   "(defunion :throwable RewriteCrashError (RewriteCrash [message :- String path :- String doctor-refusal :- Bool]))")
@@ -911,7 +911,7 @@
       text (or (rtext type-only) "")]
   (chk "T2: evolving the throwable field type alone is rejected against the old classifier"
        (and (rerr? type-only)
-            (str/includes? text "coordinator TYPE/WORLD check")
+            (str/includes? text "server TYPE/WORLD check")
             (str/includes? text "nothing committed")))
   (chk "T2: rejected one-sided schema evolution is byte-identical"
        (and (= log0 (vec (read-bytes transaction-log)))
@@ -964,7 +964,7 @@
       text (or (rtext result) "")]
   (chk "T2: a red upsert transaction is rejected by the one sealed end-state check"
        (and (rerr? result)
-            (str/includes? text "coordinator TYPE/WORLD check")
+            (str/includes? text "server TYPE/WORLD check")
             (str/includes? text "nothing committed")))
   (chk "T2: rejected upsert transaction records nothing and preserves projection"
        (and (= log0 (vec (read-bytes transaction-log)))
@@ -1047,7 +1047,7 @@
       text (or (rtext result) "")]
   (chk "T3: one red module rejects the coherent final world before commit"
        (and (rerr? result)
-            (str/includes? text "coordinator TYPE/WORLD check")
+            (str/includes? text "server TYPE/WORLD check")
             (str/includes? text "nothing committed")))
   (chk "T3: red multi-module world rolls log, version, and both projections back byte-identically"
        (and (= log0 (vec (read-bytes transaction-log)))
@@ -1088,7 +1088,7 @@
                         :name "provider-marker"
                         :body "2"}]})
       text (or (rtext result) "")]
-  ;; The reference-orphan gate answers from the coordinator pre-check OR the sealed
+  ;; The reference-orphan gate answers from the server pre-check OR the sealed
   ;; world check, whichever sees the dangling reference first; both are typed.
   (chk "T3: removing a still-referenced union variant is a typed final-world rejection"
        (and (rerr? result)
@@ -1295,7 +1295,7 @@
                 (= expected-paths (:paths recovered))))
       (chk "T3: recovered multi-module receipt retry appends zero bytes"
            (= bytes-before-retry bytes-after-retry))
-      (chk "T2: retained type, variant, and function identities survive a cold coordinator restart"
+      (chk "T2: retained type, variant, and function identities survive a cold server restart"
            (= retained-targets-v2 cold-targets))
       (chk "T2: cold-restarted transaction log reconciles to the authoritative snapshot"
            (true? (:ok reconcile))))
@@ -1380,10 +1380,10 @@
                      (and (rerr? r) (str/includes? t "REJECTED") (str/includes? t "nothing committed")))
                 (chk (str "B: " label " -> diagnostic carries " (pr-str expect-marker))
                      (str/includes? t expect-marker))))]
-  ;; unreadable payload — refused BEFORE any coordinator contact.
+  ;; unreadable payload — refused BEFORE any server contact.
   (let [r (mcp-edit base-env 20 "set-body" {:module "src.fram.wkfix" :name "double-it" :body "(* 2"})
         t (or (rtext r) "")]
-    (chk "B: unreadable EDN body -> typed rejection before any coordinator contact"
+    (chk "B: unreadable EDN body -> typed rejection before any server contact"
          (and (rerr? r) (str/includes? t "not readable EDN") (str/includes? t "nothing"))))
   ;; syntax-invalid: reads as EDN, renders, but fails beagle's parse (bad let bindings).
   (probe "syntax-invalid body (let [x] x)" 21 "(let [x] x)" "bad let bindings")
@@ -2272,7 +2272,7 @@
            (str/includes? (slurp wkfix-file) "(* 61 x)")))))
 
 ;; ============================================================================
-;; G. PROTOCOL FENCE — a strict-fenced coordinator WITHOUT the candidate protocol
+;; G. PROTOCOL FENCE — a strict-fenced server WITHOUT the candidate protocol
 ;;    (legacy :edit-min era) is refused at MCP startup.
 ;; ============================================================================
 (def stub-server
@@ -2292,7 +2292,7 @@
                                  reply (fn [m] (.write wr (str (pr-str m) "\n")) (.flush wr))]
                              (if (not= :for-log (:op req))
                                ;; strict legacy fence behavior: unwrapped -> :log-fence-required
-                               (reply {:reject ["this coordinator requires a :for-log envelope"]
+                               (reply {:reject ["this server requires a :for-log envelope"]
                                        :code :log-fence-required :served-log code-log})
                                (let [inner (:request req)]
                                  (case (:op inner)
@@ -2307,7 +2307,7 @@
 
 (let [{:keys [exit by-id err]} (run-mcp (assoc base-env "FRAM_CODE_PORT" (str stub-port))
                                         [init-req])]
-  (chk "G: legacy (no candidate protocol) coordinator -> MCP REFUSES to start (exit != 0, zero replies)"
+  (chk "G: legacy (no candidate protocol) server -> MCP REFUSES to start (exit != 0, zero replies)"
        (and (not (zero? exit)) (empty? by-id)))
   (chk "G: refusal names graph-edit-candidate-v2"
        (and (str/includes? (or err "") "REFUSING to start")

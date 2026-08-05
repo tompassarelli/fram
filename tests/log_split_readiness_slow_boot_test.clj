@@ -1,4 +1,4 @@
-;; Seeded regression: a coordinator whose boot is deterministically slower
+;; Seeded regression: a server whose boot is deterministically slower
 ;; than the old fixed 5-second poll window (100 * 50ms) must still be
 ;; awaited successfully by the bounded observable readiness harness, as
 ;; long as it comes up inside the harness's deadline. This is the "slow

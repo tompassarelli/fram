@@ -275,9 +275,9 @@ build_env=(
 artifact="$("${build_env[@]}" "$builder" --entry demo.main/start \
   "$scratch/sources/good.bclj")" || fail "initial build failed"
 [[ "$artifact" == "$scratch/cache/"* ]] || fail "builder did not print its cache artifact"
-[[ -f "$artifact/READY" && -x "$artifact/bin/fram-daemon-native" ]] ||
+[[ -f "$artifact/READY" && -x "$artifact/bin/fram-server-native" ]] ||
   fail "promoted artifact is not ready and executable"
-"$artifact/bin/fram-daemon-native" || fail "linked native executable did not run"
+"$artifact/bin/fram-server-native" || fail "linked native executable did not run"
 
 hit="$("${build_env[@]}" "$builder" --entry demo.main/start \
   "$scratch/sources/good.bclj")" || fail "cache hit failed"
@@ -430,7 +430,7 @@ calls_before_host="$(wc -l <"$calls")"
 host_artifact="$("${build_env[@]}" "$builder" --host serve-flat \
   --adapter "$adapter" "$scratch/sources/good.bclj")" ||
   fail "serve-flat host build failed"
-[[ -f "$host_artifact/READY" && -x "$host_artifact/bin/fram-daemon-native" ]] ||
+[[ -f "$host_artifact/READY" && -x "$host_artifact/bin/fram-server-native" ]] ||
   fail "serve-flat host artifact is not ready and executable"
 grep -Fqx 'native-host-abi PASS host=serve-flat exports=8' \
   "$host_artifact/native-host.report.txt" ||
@@ -479,11 +479,11 @@ for required_line in "${required_symbol_lines[@]}"; do
   grep -Fqx -- "$required_line" "$symbols_header" ||
     fail "serve-flat symbol header omitted: $required_line"
 done
-if "$host_artifact/bin/fram-daemon-native" serve not-a-port \
+if "$host_artifact/bin/fram-server-native" serve not-a-port \
     >"$scratch/host.out" 2>"$scratch/host.err"; then
   fail "serve-flat host accepted an invalid port"
 fi
-grep -Fq 'fram-daemon-native: invalid port: not-a-port' \
+grep -Fq 'fram-server-native: invalid port: not-a-port' \
   "$scratch/host.err" || fail "linked serve-flat host main did not run"
 
 host_hit="$("${build_env[@]}" "$builder" --host serve-flat \

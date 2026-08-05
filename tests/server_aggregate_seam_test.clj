@@ -53,7 +53,7 @@
 (commit! db "u" "@s4" "cost" :assert "200" nil)
 (def seq0 (:ok (commit! db "u" "@s5" "cost" :assert "5" nil)))  ; S: all initial costs live
 
-(reset! @db-var db)                             ; the daemon's global coordinator atom
+(reset! @db-var db)                             ; the daemon's global server atom
 (reset! @schema-var {})
 (reset! @cache-var {:index nil :version -1})
 

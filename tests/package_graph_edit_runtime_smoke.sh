@@ -75,7 +75,7 @@ if len(matches) != 1:
 print(matches[0])
 ' "$manifest")"
 daemon_source="$fram_package/libexec/fram/server.clj"
-[[ -r "$daemon_source" ]] || { echo "graph-edit runtime smoke: missing coordinator source" >&2; exit 1; }
+[[ -r "$daemon_source" ]] || { echo "graph-edit runtime smoke: missing server source" >&2; exit 1; }
 "$python" - "$runtime_driver" "$daemon_source" <<'PY'
 import pathlib
 import re
@@ -139,9 +139,9 @@ lease_epoch=7
 runtime_digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 # A listener makes the no-side-effect claim observable: missing authority
-# inputs must fail before any connection to the North-selected coordinator.
+# inputs must fail before any connection to the North-selected server.
 port_file="$work/port"
-accepted="$work/coordinator-contacted"
+accepted="$work/server-contacted"
 "$python" -c '
 import pathlib, socket, sys
 port_file, accepted = map(pathlib.Path, sys.argv[1:])
@@ -232,7 +232,7 @@ fi
 
 wait "$listener_pid" || true
 [[ ! -e "$accepted" ]] || {
-  echo "graph-edit runtime smoke: missing-input path contacted the coordinator" >&2
+  echo "graph-edit runtime smoke: missing-input path contacted the server" >&2
   exit 1
 }
 [[ ! -e "$marker" ]] || {
@@ -245,7 +245,7 @@ complete_hostile=(
   NORTH_FRAM_AUTHORITY_LEASE_ID="$lease_id"
   NORTH_FRAM_RUNTIME_CLOSURE_DIGEST="$runtime_digest"
 )
-# A fully shaped launch still fails when its selected coordinator/log are not
+# A fully shaped launch still fails when its selected server/log are not
 # live native corpus inputs. This is the real preflight fence, not a manifest
 # echo or an unsupported-profile placeholder.
 if "$env_bin" -i "${complete_hostile[@]}" "$entrypoint" preflight \

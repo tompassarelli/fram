@@ -1,4 +1,4 @@
-;; Seeded regression: if the coordinator process exits before ever becoming
+;; Seeded regression: if the server process exits before ever becoming
 ;; ready, the harness must fail fast (well inside its deadline) and
 ;; diagnostically (carrying the child's exit code and captured stderr)
 ;; instead of silently waiting out the full timeout as if it were a slow
