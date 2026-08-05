@@ -1,5 +1,5 @@
 #!/usr/bin/env bb
-;; Authenticated JSON gateway for the private FRAMRPC coordinator socket.
+;; Authenticated JSON gateway for the private FRAMRPC server socket.
 ;; JSON is an edge representation only: the daemon receives one closed binary
 ;; RpcRequest, and its typed RpcResponse is rendered back to strict JSON.
 (require '[org.httpkit.server :as srv]
@@ -161,7 +161,7 @@
      (encode-json-term (terms/triple-slot1 value))
      (encode-json-term (terms/triple-slot2 value))]
     :else (fail! "shim/invalid-upstream-term"
-                 (str "coordinator returned a value outside Term: " (class value)))))
+                 (str "server returned a value outside Term: " (class value)))))
 
 (defn- exact-keys! [value required allowed label]
   (when-not (map? value)
@@ -370,10 +370,10 @@
           (if-let [code (:shim/code (ex-data error))]
             (json-response 400 (shim-error code false (.getMessage error)))
             (json-response 502 (shim-error "shim/upstream-failure" true
-                                           "coordinator request failed"))))
+                                           "server request failed"))))
         (catch Throwable _
           (json-response 502 (shim-error "shim/upstream-failure" true
-                                         "coordinator request failed")))))))
+                                         "server request failed")))))))
 
 (when-not (= "1" (System/getenv "SHIM_LIBRARY"))
   (srv/run-server handler {:ip "0.0.0.0" :port shim-port})

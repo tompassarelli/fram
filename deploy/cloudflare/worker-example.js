@@ -1,15 +1,15 @@
-// worker-example.js — minimal runnable Cloudflare Worker over a Fram coordinator.
+// worker-example.js — minimal runnable Cloudflare Worker over a Fram server.
 //
 // Routes:
 //   GET  /            usage
-//   GET  /health      coordinator rpc/status (proves the whole chain)
+//   GET  /health      server rpc/status (proves the whole chain)
 //   POST /fact        body {"t1":"@bench1","t2":"title","t3":"hello"}
 //   GET  /facts?t2=X   matching rows (&t1=@id also supported)
 //   GET  /bench?n=20  n sequential query round-trips, timing summary
 //
 // Config: SHIM_URL + FRAM_SPACE_ID vars, SHIM_TOKEN secret.
 // The Worker holds NO state — every isolate, cold or warm, is one fetch() away
-// from the durable coordinator behind the shim.
+// from the durable Fram server behind the shim.
 import { framClient, listValues, recordFields, tripleQuery } from './worker-client.js';
 
 const json = (v, status = 200) =>
@@ -63,7 +63,7 @@ export default {
           n, rows,
           p50_ms: times[Math.floor(n / 2)],
           min_ms: times[0], max_ms: times[n - 1],
-          note: 'each round-trip = Worker -> shim (HTTP) -> coordinator (TCP) -> back',
+          note: 'each round-trip = Worker -> shim (HTTP) -> Fram server (TCP) -> back',
         });
       }
 
