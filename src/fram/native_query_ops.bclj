@@ -606,28 +606,24 @@
                 (pageresult-payload page-result)))))
 
 (defn validation-payload! [root: (Atom t/TermStore)] -> t/Triple
-  (try
-    (let [space-id (store/space-id root)
-          copy (store/new-term-store space-id)
-          propositions: (Vec t/Triple) (store/live-propositions root)
-          violations: (Vec t/Triple)
-          (kernel/lint-declared-profile propositions space-id)]
-      (do
-        (store/load-term-store! copy (store/dump-term-store root))
+  (let [snapshot: t/TermStore (deref root)
+        copy: (Atom t/TermStore) (atom snapshot)
+        loaded: store/TermStoreLoadResult
+        (store/load-term-store-result! copy (store/dump-term-store copy))]
+    (if (store/termstoreloadresult-ok loaded)
+      (let [space-id (store/space-id copy)
+            propositions: (Vec t/Triple) (store/live-propositions copy)
+            violations: (Vec t/Triple)
+            (kernel/lint-declared-profile propositions space-id)]
         (rpc-validation
          true
          (mapv
           (fn [violation: t/Triple] -> Any
             (rpc-violation :rpc/profile-violation violation))
-          violations))))
-    (catch Exception problem
-      (let [data (ex-data problem)
-            code-value (or (:fram/code data) (:type data))
-            code (if (keyword? code-value)
-                   code-value :rpc/validation-failed)]
-        (rpc-validation
-         false
-         [(rpc-violation code "validation failed")])))))
+          violations)))
+      (let [code-value (store/termstoreloadresult-code loaded)
+            code (if code-value code-value :rpc/validation-failed)]
+        (rpc-validation false [(rpc-violation code "validation failed")])))))
 
 (defn validate-response!
   [session: schema/Session

@@ -14,6 +14,11 @@
 (def empty-term-buckets: (Vec t/TermBucket) [])
 (def term-store-dump-version: Int 2)
 
+(defrecord TermStoreLoadResult
+  [ok: Bool
+   code: Keyword?
+   message: String?])
+
 ;; A slot table doubles once its indexed vector holds more than this many rows
 ;; per slot. Every lookup still checks the complete physical row for collision.
 (def initial-slots: Int 64)
@@ -783,15 +788,25 @@
           current position (nth (t/termstore-operations current) position))
          (inc position))))))
 
-(defn load-term-store!
+(defn- term-store-load-ok [] -> TermStoreLoadResult
+  (->TermStoreLoadResult true nil nil))
+
+(defn- term-store-load-error
+  [code: Keyword
+   message: String] -> TermStoreLoadResult
+  (->TermStoreLoadResult false code message))
+
+(defn load-term-store-result!
   [ctx: (Atom t/TermStore)
-   data: Any] -> (Atom t/TermStore)
+   data: Any] -> TermStoreLoadResult
   (if (not (t/term-store-dump? data))
-    (throw (ex-info "fram: legacy store dump requires one-shot migration"
-                    {:type :migration-required}))
+    (term-store-load-error
+     :migration-required
+     "fram: legacy store dump requires one-shot migration")
     (if (not (= term-store-dump-version (t/termstoredump-version data)))
-      (throw (ex-info "fram: legacy TermStore dump requires one-shot migration"
-                      {:type :migration-required}))
+      (term-store-load-error
+       :migration-required
+       "fram: legacy TermStore dump requires one-shot migration")
       (let [atoms: (Vec t/AtomRow) (t/termstoredump-atoms data)
             rows: (Vec t/TripleRow) (t/termstoredump-triples data)
             transactions: (Vec t/TransactionRow) (t/termstoredump-transactions data)
@@ -807,11 +822,13 @@
                                      (valid-history-rows?
                                       transactions operations (count rows)
                                       next-sequence-value))))))
-          (throw (ex-info "fram: invalid TermStore dump"
-                          {:type :invalid-term-store-dump}))
+          (term-store-load-error
+           :invalid-term-store-dump
+           "fram: invalid TermStore dump")
           (if (not (= (space-id ctx) dump-space))
-            (throw (ex-info "fram: TermStore dump belongs to a different space"
-                            {:type :space-mismatch}))
+            (term-store-load-error
+             :space-mismatch
+             "fram: TermStore dump belongs to a different space")
             (let [loaded: t/TermStore
                   (t/->TermStore
                    dump-space next-sequence-value atoms rows transactions operations
@@ -820,4 +837,17 @@
                    (build-triple-term-slots rows (term-slots-width-for (count rows)))
                    (fresh-term-slots initial-slots))]
               (reset! ctx (rebuild-operation-state loaded))
-              ctx)))))))
+              (term-store-load-ok))))))))
+
+(defn load-term-store!
+  [ctx: (Atom t/TermStore)
+   data: Any] -> (Atom t/TermStore)
+  (let [result: TermStoreLoadResult (load-term-store-result! ctx data)]
+    (if (termstoreloadresult-ok result)
+      ctx
+      (let [code (termstoreloadresult-code result)
+            message (termstoreloadresult-message result)]
+        (throw
+         (ex-info
+          (if message message "fram: TermStore load failed")
+          {:type (if code code :invalid-term-store-dump)}))))))

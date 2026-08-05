@@ -53,6 +53,9 @@
 (def restored (store/new-term-store "msa-space"))
 (store/load-term-store! restored dump)
 
+(def outcome-restored (store/new-term-store "msa-space"))
+(def successful-load (store/load-term-store-result! outcome-restored dump))
+
 (def wrong-space (store/new-term-store "other-space"))
 (def legacy-version (assoc dump :version 1))
 (def first-row (first (t/termstoredump-operations dump)))
@@ -65,6 +68,10 @@
                  (t/operationrow-action first-row)
                  (t/operationrow-triple-handle first-row)))))
 (def malformed-next-sequence (assoc dump :next-sequence 99))
+(def malformed-target (store/new-term-store "msa-space"))
+(def malformed-before (store/dump-term-store malformed-target))
+(def malformed-load
+  (store/load-term-store-result! malformed-target malformed-next-sequence))
 
 (def growth-context (store/new-term-store "growth-space"))
 (def growth-propositions
@@ -129,6 +136,14 @@
    ["dump/load rebuilds identical semantic history"
     (and (= history (store/semantic-history restored))
          (= (store/live-occurrences ctx) (store/live-occurrences restored)))]
+   ["typed load outcomes preserve success and reject before mutation"
+    (and (store/termstoreloadresult-ok successful-load)
+         (nil? (store/termstoreloadresult-code successful-load))
+         (= dump (store/dump-term-store outcome-restored))
+         (not (store/termstoreloadresult-ok malformed-load))
+         (= :invalid-term-store-dump
+            (store/termstoreloadresult-code malformed-load))
+         (= malformed-before (store/dump-term-store malformed-target)))]
    ["legacy dump versions require the one-shot migration"
     (= :migration-required
        (error-type #(store/load-term-store! (store/new-term-store "msa-space")
