@@ -47,13 +47,9 @@
    e: Int] -> Bool
   (pos? (count (filterv (fn [cid: Int] -> Bool (= symv (get (c/fact-of ctx cid) :r))) (c/by-lp ctx e kindp)))))
 
-(defn fact-l
-  [ctx: Any
-   cid: Int] -> Int (int (get (c/fact-of ctx cid) :l)))
+(defn fact-l [ctx: Any cid: Int] -> Int (int (get (c/fact-of ctx cid) :l)))
 
-(defn fact-r
-  [ctx: Any
-   cid: Int] -> Int (int (get (c/fact-of ctx cid) :r)))
+(defn fact-r [ctx: Any cid: Int] -> Int (int (get (c/fact-of ctx cid) :r)))
 
 (defn first-sym-fact
   [ctx: Any

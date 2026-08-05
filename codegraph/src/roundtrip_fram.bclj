@@ -41,9 +41,7 @@
     (c/fact! ctx L P R tx)
     nil))
 
-(defn dump-fact!
-  [ctx: Any
-   cid: Int] -> Nil
+(defn dump-fact! [ctx: Any cid: Int] -> Nil
   (let [cl (c/fact-of ctx cid) l (get cl :l) p (get cl :p) r (get cl :r) ps (c/literal ctx p)]
     (if (c/value-object? ctx r)
       (println (str "[" l " " (pr-str ps) " " (pr-str (c/literal ctx r)) "]"))
