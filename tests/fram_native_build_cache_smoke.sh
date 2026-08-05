@@ -22,26 +22,26 @@ command="${1:-}"
 shift
 if [[ "$command" == "build" ]]; then
   out=""
-  materializer=""
+  materializers=()
   sources=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --out) out="$2"; shift 2 ;;
-      --materializer) materializer="$2"; shift 2 ;;
+      --materializer) materializers+=("$2"); shift 2 ;;
       --entry) shift 2 ;;
       --) shift; sources+=("$@"); break ;;
       *) sources+=("$1"); shift ;;
     esac
   done
-  [[ -n "$out" && "$materializer" =~ ^(c17|qbe)$ &&
+  [[ -n "$out" && ${#materializers[@]} -eq 2 &&
+    "${materializers[0]}" == "c17" && "${materializers[1]}" == "qbe" &&
     ${#sources[@]} -gt 0 ]] || exit 96
-  printf 'build-%s\n' "$materializer" >>"$FAKE_NATIVE_CALLS"
+  printf '%s\n' 'build-c17+qbe' >>"$FAKE_NATIVE_CALLS"
   mkdir -p "$out"
   printf '%s\n' 'fake source facts' >"$out/source.facts"
   printf '%s\n' 'fake sealed Native World' >"$out/module.native-world"
   sha256sum "$out/module.native-world" | sed 's/ .*//' \
     >"$out/module.native-world.sha256"
-  if [[ "$materializer" == "c17" ]]; then
   cat >"$out/module_0.h" <<'C'
 #ifndef FAKE_MODULE_0_H
 #define FAKE_MODULE_0_H
@@ -167,9 +167,7 @@ int fake_native_shim(void);
 C
     printf '%s\n' '/* fake Unicode data */' >"$out/native_unicode15_data.h"
     printf '%s\n' 'fake Unicode license' >"$out/UNICODE-LICENSE.txt"
-  else
-    printf '%s\n' 'export function w $main() { ret 0 }' >"$out/module_0.ssa"
-  fi
+  printf '%s\n' 'export function w $main() { ret 0 }' >"$out/module_0.ssa"
   cat >"$out/native_shim.c" <<'C'
 #include "native_shim.h"
 int fake_native_shim(void) { return 0; }
@@ -182,7 +180,7 @@ C
     grep -Fq DUPLICATE_SERVER_SYMBOL "$source" && duplicate_symbol=1
     grep -Fq BAD_SERVER_ARITY "$source" && bad_arity=1
   done
-  if [[ "$materializer" == "c17" && "$bad_arity" == 1 ]]; then
+  if [[ "$bad_arity" == 1 ]]; then
     sed -i \
       '/native_m0_fn_5/s/);$/, native_m0_type_0 native_v_1);/' \
       "$out/module_0.h"
@@ -193,11 +191,9 @@ C
       'stage source-to-typed ACCEPTED' \
       'stage typed-to-native COMPLETE' \
       'native-lowering-result NativeLoweringCompleteV0'
-    if [[ "$materializer" == "c17" ]]; then
-      printf '%s\n' 'materialize-c17 OK module_0.h module_0.c'
-    else
-      printf '%s\n' 'materialize-qbe OK module_0.ssa'
-    fi
+    printf '%s\n' \
+      'materialize-c17 OK module_0.h module_0.c' \
+      'materialize-qbe OK module_0.ssa'
     printf '%s\n' \
       'lowered fn_7 server-generated-abi 1 blocks' \
       'lowered fn_2 server-store-boot! 1 blocks' \
@@ -453,7 +449,7 @@ host_hit="$("${build_env[@]}" "$builder" --host server \
   --adapter "$adapter" "$scratch/sources/good.bgl")" ||
   fail "server host cache hit failed"
 [[ "$host_hit" == "$host_artifact" ]] || fail "server host missed the cache"
-[[ "$(wc -l <"$calls")" == "$((calls_before_host + 2))" ]] ||
+[[ "$(wc -l <"$calls")" == "$((calls_before_host + 1))" ]] ||
   fail "server host cache hit rebuilt a materializer projection"
 
 calls_before_embed="$(wc -l <"$calls")"

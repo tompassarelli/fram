@@ -412,53 +412,23 @@ flock "$world_lock_fd"
 if [[ ! -e "$world_dir" ]]; then
   world_stage="$(mktemp -d "$world_cache/.tmp/$world_closure_hash.XXXXXX")"
   cp "$world_input_manifest" "$world_stage/input.manifest"
-  c17_projection="$world_stage/materialize-c17"
-  qbe_projection="$world_stage/materialize-qbe"
-  mkdir -p "$c17_projection" "$qbe_projection"
-  if ! "$beagle" build --materializer c17 \
-      --out "$c17_projection" \
+  if ! "$beagle" build --materializer c17 --materializer qbe \
+      --out "$world_stage" \
       "${native_server_entry_args[@]}" \
       -- \
       "${normalized_sources[@]}" \
-      >"$world_stage/materialize-c17.log" 2>&1; then
-    sed -n '1,240p' "$world_stage/materialize-c17.log" >&2
-    die "beagle C17 materialization failed"
+      >"$world_stage/materialize.log" 2>&1; then
+    sed -n '1,240p' "$world_stage/materialize.log" >&2
+    die "Beagle Native World materialization failed"
   fi
-  if ! "$beagle" build --materializer qbe \
-      --out "$qbe_projection" \
-      "${native_server_entry_args[@]}" \
-      -- \
-      "${normalized_sources[@]}" \
-      >"$world_stage/materialize-qbe.log" 2>&1; then
-    sed -n '1,240p' "$world_stage/materialize-qbe.log" >&2
-    die "beagle QBE materialization failed"
-  fi
-  for projection in "$c17_projection" "$qbe_projection"; do
-    [[ -f "$projection/module.native-world" &&
-       -f "$projection/module.native-world.sha256" ]] ||
-      die "materializer omitted its sealed Native World: $projection"
-  done
-  cmp -s "$c17_projection/module.native-world.sha256" \
-    "$qbe_projection/module.native-world.sha256" ||
-    die "C17 and QBE materializers sealed different Native Worlds"
-  cmp -s "$c17_projection/module.native-world" \
-    "$qbe_projection/module.native-world" ||
-    die "C17 and QBE materializers emitted different sealed Native Worlds"
   for artifact in source.facts module.native-world module.native-world.sha256 \
       module_0.h module_0.c native_shim.h native_shim.c \
-      native_unicode15_data.h UNICODE-LICENSE.txt; do
-    [[ -f "$c17_projection/$artifact" ]] ||
-      die "C17 materializer omitted $artifact"
-    cp "$c17_projection/$artifact" "$world_stage/$artifact"
+      native_unicode15_data.h UNICODE-LICENSE.txt module_0.ssa report.txt; do
+    [[ -f "$world_stage/$artifact" ]] ||
+      die "combined materialization omitted $artifact"
   done
-  [[ -f "$qbe_projection/module_0.ssa" ]] ||
-    die "QBE materializer omitted module_0.ssa"
-  cp "$c17_projection/report.txt" "$world_stage/report.txt"
-  cp "$qbe_projection/report.txt" "$world_stage/report.qbe.txt"
-  cp "$qbe_projection/module_0.ssa" "$world_stage/module_0.ssa"
-  rm -rf "${c17_projection:?}" "${qbe_projection:?}"
   validate_native_report "$world_stage/report.txt" c17
-  validate_native_report "$world_stage/report.qbe.txt" qbe
+  validate_native_report "$world_stage/report.txt" qbe
   write_server_symbols "$world_stage/report.txt" "$world_stage/module_0.h" \
     "$world_stage/server_symbols.validate"
   rm -f "$world_stage/server_symbols.validate"
@@ -487,7 +457,7 @@ native_world_digest="$(sha256sum "$world_dir/module.native-world" | sed 's/ .*//
     "fram-native-world/v1 $world_closure_hash $native_world_digest" ]] ||
   die "Native World cache entry failed its digest receipt: $world_dir"
 validate_native_report "$world_dir/report.txt" c17
-validate_native_report "$world_dir/report.qbe.txt" qbe
+validate_native_report "$world_dir/report.txt" qbe
 
 input_manifest="$(mktemp "$cache_root/.tmp/input.XXXXXX")"
 write_input_manifest "$input_manifest"
@@ -522,8 +492,8 @@ mkdir -p "$stage/bin" "$stage/include" "$stage/lib"
 cp "$input_manifest" "$stage/input.manifest"
 for artifact in source.facts module.native-world module.native-world.sha256 \
     module_0.h module_0.c native_shim.h native_shim.c \
-    native_unicode15_data.h UNICODE-LICENSE.txt report.txt report.qbe.txt \
-    module_0.ssa materialize-c17.log materialize-qbe.log; do
+    native_unicode15_data.h UNICODE-LICENSE.txt report.txt \
+    module_0.ssa materialize.log; do
   [[ -f "$world_dir/$artifact" ]] ||
     die "Native World cache entry omitted $artifact"
   cp "$world_dir/$artifact" "$stage/$artifact"
