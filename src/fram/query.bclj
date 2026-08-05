@@ -967,16 +967,22 @@
 
 (defn- number-atom [value: Any] -> NumericAtom?
   (cond
-    [(integer? value) (let [integer-value: Int value] integer-value)]
-    [(number? value) (let [float-value: Float value] float-value)]
+    [(number? value)
+     (if (integer? value)
+       (let [integer-value: Int value] integer-value)
+       (let [float-value: Float value] float-value))]
     [(string? value)
      (let [text: String value
-           integer-result (parse-long text)]
+           integer-result: (U Int Nil) (parse-long text)]
        (if (some? integer-result)
-         integer-result
-         (let [float-result (parse-double text)]
-           (if (number? float-result)
-             (let [float-value: Float float-result] float-value)
+         (let [integer-value: Int integer-result
+               numeric-value: NumericAtom integer-value]
+           numeric-value)
+         (let [float-result: (U Float Nil) (parse-double text)]
+           (if (some? float-result)
+             (let [float-value: Float float-result
+                   numeric-value: NumericAtom float-value]
+               numeric-value)
              nil))))]
     [:else nil]))
 
@@ -1139,7 +1145,13 @@
   (reduce (fn
             [current: d/Tuple
              value: NumericAtom] -> d/Tuple
-            (conj current value))
+            (if (integer? value)
+              (let [integer-value: Int value
+                    element: Any integer-value]
+                (conj current element))
+              (let [float-value: Float value
+                    element: Any float-value]
+                (conj current element))))
           row values))
 
 (defn- having-passes?
