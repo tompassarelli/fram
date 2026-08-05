@@ -50,20 +50,21 @@
 (defn empty-error-cell [] -> (Atom String?)
   (atom no-error))
 
+(defn preserve-first-error
+  [current: String?
+   incoming: String] -> String?
+  (if current current incoming))
+
 (defn decoder-error!
   [decoder: Decoder
    message: String] -> Nil
-  (if (nil? (deref (decoder-error decoder)))
-    (reset! (decoder-error decoder) message)
-    nil)
+  (swap! (decoder-error decoder) preserve-first-error message)
   nil)
 
 (defn encoder-error!
   [encoder: Encoder
    message: String] -> Nil
-  (if (nil? (deref (encoder-error encoder)))
-    (reset! (encoder-error encoder) message)
-    nil)
+  (swap! (encoder-error encoder) preserve-first-error message)
   nil)
 
 (defn byte-value? [value: Int] -> Bool
