@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #define FRAM_SERVER_GENERATED_ABI 2u
+#define FRAM_SERVER_HOST_ABI 1u
 #define FRAM_SERVER_ERROR_CAPACITY 512u
 
 typedef struct fram_server_store fram_server_store;
@@ -16,33 +17,82 @@ enum fram_server_status {
   FRAM_SERVER_OK = 0,
   FRAM_SERVER_PEER_CLOSED = 1,
   FRAM_SERVER_FATAL = 2,
-  FRAM_SERVER_CLIENT_ERROR = 3
+  FRAM_SERVER_CLIENT_ERROR = 3,
+  FRAM_SERVER_HOST_ERROR = 4,
+  FRAM_SERVER_OUT_OF_MEMORY = 5
 };
 
-/* Every declaration below is a required generated-module export. */
+typedef int (*fram_server_clock_fn)(void *context, int64_t *milliseconds_out,
+                                    char *error, size_t error_capacity);
+typedef int (*fram_server_storage_size_fn)(void *context, uint64_t *size_out,
+                                           char *error,
+                                           size_t error_capacity);
+typedef int (*fram_server_storage_read_fn)(void *context, uint64_t offset,
+                                           uint8_t *destination, size_t length,
+                                           char *error,
+                                           size_t error_capacity);
+typedef int (*fram_server_storage_truncate_fn)(void *context, uint64_t length,
+                                               char *error,
+                                               size_t error_capacity);
+typedef int (*fram_server_storage_append_fn)(void *context,
+                                             const uint8_t *bytes,
+                                             size_t length, char *error,
+                                             size_t error_capacity);
+typedef int (*fram_server_storage_sync_fn)(void *context, char *error,
+                                           size_t error_capacity);
+typedef int (*fram_server_storage_close_fn)(void *context, char *error,
+                                            size_t error_capacity);
+
+typedef struct fram_server_host_v1 {
+  uint32_t abi_version;
+  uint32_t struct_size;
+  void *context;
+  fram_server_clock_fn clock_milliseconds;
+  fram_server_storage_size_fn storage_size;
+  fram_server_storage_read_fn storage_read;
+  fram_server_storage_truncate_fn storage_truncate;
+  fram_server_storage_append_fn storage_append;
+  fram_server_storage_sync_fn storage_sync;
+  fram_server_storage_close_fn storage_close;
+} fram_server_host_v1;
+
+/* The adapter verifies and invokes the eight generated-module hooks. */
 uint32_t fram_server_generated_abi(void);
 
 /* SPACE_ID is NULL when the deployed flat-log service did not configure one. */
 int fram_server_store_boot(const char *canonical_log_path,
-                               const char *space_id,
-                               fram_server_store **store_out,
-                               char *error,
-                               size_t error_capacity);
+                           const char *space_id,
+                           fram_server_store **store_out, char *error,
+                           size_t error_capacity);
+
+int fram_server_store_boot_with_host(const char *canonical_log_path,
+                                     const char *space_id,
+                                     const fram_server_host_v1 *host,
+                                     fram_server_store **store_out,
+                                     char *error, size_t error_capacity);
 
 int fram_server_store_dispatch(fram_server_store *store,
-                                   const fram_server_request *request,
-                                   fram_server_response **response_out,
-                                   char *error,
-                                   size_t error_capacity);
+                               const fram_server_request *request,
+                               fram_server_response **response_out,
+                               char *error, size_t error_capacity);
 
 int fram_server_store_shutdown(fram_server_store *store,
-                                   char *error,
-                                   size_t error_capacity);
+                               char *error, size_t error_capacity);
+
+int fram_server_codec_decode_request(const uint8_t *bytes, size_t length,
+                                     fram_server_request **request_out,
+                                     char *error, size_t error_capacity);
+
+int fram_server_codec_encode_response(const fram_server_response *response,
+                                      uint8_t **bytes_out,
+                                      size_t *length_out, char *error,
+                                      size_t error_capacity);
+
+void fram_server_codec_release_bytes(uint8_t *bytes);
 
 int fram_server_codec_read_request(int client_fd,
-                                       fram_server_request **request_out,
-                                       char *error,
-                                       size_t error_capacity);
+                                   fram_server_request **request_out,
+                                   char *error, size_t error_capacity);
 
 int fram_server_codec_write_response(
     int client_fd,

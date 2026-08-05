@@ -717,6 +717,180 @@ int main(int argc, char **argv) {
 }
 C
 
+cat >"$scratch/embed_main.c" <<'C'
+#include "fram.h"
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct memory_host {
+  uint8_t bytes[128];
+  size_t length;
+  size_t allocations;
+  size_t deallocations;
+  size_t syncs;
+  size_t closes;
+} memory_host;
+
+static const uint8_t request_frame[] = {
+    0x46, 0x52, 0x41, 0x4d, 0x52, 0x50, 0x43, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x07, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xaa, 0xbb, 0xcc};
+
+static const uint8_t response_frame[] = {
+    0x46, 0x52, 0x41, 0x4d, 0x52, 0x50, 0x43, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00, 0x00, 0x07, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xdd, 0xee};
+
+static void *host_allocate(void *context, size_t size) {
+  memory_host *host = context;
+  void *allocation = malloc(size);
+
+  if (allocation != NULL) {
+    host->allocations += 1u;
+  }
+  return allocation;
+}
+
+static void host_deallocate(void *context, void *allocation) {
+  memory_host *host = context;
+
+  if (allocation != NULL) {
+    host->deallocations += 1u;
+  }
+  free(allocation);
+}
+
+static int host_clock(void *context, int64_t *milliseconds_out) {
+  (void)context;
+  *milliseconds_out = INT64_C(1234);
+  return 0;
+}
+
+static int storage_size(void *context, uint64_t *size_out) {
+  memory_host *host = context;
+
+  *size_out = (uint64_t)host->length;
+  return 0;
+}
+
+static int storage_read(void *context, uint64_t offset, uint8_t *destination,
+                        size_t length) {
+  memory_host *host = context;
+
+  if (offset > (uint64_t)host->length ||
+      length > host->length - (size_t)offset) {
+    return 1;
+  }
+  memcpy(destination, host->bytes + (size_t)offset, length);
+  return 0;
+}
+
+static int storage_truncate(void *context, uint64_t length) {
+  memory_host *host = context;
+
+  if (length > (uint64_t)host->length) {
+    return 1;
+  }
+  host->length = (size_t)length;
+  return 0;
+}
+
+static int storage_append(void *context, const uint8_t *bytes, size_t length) {
+  memory_host *host = context;
+
+  if (length > sizeof(host->bytes) - host->length) {
+    return 1;
+  }
+  memcpy(host->bytes + host->length, bytes, length);
+  host->length += length;
+  return 0;
+}
+
+static int storage_sync(void *context) {
+  memory_host *host = context;
+
+  host->syncs += 1u;
+  return 0;
+}
+
+static int storage_close(void *context) {
+  memory_host *host = context;
+
+  host->closes += 1u;
+  return 0;
+}
+
+static bool response_is(const fram_buffer *response) {
+  return response->length == sizeof(response_frame) &&
+         memcmp(response->data, response_frame, sizeof(response_frame)) == 0;
+}
+
+int main(int argc, char **argv) {
+  memory_host storage = {.bytes = {'O', 'L', 'D', '!', 'x'}, .length = 5u};
+  fram_host_v1 host = {
+      .abi_version = FRAM_ABI_VERSION,
+      .struct_size = (uint32_t)sizeof(host),
+      .allocation_context = &storage,
+      .clock_context = &storage,
+      .storage_context = &storage,
+      .allocate = host_allocate,
+      .deallocate = host_deallocate,
+      .clock_milliseconds = host_clock,
+      .storage_size = storage_size,
+      .storage_read = storage_read,
+      .storage_truncate = storage_truncate,
+      .storage_append = storage_append,
+      .storage_sync = storage_sync,
+      .storage_close = storage_close,
+  };
+  fram_open_options_v1 options = {
+      .abi_version = FRAM_ABI_VERSION,
+      .struct_size = (uint32_t)sizeof(options),
+      .space_id = "smoke-space",
+      .log_path = argc == 2 ? argv[1] : NULL,
+      .host = &host,
+  };
+  fram_slice request = {request_frame, sizeof(request_frame)};
+  fram_database *database = NULL;
+  fram_buffer response = {0};
+  fram_error error;
+
+  if (argc != 2 || fram_abi_version() != FRAM_ABI_VERSION ||
+      fram_open(&options, &database, &error) != FRAM_OK || database == NULL ||
+      error.code != FRAM_OK || storage.length != 8u ||
+      memcmp(storage.bytes, "OLD!BOOT", 8u) != 0) {
+    return 1;
+  }
+  if (fram_transact(database, request, &response, &error) != FRAM_OK ||
+      !response_is(&response)) {
+    return 2;
+  }
+  fram_buffer_release(&response);
+  if (fram_query(database, request, &response, &error) != FRAM_OK ||
+      !response_is(&response)) {
+    return 3;
+  }
+  fram_buffer_release(&response);
+  if (fram_snapshot(database, request, &response, &error) != FRAM_OK ||
+      !response_is(&response)) {
+    return 4;
+  }
+  if (fram_close(database, &error) != FRAM_OK || storage.closes != 1u ||
+      storage.syncs != 5u || storage.length != 20u ||
+      memcmp(storage.bytes, "OLD!BOOTTAILTAILTAIL", 20u) != 0) {
+    return 5;
+  }
+  fram_buffer_release(&response);
+  if (storage.allocations != 4u || storage.deallocations != 4u) {
+    return 6;
+  }
+  return 0;
+}
+C
+
 cat >"$scratch/host_client.c" <<'C'
 #define _POSIX_C_SOURCE 200809L
 
@@ -929,6 +1103,12 @@ cmp "$scratch/expected-exports" "$scratch/actual-exports"
   -o "$scratch/smoke"
 printf 'OLD!x' >"$scratch/fram.log"
 "$scratch/smoke" "$scratch/fram.log"
+
+"$cc" "${common_flags[@]}" "$repo/native/fram_embed.c" \
+  "$scratch/adapter.o" "$scratch/native_shim.c" \
+  "$scratch/generated_stub.c" "$scratch/embed_main.c" \
+  -o "$scratch/embed-smoke"
+"$scratch/embed-smoke" "$scratch/fram.log"
 
 "$cc" "${common_flags[@]}" "$repo/native/server_host.c" \
   "$scratch/adapter.o" "$scratch/native_shim.c" \

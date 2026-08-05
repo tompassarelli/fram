@@ -322,6 +322,8 @@ cat >"$adapter" <<'C'
 #include "server_host.h"
 #include "server_symbols.h"
 
+#include <stdlib.h>
+
 static void clear_error(char *error, size_t capacity) {
   if (capacity > 0u) {
     error[0] = '\0';
@@ -382,6 +384,19 @@ int fram_server_store_boot(const char *log_path,
   return FRAM_SERVER_FATAL;
 }
 
+int fram_server_store_boot_with_host(const char *log_path,
+                                     const char *space_id,
+                                     const fram_server_host_v1 *host,
+                                     fram_server_store **store_out,
+                                     char *error, size_t capacity) {
+  (void)log_path;
+  (void)space_id;
+  (void)host;
+  *store_out = NULL;
+  clear_error(error, capacity);
+  return FRAM_SERVER_FATAL;
+}
+
 int fram_server_store_dispatch(fram_server_store *store,
                                    const fram_server_request *request,
                                    fram_server_response **response_out,
@@ -411,6 +426,29 @@ int fram_server_codec_read_request(int fd,
   clear_error(error, capacity);
   return FRAM_SERVER_FATAL;
 }
+
+int fram_server_codec_decode_request(const uint8_t *bytes, size_t length,
+                                     fram_server_request **request_out,
+                                     char *error, size_t capacity) {
+  (void)bytes;
+  (void)length;
+  *request_out = NULL;
+  clear_error(error, capacity);
+  return FRAM_SERVER_FATAL;
+}
+
+int fram_server_codec_encode_response(const fram_server_response *response,
+                                      uint8_t **bytes_out,
+                                      size_t *length_out, char *error,
+                                      size_t capacity) {
+  (void)response;
+  *bytes_out = NULL;
+  *length_out = 0u;
+  clear_error(error, capacity);
+  return FRAM_SERVER_FATAL;
+}
+
+void fram_server_codec_release_bytes(uint8_t *bytes) { free(bytes); }
 
 int fram_server_codec_write_response(
     int fd,
@@ -499,6 +537,37 @@ host_hit="$("${build_env[@]}" "$builder" --host server \
 [[ "$(wc -l <"$calls")" == "$((calls_before_host + 1))" ]] ||
   fail "server host cache hit rebuilt the native module"
 
+calls_before_embed="$(wc -l <"$calls")"
+embed_artifact="$("${build_env[@]}" "$builder" --host embed \
+  --adapter "$adapter" "$scratch/sources/good.bclj")" ||
+  fail "embed host build failed"
+[[ -f "$embed_artifact/READY" && -f "$embed_artifact/include/fram.h" &&
+  -f "$embed_artifact/lib/libfram.a" &&
+  -f "$embed_artifact/lib/libfram.so" ]] ||
+  fail "embed host artifact omitted its public libraries"
+grep -Fqx 'native-host-abi PASS host=embed exports=7 version=1' \
+  "$embed_artifact/native-host.report.txt" ||
+  fail "embed host artifact omitted its public ABI receipt"
+cat >"$scratch/embed-consumer.c" <<'C'
+#include <fram.h>
+int main(void) { return fram_abi_version() == FRAM_ABI_VERSION ? 0 : 1; }
+C
+"${CC:-cc}" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
+  -I"$embed_artifact/include" "$scratch/embed-consumer.c" \
+  "$embed_artifact/lib/libfram.a" -o "$scratch/embed-static"
+"$scratch/embed-static" || fail "static embed library did not run"
+"${CC:-cc}" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
+  -I"$embed_artifact/include" "$scratch/embed-consumer.c" \
+  -L"$embed_artifact/lib" -Wl,-rpath,"$embed_artifact/lib" -lfram \
+  -o "$scratch/embed-shared"
+"$scratch/embed-shared" || fail "shared embed library did not run"
+embed_hit="$("${build_env[@]}" "$builder" --host embed \
+  --adapter "$adapter" "$scratch/sources/good.bclj")" ||
+  fail "embed host cache hit failed"
+[[ "$embed_hit" == "$embed_artifact" ]] || fail "embed host missed the cache"
+[[ "$(wc -l <"$calls")" == "$((calls_before_embed + 1))" ]] ||
+  fail "embed host cache hit rebuilt the native module"
+
 printf '%s\n' '(ns demo.missing-symbol)' ';; MISSING_SERVER_SYMBOL' \
   >"$scratch/sources/missing-symbol.bclj"
 if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
@@ -544,7 +613,7 @@ if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
 fi
 grep -Fq 'fram_server_codec_release_response' "$scratch/missing-export.err" ||
   fail "server host link did not name the missing ABI export"
-[[ "$(find "$scratch/cache" -mindepth 2 -maxdepth 2 -name READY | wc -l)" == "3" ]] ||
+[[ "$(find "$scratch/cache" -mindepth 2 -maxdepth 2 -name READY | wc -l)" == "4" ]] ||
   fail "failed server host link exposed a READY artifact"
 [[ -z "$(find "$scratch/cache/.tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
   fail "failed server host link left temporary artifacts"

@@ -13,11 +13,14 @@ usage() {
 Usage:
   fram-native-build --entry NS/NAME SOURCE...
   fram-native-build --host server [--adapter FILE] SOURCE...
+  fram-native-build --host embed [--adapter FILE] SOURCE...
 
 Prints the absolute immutable artifact directory on success.
-Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, and FRAM_NATIVE_CC as needed.
+Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, FRAM_NATIVE_CC, and
+FRAM_NATIVE_AR as needed.
 
-The server host defaults to native/server_generated.c beside this script.
+Native hosts default to native/server_generated.c beside this script. The
+embed host emits include/fram.h, lib/libfram.a, and lib/libfram.so.
 
 Consumer:
   FRAM_NATIVE_ARTIFACT_DIR="$(fram-native-build --entry NS/NAME SOURCE...)"
@@ -61,11 +64,11 @@ done
 entry="${entry:-${FRAM_NATIVE_ENTRY:-}}"
 case "$host" in
   "")
-    [[ -z "$adapter" ]] || die "--adapter requires --host server"
+    [[ -z "$adapter" ]] || die "--adapter requires --host server or embed"
     [[ "$entry" == */* && "$entry" != */ && "$entry" != /* ]] ||
       die "--entry must be a qualified NS/NAME"
     ;;
-  server)
+  server|embed)
     [[ -z "$entry" ]] || die "--entry and --host are mutually exclusive"
     ;;
   *) die "unsupported host: $host" ;;
@@ -86,15 +89,25 @@ beagle="$(realpath "$beagle")"
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 host_source=""
 host_header=""
-if [[ "$host" == "server" ]]; then
-  host_source="$repo/native/server_host.c"
-  host_header="$repo/native/server_host.h"
+adapter_header=""
+if [[ "$host" == "server" || "$host" == "embed" ]]; then
+  if [[ "$host" == "server" ]]; then
+    host_source="$repo/native/server_host.c"
+    host_header="$repo/native/server_host.h"
+  else
+    host_source="$repo/native/fram_embed.c"
+    host_header="$repo/native/fram.h"
+    adapter_header="$repo/native/server_host.h"
+  fi
   adapter="${adapter:-$repo/native/server_generated.c}"
-  [[ -f "$host_source" ]] || die "server host source is unavailable: $host_source"
-  [[ -f "$host_header" ]] || die "server host header is unavailable: $host_header"
+  [[ -f "$host_source" ]] || die "$host host source is unavailable: $host_source"
+  [[ -f "$host_header" ]] || die "$host host header is unavailable: $host_header"
+  [[ -z "$adapter_header" || -f "$adapter_header" ]] ||
+    die "embed adapter header is unavailable: $adapter_header"
   [[ -f "$adapter" ]] || die "server generated adapter is unavailable: $adapter"
   host_source="$(realpath "$host_source")"
   host_header="$(realpath "$host_header")"
+  [[ -z "$adapter_header" ]] || adapter_header="$(realpath "$adapter_header")"
   adapter="$(realpath "$adapter")"
 fi
 
@@ -102,6 +115,13 @@ cc_candidate="${FRAM_NATIVE_CC:-${CC:-cc}}"
 cc="$(command -v "$cc_candidate" 2>/dev/null || true)"
 [[ -n "$cc" && -x "$cc" ]] || die "C17 compiler is not executable: $cc_candidate"
 cc="$(realpath "$cc")"
+ar=""
+if [[ "$host" == "embed" ]]; then
+  ar_candidate="${FRAM_NATIVE_AR:-ar}"
+  ar="$(command -v "$ar_candidate" 2>/dev/null || true)"
+  [[ -n "$ar" && -x "$ar" ]] || die "archive tool is not executable: $ar_candidate"
+  ar="$(realpath "$ar")"
+fi
 
 cache_root="${FRAM_NATIVE_CACHE:-${XDG_CACHE_HOME:-${home:+$home/.cache}}}"
 [[ -n "$cache_root" ]] || die "set FRAM_NATIVE_CACHE, XDG_CACHE_HOME, or HOME"
@@ -132,6 +152,7 @@ if [[ -x "$(dirname "$beagle")/beagle-native-module" ]]; then
   beagle_identity+=":native-module-$(sha256sum "$(dirname "$beagle")/beagle-native-module" | sed 's/ .*//')"
 fi
 cc_identity="$cc:$($cc --version 2>&1 | sed -n '1p')"
+[[ -z "$ar" ]] || cc_identity+=":ar=$ar:$($ar --version 2>&1 | sed -n '1p')"
 builder_identity="$(sha256sum "${BASH_SOURCE[0]}" | sed 's/ .*//')"
 
 input_manifest=""
@@ -152,6 +173,10 @@ write_input_manifest() {
         "$(sha256sum "$host_source" | sed 's/ .*//')"
       printf 'host-header %q %s\n' "$host_header" \
         "$(sha256sum "$host_header" | sed 's/ .*//')"
+      if [[ -n "$adapter_header" ]]; then
+        printf 'adapter-header %q %s\n' "$adapter_header" \
+          "$(sha256sum "$adapter_header" | sed 's/ .*//')"
+      fi
       printf 'adapter %q %s\n' "$adapter" \
         "$(sha256sum "$adapter" | sed 's/ .*//')"
     fi
@@ -335,15 +360,23 @@ flock "$lock_fd"
 if [[ -e "$artifact_dir" ]]; then
   ready=""
   [[ ! -f "$artifact_dir/READY" ]] || ready="$(<"$artifact_dir/READY")"
-  [[ "$ready" == "fram-native-build/v1 $closure_hash" &&
-    -x "$artifact_dir/bin/fram-server-native" ]] ||
+  [[ "$ready" == "fram-native-build/v1 $closure_hash" ]] ||
     die "cache entry exists but is not READY: $artifact_dir"
+  if [[ "$host" == "embed" ]]; then
+    [[ -f "$artifact_dir/include/fram.h" &&
+      -f "$artifact_dir/lib/libfram.a" &&
+      -f "$artifact_dir/lib/libfram.so" ]] ||
+      die "embed cache entry omitted its public libraries: $artifact_dir"
+  else
+    [[ -x "$artifact_dir/bin/fram-server-native" ]] ||
+      die "native cache entry omitted its executable: $artifact_dir"
+  fi
   printf '%s\n' "$artifact_dir"
   exit 0
 fi
 
 stage="$(mktemp -d "$cache_root/.tmp/$closure_hash.XXXXXX")"
-mkdir -p "$stage/bin"
+mkdir -p "$stage/bin" "$stage/include" "$stage/lib"
 cp "$input_manifest" "$stage/input.manifest"
 if [[ -z "$host" ]]; then
   if ! "$beagle" native-exe \
@@ -426,24 +459,72 @@ else
   module_sources=("$stage"/module_*.c)
   shopt -u nullglob
   [[ ${#module_sources[@]} -gt 0 ]] || die "native-module omitted module_*.c"
-  if ! "$cc" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
-      -I"$stage" -I"$(dirname "$host_header")" \
-      "${module_sources[@]}" \
-      "$stage/native_shim.c" \
-      "$host_source" \
-      "$adapter" \
-      -o "$stage/bin/fram-server-native" \
-      >"$stage/native-host.log" 2>&1; then
-    sed -n '1,240p' "$stage/native-host.log" >&2
-    die "server native host link failed"
+  if [[ "$host" == "server" ]]; then
+    if ! "$cc" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
+        -I"$stage" -I"$(dirname "$host_header")" \
+        "${module_sources[@]}" \
+        "$stage/native_shim.c" \
+        "$host_source" \
+        "$adapter" \
+        -o "$stage/bin/fram-server-native" \
+        >"$stage/native-host.log" 2>&1; then
+      sed -n '1,240p' "$stage/native-host.log" >&2
+      die "server native host link failed"
+    fi
+    {
+      printf 'native-host-c17 PASS compiler=%s output=%s\n' \
+        "$cc" "$stage/bin/fram-server-native"
+      printf 'native-host-abi PASS host=server exports=8\n'
+    } >"$stage/native-host.report.txt"
+  else
+    mkdir -p "$stage/objects"
+    embed_sources=("${module_sources[@]}" "$stage/native_shim.c" \
+      "$adapter" "$host_source")
+    embed_objects=()
+    for index in "${!embed_sources[@]}"; do
+      object="$stage/objects/$index.o"
+      if ! "$cc" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
+          -fPIC -fvisibility=hidden -DFRAM_BUILDING_SHARED \
+          -I"$stage" -I"$repo/native" -c "${embed_sources[$index]}" \
+          -o "$object" >>"$stage/native-host.log" 2>&1; then
+        sed -n '1,240p' "$stage/native-host.log" >&2
+        die "embed native object compilation failed"
+      fi
+      embed_objects+=("$object")
+    done
+    if ! "$ar" rcs "$stage/lib/libfram.a" "${embed_objects[@]}" \
+        >>"$stage/native-host.log" 2>&1 ||
+       ! "$cc" -shared -pthread "${embed_objects[@]}" \
+        -o "$stage/lib/libfram.so" >>"$stage/native-host.log" 2>&1; then
+      sed -n '1,240p' "$stage/native-host.log" >&2
+      die "embed native library link failed"
+    fi
+    cp "$host_header" "$stage/include/fram.h"
+    if command -v nm >/dev/null 2>&1; then
+      nm -D --defined-only "$stage/lib/libfram.so" \
+        | awk '{print $3}' | sed -n '/^fram_/p' | sort \
+        >"$stage/embed.exports"
+      printf '%s\n' fram_abi_version fram_buffer_release fram_close fram_open \
+        fram_query fram_snapshot fram_transact | sort >"$stage/embed.expected"
+      cmp -s "$stage/embed.expected" "$stage/embed.exports" ||
+        die "embed shared library exports do not match the public ABI"
+      rm -f "$stage/embed.expected"
+    fi
+    {
+      printf 'native-host-c17 PASS compiler=%s output=%s\n' \
+        "$cc" "$stage/lib/libfram.so"
+      printf 'native-host-static PASS archiver=%s output=%s\n' \
+        "$ar" "$stage/lib/libfram.a"
+      printf 'native-host-abi PASS host=embed exports=7 version=1\n'
+    } >"$stage/native-host.report.txt"
   fi
-  {
-    printf 'native-host-c17 PASS compiler=%s output=%s\n' \
-      "$cc" "$stage/bin/fram-server-native"
-    printf 'native-host-abi PASS host=server exports=8\n'
-  } >"$stage/native-host.report.txt"
 fi
-[[ -x "$stage/bin/fram-server-native" ]] || die "native executable is missing"
+if [[ "$host" == "embed" ]]; then
+  [[ -f "$stage/include/fram.h" && -f "$stage/lib/libfram.a" &&
+    -f "$stage/lib/libfram.so" ]] || die "native embed libraries are missing"
+else
+  [[ -x "$stage/bin/fram-server-native" ]] || die "native executable is missing"
+fi
 
 after_manifest="$stage/input.after"
 write_input_manifest "$after_manifest"
