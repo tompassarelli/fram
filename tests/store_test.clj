@@ -49,6 +49,54 @@
 (def dump (store/dump-term-store ctx))
 (def history (store/semantic-history ctx))
 (def occurrences (store/operation-occurrences ctx))
+(def historical-frames-result
+  (store/transaction-frames-between-result (deref ctx) -1 5))
+
+(def corrupt-operation-store
+  (assoc (deref ctx) :operations
+         (assoc (t/termstore-operations (deref ctx)) 0
+                (assoc (first (t/termstore-operations (deref ctx)))
+                       :triple-handle 0))))
+(def corrupt-operation-frames
+  (store/transaction-frames-between-result corrupt-operation-store -1 5))
+
+(def corrupt-triple-store
+  (assoc (deref ctx) :triples
+         (assoc (t/termstore-triples (deref ctx)) 0
+                (assoc (first (t/termstore-triples (deref ctx)))
+                       :slot0 999999))))
+(def corrupt-triple-frames
+  (store/transaction-frames-between-result corrupt-triple-store -1 5))
+
+(def corrupt-history-store
+  (assoc (deref ctx) :operations
+         (assoc (t/termstore-operations (deref ctx)) 0
+                (assoc (first (t/termstore-operations (deref ctx)))
+                       :action :invalid))))
+(def corrupt-history-frames
+  (store/transaction-frames-between-result corrupt-history-store -1 5))
+
+(def replay-outcome-context (store/new-term-store "replay-outcome-space"))
+(def successful-replay
+  (store/replay-transaction-result!
+   replay-outcome-context
+   (store/transaction-frame 3 [(store/assert-operation proposition)])))
+(def replay-before-rejection (store/dump-term-store replay-outcome-context))
+(def rejected-replay
+  (store/replay-transaction-result!
+   replay-outcome-context
+   (store/transaction-frame
+    2 [(store/assert-operation
+        (t/triple "Bob" :email "bob@example.com"))])))
+(def overflow-replay
+  (store/replay-transaction-result!
+   replay-outcome-context
+   (store/transaction-frame
+    9223372036854775807
+    [(store/assert-operation (t/triple "Max" :sequence "overflow"))])))
+(def invalid-replay
+  (store/replay-transaction-result!
+   replay-outcome-context (t/->TransactionFrame -1 [])))
 
 (def restored (store/new-term-store "msa-space"))
 (store/load-term-store! restored dump)
@@ -128,6 +176,31 @@
        (set (keys first-row)))]
    ["semantic projection consists only of Triples"
     (and (every? t/triple? occurrences) (every? t/triple? history))]
+   ["typed historical frame outcomes reject corrupt state before resolution"
+    (and (store/transactionframesresult-ok historical-frames-result)
+         (= (store/transaction-frames-between (deref ctx) -1 5)
+            (store/transactionframesresult-frames historical-frames-result))
+         (= :invalid-operation-handle
+            (store/transactionframesresult-code corrupt-operation-frames))
+         (= :invalid-term-handle
+            (store/transactionframesresult-code corrupt-triple-frames))
+         (= :invalid-transaction-frame
+            (store/transactionframesresult-code corrupt-history-frames)))]
+   ["typed replay outcomes validate before mutation and preserve errors"
+    (and (store/transactionreplayresult-ok successful-replay)
+         (= 3 (store/current-sequence replay-outcome-context))
+         (not (store/transactionreplayresult-ok rejected-replay))
+         (= :nonmonotonic-transaction-sequence
+            (store/transactionreplayresult-code rejected-replay))
+         (= "fram: transaction sequence must advance within its space"
+            (store/transactionreplayresult-message rejected-replay))
+         (= replay-before-rejection
+            (store/dump-term-store replay-outcome-context))
+         (not (store/transactionreplayresult-ok overflow-replay))
+         (nil? (store/transactionreplayresult-code overflow-replay))
+         (nil? (store/transactionreplayresult-message overflow-replay))
+         (= :invalid-transaction-frame
+            (store/transactionreplayresult-code invalid-replay)))]
    ["dump carries SpaceId and the next logical sequence"
     (and (= "msa-space" (t/termstoredump-space-id dump))
          (= 6 (t/termstoredump-next-sequence dump)))]

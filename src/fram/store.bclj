@@ -10,12 +10,26 @@
 (def empty-triple-rows: (Vec t/TripleRow) [])
 (def empty-transaction-rows: (Vec t/TransactionRow) [])
 (def empty-operation-rows: (Vec t/OperationRow) [])
+(def empty-commit-operations: (Vec t/CommitOperation) [])
+(def empty-transaction-frames: (Vec t/TransactionFrame) [])
 (def empty-active-buckets: (Vec t/ActiveBucket) [])
 (def empty-term-buckets: (Vec t/TermBucket) [])
 (def term-store-dump-version: Int 2)
+(def max-transaction-sequence: Int 9223372036854775806)
 
 (defrecord TermStoreLoadResult
   [ok: Bool
+   code: Keyword?
+   message: String?])
+
+(defrecord TransactionReplayResult
+  [ok: Bool
+   code: Keyword?
+   message: String?])
+
+(defrecord TransactionFramesResult
+  [ok: Bool
+   frames: (Vec t/TransactionFrame)
    code: Keyword?
    message: String?])
 
@@ -423,6 +437,70 @@
    empty-ids
    operations))
 
+(defn- transaction-replay-ok [] -> TransactionReplayResult
+  (->TransactionReplayResult true nil nil))
+
+(defn- transaction-replay-error
+  [code: Keyword
+   message: String] -> TransactionReplayResult
+  (->TransactionReplayResult false code message))
+
+(defn- transaction-replay-unclassified-error [] -> TransactionReplayResult
+  (->TransactionReplayResult false nil nil))
+
+(defn- append-valid-transaction!
+  [ctx: (Atom t/TermStore)
+   sequence: Int
+   operations: (Vec t/CommitOperation)] -> t/TermStore
+  (let [handles: (Vec Int) (operation-handles! ctx operations)
+        store: t/TermStore (deref ctx)
+        first-operation (count (t/termstore-operations store))
+        transaction-row: t/TransactionRow
+        (t/->TransactionRow sequence first-operation (count operations))
+        with-transaction: t/TermStore
+        (assoc store :transactions
+               (conj (t/termstore-transactions store) transaction-row))
+        appended: t/TermStore
+        (loop [current: t/TermStore with-transaction ordinal 0]
+          (if (>= ordinal (count operations))
+            current
+            (let [operation: t/CommitOperation (nth operations ordinal)
+                  row: t/OperationRow
+                  (t/->OperationRow sequence ordinal
+                                    (t/commitoperation-action operation)
+                                    (nth handles ordinal))
+                  operation-position (+ first-operation ordinal)
+                  with-row: t/TermStore
+                  (assoc current :operations
+                         (conj (t/termstore-operations current) row))]
+              (recur (apply-operation-state with-row operation-position row)
+                     (inc ordinal)))))
+        final-store: t/TermStore (assoc appended :next-sequence (inc sequence))]
+    (do
+      (reset! ctx final-store)
+      final-store)))
+
+(defn- append-transaction-result!
+  [ctx: (Atom t/TermStore)
+   sequence: Int
+   operations: (Vec t/CommitOperation)] -> TransactionReplayResult
+  (let [before: t/TermStore (deref ctx)]
+    (cond
+      [(not (valid-operations? operations))
+       (transaction-replay-error
+        :invalid-transaction-frame
+        "fram: transaction requires at least one valid operation")]
+      [(< sequence (t/termstore-next-sequence before))
+       (transaction-replay-error
+        :nonmonotonic-transaction-sequence
+        "fram: transaction sequence must advance within its space")]
+      [(> sequence max-transaction-sequence)
+       (transaction-replay-unclassified-error)]
+      [:else
+       (do
+         (append-valid-transaction! ctx sequence operations)
+         (transaction-replay-ok))])))
+
 (defn- append-transaction!
   [ctx: (Atom t/TermStore)
    sequence: Int
@@ -434,37 +512,28 @@
       (if (< sequence (t/termstore-next-sequence before))
         (throw (ex-info "fram: transaction sequence must advance within its space"
                         {:type :nonmonotonic-transaction-sequence}))
-        (let [handles: (Vec Int) (operation-handles! ctx operations)
-              store: t/TermStore (deref ctx)
-              first-operation (count (t/termstore-operations store))
-              transaction-row: t/TransactionRow
-              (t/->TransactionRow sequence first-operation (count operations))
-              with-transaction: t/TermStore
-              (assoc store :transactions
-                     (conj (t/termstore-transactions store) transaction-row))
-              appended: t/TermStore
-              (loop [current: t/TermStore with-transaction ordinal 0]
-                (if (>= ordinal (count operations))
-                  current
-                  (let [operation: t/CommitOperation (nth operations ordinal)
-                        row: t/OperationRow
-                        (t/->OperationRow sequence ordinal
-                                          (t/commitoperation-action operation)
-                                          (nth handles ordinal))
-                        operation-position (+ first-operation ordinal)
-                        with-row: t/TermStore
-                        (assoc current :operations
-                               (conj (t/termstore-operations current) row))]
-                    (recur (apply-operation-state with-row operation-position row)
-                           (inc ordinal)))))
-              final-store: t/TermStore (assoc appended :next-sequence (inc sequence))]
-          (reset! ctx final-store)
-          (t/transaction-coordinate (t/termstore-space-id final-store) sequence))))))
+        (let [final-store: t/TermStore
+              (append-valid-transaction! ctx sequence operations)]
+          (t/transaction-coordinate
+           (t/termstore-space-id final-store) sequence))))))
 
 (defn commit-transaction!
   [ctx: (Atom t/TermStore)
    operations: (Vec t/CommitOperation)] -> t/Triple
   (append-transaction! ctx (t/termstore-next-sequence (deref ctx)) operations))
+
+(defn replay-transaction-result!
+  [ctx: (Atom t/TermStore)
+   frame: t/TransactionFrame] -> TransactionReplayResult
+  (if (and (t/transaction-frame? frame)
+           (and (>= (t/transactionframe-sequence frame) 0)
+                (valid-operations? (t/transactionframe-operations frame))))
+    (append-transaction-result! ctx
+                                (t/transactionframe-sequence frame)
+                                (t/transactionframe-operations frame))
+    (transaction-replay-error
+     :invalid-transaction-frame
+     "fram: invalid transaction frame")))
 
 (defn replay-transaction!
   [ctx: (Atom t/TermStore)
@@ -754,8 +823,10 @@
   (loop [transaction-position 0 operation-position 0 previous-sequence -1]
     (if (>= transaction-position (count transactions))
       (and (= operation-position (count operations))
-           (= next-sequence-value
-              (if (< previous-sequence 0) 1 (inc previous-sequence))))
+           (if (< previous-sequence 0)
+             (= next-sequence-value 1)
+             (and (> next-sequence-value 0)
+                  (= (dec next-sequence-value) previous-sequence))))
       (let [row: t/TransactionRow (nth transactions transaction-position)
             sequence (t/transactionrow-sequence row)
             first-operation (t/transactionrow-first-operation row)
@@ -763,8 +834,8 @@
         (if (and (> sequence previous-sequence)
                  (and (= first-operation operation-position)
                       (and (pos? operation-count-value)
-                           (and (<= (+ first-operation operation-count-value)
-                                    (count operations))
+                           (and (<= operation-count-value
+                                    (- (count operations) first-operation))
                                 (valid-operation-slice?
                                  operations triple-count sequence first-operation
                                  operation-count-value)))))
@@ -772,6 +843,172 @@
                  (+ operation-position operation-count-value)
                  sequence)
           false)))))
+
+(defn- transaction-frames-ok [frames: (Vec t/TransactionFrame)] -> TransactionFramesResult
+  (->TransactionFramesResult true frames nil nil))
+
+(defn- transaction-frames-error
+  [code: Keyword
+   message: String] -> TransactionFramesResult
+  (->TransactionFramesResult false empty-transaction-frames code message))
+
+(defn- operation-handle-error [store: t/TermStore] -> TransactionFramesResult?
+  (let [atoms: (Vec t/AtomRow) (t/termstore-atoms store)
+        triples: (Vec t/TripleRow) (t/termstore-triples store)
+        operations: (Vec t/OperationRow) (t/termstore-operations store)]
+    (loop [position 0]
+      (if (>= position (count operations))
+        nil
+        (let [handle (t/operationrow-triple-handle (nth operations position))
+              handle-position-value (handle-position handle)]
+          (cond
+            [(< handle 0)
+             (transaction-frames-error
+              :invalid-term-handle
+              "fram: term handle does not resolve")]
+            [(atom-handle? handle)
+             (if (< handle-position-value (count atoms))
+               (transaction-frames-error
+                :invalid-operation-handle
+                "fram: operation handle does not resolve to Triple")
+               (transaction-frames-error
+                :invalid-term-handle
+                "fram: term handle does not resolve"))]
+            [(>= handle-position-value (count triples))
+             (transaction-frames-error
+              :invalid-term-handle
+              "fram: term handle does not resolve")]
+            [:else (recur (inc position))]))))))
+
+(defn- valid-atom-rows? [rows: (Vec t/AtomRow)] -> Bool
+  (loop [position 0]
+    (if (>= position (count rows))
+      true
+      (if (valid-atom-row? (nth rows position))
+        (recur (inc position))
+        false))))
+
+(defn- history-sequence-error [transactions: (Vec t/TransactionRow)] -> TransactionFramesResult?
+  (loop [position 0 previous-sequence 0]
+    (if (>= position (count transactions))
+      nil
+      (let [sequence (t/transactionrow-sequence (nth transactions position))]
+        (cond
+          [(< sequence 0)
+           (transaction-frames-error
+            :invalid-transaction-frame
+            "fram: invalid transaction frame")]
+          [(<= sequence previous-sequence)
+           (transaction-frames-error
+            :nonmonotonic-transaction-sequence
+            "fram: transaction sequence must advance within its space")]
+          [:else (recur (inc position) sequence)])))))
+
+(defn- resolve-valid-handle
+  [store: t/TermStore
+   handle: Int] -> Any
+  (let [position (handle-position handle)]
+    (if (atom-handle? handle)
+      (atom-row-value (nth (t/termstore-atoms store) position))
+      (let [row: t/TripleRow (nth (t/termstore-triples store) position)]
+        (t/->Triple
+         (resolve-valid-handle store (t/triplerow-slot0 row))
+         (resolve-valid-handle store (t/triplerow-slot1 row))
+         (resolve-valid-handle store (t/triplerow-slot2 row)))))))
+
+(defn- resolve-valid-triple-handle
+  [store: t/TermStore
+   handle: Int] -> t/Triple
+  (let [row: t/TripleRow
+        (nth (t/termstore-triples store) (handle-position handle))]
+    (t/->Triple
+     (resolve-valid-handle store (t/triplerow-slot0 row))
+     (resolve-valid-handle store (t/triplerow-slot1 row))
+     (resolve-valid-handle store (t/triplerow-slot2 row)))))
+
+(defn- valid-transaction-frame-at
+  [store: t/TermStore
+   transaction-position: Int] -> t/TransactionFrame
+  (let [row: t/TransactionRow
+        (nth (t/termstore-transactions store) transaction-position)
+        start (t/transactionrow-first-operation row)
+        stop (+ start (t/transactionrow-operation-count row))
+        operations: (Vec t/CommitOperation)
+        (loop [position start current: (Vec t/CommitOperation) empty-commit-operations]
+          (if (>= position stop)
+            current
+            (let [operation: t/OperationRow
+                  (nth (t/termstore-operations store) position)]
+              (recur
+               (inc position)
+               (conj
+                current
+                (t/->CommitOperation
+                 (t/operationrow-action operation)
+                 (resolve-valid-triple-handle
+                  store (t/operationrow-triple-handle operation))))))))]
+    (t/->TransactionFrame (t/transactionrow-sequence row) operations)))
+
+(defn- valid-transaction-frames-between
+  [store: t/TermStore
+   lower-exclusive: Int
+   upper-inclusive: Int] -> (Vec t/TransactionFrame)
+  (let [transactions: (Vec t/TransactionRow) (t/termstore-transactions store)
+        first (first-transaction-after transactions lower-exclusive)
+        end (first-transaction-after transactions upper-inclusive)]
+    (loop [position first frames: (Vec t/TransactionFrame) empty-transaction-frames]
+      (if (>= position end)
+        frames
+        (recur (inc position)
+               (conj frames (valid-transaction-frame-at store position)))))))
+
+(defn transaction-frames-between-result
+  [store: t/TermStore
+   lower-exclusive: Int
+   upper-inclusive: Int] -> TransactionFramesResult
+  (let [atoms: (Vec t/AtomRow) (t/termstore-atoms store)
+        triples: (Vec t/TripleRow) (t/termstore-triples store)
+        transactions: (Vec t/TransactionRow) (t/termstore-transactions store)
+        operations: (Vec t/OperationRow) (t/termstore-operations store)]
+    (cond
+      [(> lower-exclusive upper-inclusive)
+       (transaction-frames-error
+        :invalid-transaction-frame
+        "fram: transaction frame range is invalid")]
+      [(not (valid-space-id? (t/termstore-space-id store)))
+       (transaction-frames-error
+        :invalid-space-id
+        "fram: TermStore requires a non-empty SpaceId")]
+      [(< (t/termstore-next-sequence store) 1)
+       (transaction-frames-error
+        :invalid-transaction-frame
+        "fram: invalid transaction frame")]
+      [:else
+       (let [handle-error: TransactionFramesResult?
+             (operation-handle-error store)]
+         (if (some? handle-error)
+           handle-error
+           (if (not (valid-atom-rows? atoms))
+             (transaction-frames-error
+              :invalid-term
+              "fram: triple contains a value outside Term")
+             (if (not (valid-triple-rows? (count atoms) triples))
+               (transaction-frames-error
+                :invalid-term-handle
+                "fram: term handle does not resolve")
+               (let [sequence-error: TransactionFramesResult?
+                     (history-sequence-error transactions)]
+                 (if (some? sequence-error)
+                   sequence-error
+                   (if (not (valid-history-rows?
+                             transactions operations (count triples)
+                             (t/termstore-next-sequence store)))
+                     (transaction-frames-error
+                      :invalid-transaction-frame
+                      "fram: invalid transaction frame")
+                     (transaction-frames-ok
+                      (valid-transaction-frames-between
+                       store lower-exclusive upper-inclusive)))))))))])))
 
 (defn- rebuild-operation-state [store: t/TermStore] -> t/TermStore
   (let [base: t/TermStore
