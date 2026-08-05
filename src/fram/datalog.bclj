@@ -77,6 +77,10 @@
 (defalias CandidateSourceValue (U CandidateSource VirtualCandidateSource))
 (defalias CandidateSources (Map String CandidateSourceValue))
 
+(defrecord CandidateSourcesResult
+  [sources: CandidateSources
+   error: QueryEvaluationError?])
+
 (def triple-relation: String "triple")
 (def occurrence-relation: String "occurrence")
 (def text-match-relation: String "text-match")
@@ -151,6 +155,19 @@
   (->QueryEvaluationError error-type code message
                           nil nil nil nil bytes maximum))
 
+(defn query-evaluation-error-from-text-error [error-value: text-index/TextError] -> QueryEvaluationError
+  (if (text-index/texterror-limit-data error-value)
+    (query-evaluation-limit-error
+     (text-index/texterror-type error-value)
+     (text-index/texterror-code error-value)
+     (text-index/texterror-message error-value)
+     (text-index/texterror-bytes error-value)
+     (text-index/texterror-maximum error-value))
+    (query-evaluation-error
+     (text-index/texterror-type error-value)
+     (text-index/texterror-code error-value)
+     (text-index/texterror-message error-value))))
+
 (defn record-query-evaluation-error!
   [context: QueryEvaluationContext
    error-value: QueryEvaluationError] -> Nil
@@ -204,14 +221,17 @@
         :maximum (queryevaluationerror-maximum error-value)}]
       [:else {:type error-type :fram/code code}])))
 
-(defn raise-query-evaluation-error! [error-value: QueryEvaluationError] -> Any
+(defn raise-query-evaluation-error [error-value: QueryEvaluationError] -> Any
   (throw (ex-info (queryevaluationerror-message error-value)
                   (query-evaluation-error-data error-value))))
+
+(defn raise-query-evaluation-error! [error-value: QueryEvaluationError] -> Any
+  (raise-query-evaluation-error error-value))
 
 (defn- query-evaluation-db-or-throw! [result: QueryEvaluationResult] -> Db
   (let [error-value (queryevaluationresult-error result)]
     (if (some? error-value)
-      (raise-query-evaluation-error! error-value)
+      (raise-query-evaluation-error error-value)
       (queryevaluationresult-db result))))
 
 (defn- query-check! [context: QueryEvaluationContext] -> Bool
@@ -485,41 +505,63 @@
       (if (contains? subst name) (get subst name) nil)
       (queryterm-value term))))
 
-(defn- missing-candidate-source! [relation: String] -> Any
-  (throw (ex-info (str "candidate source is unavailable for relation '" relation "'")
-                  {:type :fram-query-abort
-                   :code :query-text-index-unavailable})))
+(defn- missing-candidate-source-result [relation: String] -> text-search/TextSearchRowsResult
+  (text-search/query-text-rows-error
+   :query-text-index-unavailable
+   (str "candidate source is unavailable for relation '" relation "'")))
 
-(defn- virtual-source-rows!
+(defn- virtual-source-rows-result!
   [candidate: VirtualCandidateSource
    indexed: Bool
    arguments: (Vec QueryTerm)
-   subst: Substitution] -> (Vec Tuple)
+   subst: Substitution] -> text-search/TextSearchRowsResult
   (let [relation (virtualcandidatesource-relation candidate)
         source (virtualcandidatesource-source candidate)
         needle (bound-term-value (nth arguments 2) subst)]
     (cond
       [(= relation text-match-relation)
        (if indexed
-         (text-search/exact-indexed-rows source needle)
-         (text-search/exact-scan-rows source needle))]
+         (text-search/exact-indexed-rows-result source needle)
+         (text-search/exact-scan-rows-result source needle))]
       [(= relation text-phrase-relation)
        (if indexed
-         (text-search/phrase-indexed-rows! source needle)
-         (text-search/phrase-scan-rows! source needle))]
+         (text-search/phrase-indexed-rows-result! source needle)
+         (text-search/phrase-scan-rows-result! source needle))]
       [(= relation text-substring-relation)
        (if indexed
-         (text-search/substring-indexed-rows! source needle)
-         (text-search/substring-scan-rows! source needle))]
+         (text-search/substring-indexed-rows-result! source needle)
+         (text-search/substring-scan-rows-result! source needle))]
       [(= relation text-stem-relation)
        (if indexed
-         (text-search/stem-indexed-rows! source needle)
-         (text-search/stem-scan-rows! source needle))]
+         (text-search/stem-indexed-rows-result! source needle)
+         (text-search/stem-scan-rows-result! source needle))]
       [(= relation text-search-relation)
        (if indexed
-         (text-search/ranked-indexed-rows! source needle)
-         (text-search/ranked-scan-rows! source needle))]
-      [:else (missing-candidate-source! relation)])))
+         (text-search/ranked-indexed-rows-result! source needle)
+         (text-search/ranked-scan-rows-result! source needle))]
+      [:else (missing-candidate-source-result relation)])))
+
+(defn- text-rows-or-record!
+  [result: text-search/TextSearchRowsResult
+   context: QueryEvaluationContext] -> (Vec Tuple)
+  (if (text-search/rows-result-ok? result)
+    (text-search/rows-result-rows result)
+    (do
+      (record-query-evaluation-error!
+       context
+       (query-evaluation-error-from-text-error
+        (text-search/rows-result-error result)))
+      [])))
+
+(defn- virtual-source-rows!
+  [candidate: VirtualCandidateSource
+   indexed: Bool
+   arguments: (Vec QueryTerm)
+   subst: Substitution
+   context: QueryEvaluationContext] -> (Vec Tuple)
+  (text-rows-or-record!
+   (virtual-source-rows-result! candidate indexed arguments subst)
+   context))
 
 (defn- relation-results!
   [db: Db
@@ -535,10 +577,12 @@
       (cond
         [(instance? VirtualCandidateSource source)
          (unify-tuples! arguments
-                        (virtual-source-rows! source false arguments subst)
+                        (virtual-source-rows!
+                         source false arguments subst context)
                         subst context)]
         [(and (contains? text-relations relation) (nil? source))
-         (missing-candidate-source! relation)]
+         (text-rows-or-record!
+          (missing-candidate-source-result relation) context)]
         [:else
          (unify-tuples! arguments (vec (get db relation #{})) subst context)]))))
 
@@ -824,6 +868,18 @@
    text-search-relation
    (->VirtualCandidateSource text-search-relation source)})
 
+(defn build-text-candidates-result [propositions: (Vec t/Triple)] -> CandidateSourcesResult
+  (let [result: text-search/TextSearchSourceResult
+        (text-search/build-source-result
+         propositions text-index/text-index-max-bytes)
+        source (text-search/source-result-source result)]
+    (if (some? source)
+      (->CandidateSourcesResult (text-candidate-sources source) nil)
+      (->CandidateSourcesResult
+       {}
+       (query-evaluation-error-from-text-error
+        (text-search/source-result-error result))))))
+
 (defn build-text-candidates [propositions: (Vec t/Triple)] -> CandidateSources
   (text-candidate-sources
    (text-search/build-source propositions text-index/text-index-max-bytes)))
@@ -931,11 +987,12 @@
         [(instance? VirtualCandidateSource source)
          (unify-tuples-controlled!
           arguments
-          (virtual-source-rows! source true arguments subst)
+          (virtual-source-rows! source true arguments subst context)
           subst context)]
         [(nil? source)
          (if (contains? text-relations relation)
-           (missing-candidate-source! relation)
+           (text-rows-or-record!
+            (missing-candidate-source-result relation) context)
            (unify-tuples-controlled!
             arguments (vec (get db relation #{})) subst context))]
         [:else

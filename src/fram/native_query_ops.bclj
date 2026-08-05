@@ -586,13 +586,38 @@
         root)
       (if (= version head)
         root
-        (let [copy (store/new-term-store (store/space-id root))
-              frames: (Vec t/TransactionFrame)
-              (store/transaction-frames-between (deref root) -1 version)]
-          (do
-            (doseq [frame: t/TransactionFrame frames]
-              (store/replay-transaction! copy frame))
-            copy))))))
+        (let [frames-result: store/TransactionFramesResult
+              (store/transaction-frames-between-result
+               (deref root) -1 version)
+              frames-code (store/transactionframesresult-code frames-result)]
+          (if (not (store/transactionframesresult-ok frames-result))
+            (do
+              (record-read-error!
+               context
+               (if (some? frames-code)
+                 frames-code :rpc/native-query-failed)
+               "native read operation failed")
+              root)
+            (let [copy (store/new-term-store (store/space-id root))
+                  frames: (Vec t/TransactionFrame)
+                  (store/transactionframesresult-frames frames-result)]
+              (loop [remaining frames]
+                (if (empty? remaining)
+                  copy
+                  (let [replay-result: store/TransactionReplayResult
+                        (store/replay-transaction-result!
+                         copy (first remaining))
+                        replay-code
+                        (store/transactionreplayresult-code replay-result)]
+                    (if (store/transactionreplayresult-ok replay-result)
+                      (recur (rest remaining))
+                      (do
+                        (record-read-error!
+                         context
+                         (if (some? replay-code)
+                           replay-code :rpc/native-query-failed)
+                         "native read operation failed")
+                        root))))))))))))
 
 (defn requested-query-view!
   [context: ReadContext
@@ -658,14 +683,13 @@
 (defn query-rows!
   [view: QueryView
    plan: query/QueryPlan
-   timeout-ms: Int] -> query/QueryResult
+   timeout-ms: Int] -> query/QueryExecutionResult
   (let [root (queryview-root view)
         propositions: (Vec t/Triple) (store/live-propositions root)
         occurrences: (Vec t/Triple) (view-occurrences view)
-        projection: query/Projection
-        (query/project-with-occurrences propositions occurrences)
         control: d/QueryControl (d/query-control query-step-limit timeout-ms)]
-    (query/run-plan-projected-controlled! projection plan control)))
+    (query/run-plan-with-occurrences-result!
+     propositions occurrences plan control)))
 
 (defn query-row-position!
   [context: ReadContext
@@ -841,6 +865,25 @@
                   :rpc/native-query-failed
                   "native read operation failed"))
 
+(defn query-evaluation-error-response!
+  [context: ReadContext
+   request: t/RpcRequest
+   served-version: Int
+   view-version: Int
+   error-value: d/QueryEvaluationError] -> t/RpcResponse
+  (if (= :fram-query-abort
+         (d/query-evaluation-error-type error-value))
+    (error-response
+     request view-version
+     (d/query-evaluation-error-code error-value)
+     (d/query-evaluation-error-message error-value))
+    (do
+      (record-read-error!
+       context
+       (d/query-evaluation-error-code error-value)
+       "native read operation failed")
+      (placeholder-error-response request served-version))))
+
 (defn query-response!
   [context: ReadContext
    session: schema/Session
@@ -877,25 +920,38 @@
               (error-response request (queryview-version view)
                               :rpc-invalid-payload
                               "query timeout-ms must be non-negative")
-              (let [result: query/QueryResult
+              (let [execution: query/QueryExecutionResult
                     (query-rows! view plan timeout-ms)
-                    errors: (Vec query/QueryError)
-                    (query/result-errors result)]
-                (if (not (empty? errors))
-                  (let [error: query/QueryError (nth errors 0)]
-                    (error-response request (queryview-version view)
-                                    (query/error-code error)
-                                    (query/error-message error)))
-                  (let [page-result: PageResult
-                        (slice-query-page!
-                         context (query/result-rows result)
-                         (t/rpcrequest-page request)
-                         cursor (queryview-version view) digest)]
-                    (if (read-context-ok? context)
-                      (response request (queryview-version view)
-                                (pageresult-page page-result)
-                                (pageresult-payload page-result))
-                      (placeholder-error-response request head))))))))))))
+                    error-value (query/execution-error execution)
+                    result (query/execution-query-result execution)]
+                (cond
+                  [(some? error-value)
+                   (query-evaluation-error-response!
+                    context request head (queryview-version view) error-value)]
+                  [(nil? result)
+                   (do
+                     (record-read-error!
+                      context :rpc/native-query-failed
+                      "native read operation failed")
+                     (placeholder-error-response request head))]
+                  [:else
+                   (let [errors: (Vec query/QueryError)
+                         (query/result-errors result)]
+                     (if (not (empty? errors))
+                       (let [error: query/QueryError (nth errors 0)]
+                         (error-response request (queryview-version view)
+                                         (query/error-code error)
+                                         (query/error-message error)))
+                       (let [page-result: PageResult
+                             (slice-query-page!
+                              context (query/result-rows result)
+                              (t/rpcrequest-page request)
+                              cursor (queryview-version view) digest)]
+                         (if (read-context-ok? context)
+                           (response request (queryview-version view)
+                                     (pageresult-page page-result)
+                                     (pageresult-payload page-result))
+                           (placeholder-error-response request head)))))])))))))))
 
 (defn occurrences-response!
   [context: ReadContext
@@ -969,40 +1025,29 @@
         served-version (store/current-sequence (schema/store-of session))
         context: ReadContext (new-read-context)]
     (if (contains? #{:rpc/query :rpc/occurrences :rpc/validate} operation)
-      (try
-        (let [selected: t/RpcResponse
-              (cond
-                [(and (not= operation :rpc/query)
-                      (some? (t/rpcrequest-timeout-ms request)))
-                 (error-response
-                  request served-version :rpc/unexpected-timeout
-                  "timeout-ms is supported only by rpc/query")]
-                [(and (= operation :rpc/validate)
-                      (some? (t/rpcrequest-page request)))
-                 (error-response
-                  request served-version :rpc/unexpected-page
-                  "paging is supported only by rpc/query, rpc/scan, and rpc/occurrences")]
-                [(= operation :rpc/query)
-                 (query-response! context session request)]
-                [(= operation :rpc/occurrences)
-                 (occurrences-response! context session request)]
-                [:else (validate-response! context session request)])
-              read-error (read-context-error context)]
-          (if read-error
-            (->NativeReadResult
-             true
-             (error-response request served-version
-                             (readerror-code read-error)
-                             (readerror-message read-error)))
-            (->NativeReadResult true selected)))
-        (catch Exception problem
-          (let [data (ex-data problem)
-                code-value (or (:fram/code data) (:type data))
-                code (if (keyword? code-value)
-                       code-value :rpc/native-query-failed)
-                message-value (:message data)
-                message (if (string? message-value)
-                          message-value "native read operation failed")]
-            (->NativeReadResult
-             true (error-response request served-version code message)))))
+      (let [selected: t/RpcResponse
+            (cond
+              [(and (not= operation :rpc/query)
+                    (some? (t/rpcrequest-timeout-ms request)))
+               (error-response
+                request served-version :rpc/unexpected-timeout
+                "timeout-ms is supported only by rpc/query")]
+              [(and (= operation :rpc/validate)
+                    (some? (t/rpcrequest-page request)))
+               (error-response
+                request served-version :rpc/unexpected-page
+                "paging is supported only by rpc/query, rpc/scan, and rpc/occurrences")]
+              [(= operation :rpc/query)
+               (query-response! context session request)]
+              [(= operation :rpc/occurrences)
+               (occurrences-response! context session request)]
+              [:else (validate-response! context session request)])
+            read-error (read-context-error context)]
+        (if read-error
+          (->NativeReadResult
+           true
+           (error-response request served-version
+                           (readerror-code read-error)
+                           (readerror-message read-error)))
+          (->NativeReadResult true selected)))
       (->NativeReadResult false nil))))

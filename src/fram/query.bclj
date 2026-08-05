@@ -25,6 +25,9 @@
 (defrecord Projection
   [edb: d/Db
    candidates: d/CandidateSources])
+(defrecord ProjectionResult
+  [projection: Projection?
+   error: d/QueryEvaluationError?])
 (defrecord QueryError
   [code: Keyword
    message: String])
@@ -133,6 +136,12 @@
 (defn execution-error [result: QueryExecutionResult] -> d/QueryEvaluationError?
   (queryexecutionresult-error result))
 
+(defn projection-result-projection [result: ProjectionResult] -> Projection?
+  (projectionresult-projection result))
+
+(defn projection-result-error [result: ProjectionResult] -> d/QueryEvaluationError?
+  (projectionresult-error result))
+
 (defn page-ok? [page: QueryPage] -> Bool (empty? (querypage-errors page)))
 (defn page-rows [page: QueryPage] -> (Vec d/Tuple) (querypage-rows page))
 (defn page-next [page: QueryPage] -> String? (querypage-next page))
@@ -176,14 +185,45 @@
    source: d/CandidateSourceValue] -> Projection
   (project-with-candidates propositions {relation source}))
 
+(defn- projection-from-candidates-result
+  [database: d/Db
+   result: d/CandidateSourcesResult] -> ProjectionResult
+  (let [error-value (d/candidatesourcesresult-error result)]
+    (if (some? error-value)
+      (->ProjectionResult nil error-value)
+      (->ProjectionResult
+       (->Projection database (d/candidatesourcesresult-sources result)) nil))))
+
+(defn project-result [propositions: (Vec t/Triple)] -> ProjectionResult
+  (projection-from-candidates-result
+   (d/edb propositions)
+   (d/build-text-candidates-result propositions)))
+
+(defn project-with-occurrences-result
+  [propositions: (Vec t/Triple)
+   occurrences: (Vec t/Triple)] -> ProjectionResult
+  (let [database: d/Db (d/edb-with-occurrences propositions occurrences)]
+    (projection-from-candidates-result
+     database (d/build-text-candidates-result propositions))))
+
+(defn- projection-or-raise [result: ProjectionResult] -> Projection
+  (let [projection-value (projectionresult-projection result)
+        error-value (projectionresult-error result)]
+    (if (some? projection-value)
+      projection-value
+      (if (some? error-value)
+        (d/raise-query-evaluation-error error-value)
+        (throw (ex-info "query projection produced no result"
+                        {:type :query-projection-missing-result}))))))
+
 (defn project [propositions: (Vec t/Triple)] -> Projection
-  (project-with-candidates propositions (d/build-text-candidates propositions)))
+  (projection-or-raise (project-result propositions)))
 
 (defn project-with-occurrences
   [propositions: (Vec t/Triple)
    occurrences: (Vec t/Triple)] -> Projection
-  (->Projection (d/edb-with-occurrences propositions occurrences)
-                (d/build-text-candidates propositions)))
+  (projection-or-raise
+   (project-with-occurrences-result propositions occurrences)))
 
 (defn- set-union
   [left: (Set String)
@@ -1171,6 +1211,27 @@
                  count-value max-results)
                 (success-result (ordered-rows rows)))))]
             (->QueryExecutionResult result nil)))))))
+
+(defn run-plan-with-occurrences-result!
+  [propositions: (Vec t/Triple)
+   occurrences: (Vec t/Triple)
+   plan: QueryPlan
+   control: d/QueryControl?] -> QueryExecutionResult
+  (let [projection-result: ProjectionResult
+        (project-with-occurrences-result propositions occurrences)
+        projection-value (projection-result-projection projection-result)
+        error-value (projection-result-error projection-result)]
+    (cond
+      [(some? projection-value)
+       (run-plan-projected-result! projection-value plan control)]
+      [(some? error-value) (->QueryExecutionResult nil error-value)]
+      [:else
+       (->QueryExecutionResult
+        nil
+        (d/query-evaluation-error
+         :query-projection-missing-result
+         :rpc/native-query-failed
+         "query projection produced no result"))])))
 
 (defn- execution-result-or-raise! [execution: QueryExecutionResult] -> QueryResult
   (let [result (queryexecutionresult-query-result execution)
