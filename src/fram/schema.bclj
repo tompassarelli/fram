@@ -42,9 +42,35 @@
 
 (require fram.txn :as txn)
 
+(defrecord OrderedResultSnapshot
+  [space: String
+   version: Int
+   lower-exclusive: Int])
+
+(defrecord OrderedResultKey
+  [snapshot: OrderedResultSnapshot
+   operation: Keyword
+   digest: String])
+
+(defrecord OrderedResultEntry
+  [key: OrderedResultKey
+   query-rows: (Vec (Vec Any))
+   triple-rows: (Vec t/Triple)
+   bytes: Int])
+
+(defrecord OrderedResultCache
+  [entries: (Vec OrderedResultEntry)
+   snapshots: (Vec OrderedResultSnapshot)
+   bytes: Int
+   hits: Int
+   misses: Int
+   evictions: Int])
+
 (defrecord Session
   [store: (Atom t/TermStore)
-   view: (Atom rot/Rotation)])
+   view: (Atom rot/Rotation)
+   ordered-results: (Atom OrderedResultCache)
+   derived-generation: (Atom Int)])
 
 (def name-predicate: String "name")
 
@@ -66,10 +92,37 @@
 
 (def no-terms: (Vec Any) [])
 
+(def no-ordered-result-entries: (Vec OrderedResultEntry) [])
+
+(def no-ordered-result-snapshots: (Vec OrderedResultSnapshot) [])
+
+(defn empty-ordered-result-cache [] -> OrderedResultCache
+  (->OrderedResultCache no-ordered-result-entries
+                        no-ordered-result-snapshots 0 0 0 0))
+
 (defn session [ctx: (Atom t/TermStore)] -> Session
-  (->Session ctx (atom (rot/project ctx))))
+  (->Session ctx (atom (rot/project ctx))
+             (atom (empty-ordered-result-cache)) (atom 0)))
+
+(defn fork-session [s: Session] -> Session
+  (->Session (atom (deref (session-store s)))
+             (atom (deref (session-view s)))
+             (atom (deref (session-ordered-results s)))
+             (atom (deref (session-derived-generation s)))))
 
 (defn store-of [s: Session] -> (Atom t/TermStore) (session-store s))
+
+(defn ordered-results-of [s: Session] -> (Atom OrderedResultCache)
+  (session-ordered-results s))
+
+(defn derived-generation-of [s: Session] -> Int
+  (deref (session-derived-generation s)))
+
+(defn mark-derived-change! [s: Session] -> Nil
+  (do
+    (reset! (session-derived-generation s)
+            (inc (deref (session-derived-generation s))))
+    nil))
 
 (defn view [s: Session] -> rot/Rotation (deref (session-view s)))
 
