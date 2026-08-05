@@ -5,6 +5,7 @@
             [fram.kernel :as kernel]
             [fram.native-wire-codec :as native-wire]
             [fram.query :as query]
+            [fram.rotation :as rot]
             [fram.schema :as schema]
             [fram.store :as store]
             [fram.types :as t]))
@@ -20,6 +21,8 @@
 (def result-cache-per-snapshot-limit: Int 8)
 (def result-cache-byte-limit: Int 67108864)
 
+(def occurrence-relations: (Set String) #{d/occurrence-relation})
+
 (defrecord OptionValue [present: Bool value: Any])
 
 (defrecord QueryCursor
@@ -32,6 +35,7 @@
 
 (defrecord QueryView
   [root: (Atom t/TermStore)
+   rotation: rot/Rotation
    version: Int
    lower-exclusive: Int])
 
@@ -394,8 +398,24 @@
                 (mapv
                  (fn [row: d/Tuple] -> Any (rpc-query-row row)) rows))]))
 
+(defn- rpc-nonempty-occurrence-list [values: (Vec t/Triple)] -> t/Triple
+  (let [last-position (dec (count values))]
+    (loop [position (dec last-position)
+           tail: t/Triple
+           (t/triple :rpc/list (nth values last-position) :rpc/list-end)]
+      (if (< position 0)
+        tail
+        (recur (dec position)
+               (t/triple :rpc/list (nth values position) tail))))))
+
 (defn rpc-occurrences [values: (Vec t/Triple)] -> t/Triple
-  (rpc-record :rpc/occurrences [(rpc-list values)]))
+  (t/triple :rpc/occurrences
+            (if (empty? values)
+              (t/triple :rpc/list :rpc/list-end :rpc/list-end)
+              (t/triple :rpc/list
+                        (rpc-nonempty-occurrence-list values)
+                        :rpc/list-end))
+            :rpc/record))
 
 (defn query-result-weight [rows: (Vec d/Tuple)] -> Int
   (loop [index 0 total (+ 32 (* 8 (count rows)))]
@@ -444,7 +464,7 @@
   [request: t/RpcRequest
    served-version: Int
    page: t/RpcPageResponse?
-   payload: Any] -> t/RpcResponse
+   payload: t/Triple] -> t/RpcResponse
   (t/->RpcResponse (t/rpcrequest-space request)
                    (t/rpcrequest-op request)
                    served-version page nil payload))
@@ -959,38 +979,91 @@
 
 (defn query-view!
   [context: ReadContext
-   root: (Atom t/TermStore)
+   session: schema/Session
    bounds: QueryBounds] -> QueryView
-  (let [head (store/current-sequence root)
+  (let [root (schema/store-of session)
+        head (store/current-sequence root)
         selected-root
         (snapshot-root! context root (querybounds-version bounds))]
     (if (read-context-ok? context)
       (->QueryView selected-root
+                   (if (= head (querybounds-version bounds))
+                     (schema/view session)
+                     (rot/project selected-root))
                    (querybounds-version bounds)
                    (querybounds-lower-exclusive bounds))
-      (->QueryView root head -1))))
+      (->QueryView root (schema/view session) head -1))))
 
-(defn occurrence-sequence [event: t/Triple] -> Int
-  (let [coordinate: t/Triple (t/triple-slot0 event)
-        transaction: t/Triple (t/triple-slot0 coordinate)]
-    (t/triple-slot2 transaction)))
+(defn- rule-uses-any-relation? [rule: d/Rule relations: (Set String)] -> Bool
+  (if (contains? relations (d/rule-head-relation rule))
+    true
+    (let [body: (Vec d/Literal) (d/rule-body rule)]
+      (loop [position 0]
+        (if (>= position (count body))
+          false
+          (if (contains? relations
+                         (d/literal-relation (nth body position)))
+            true
+            (recur (inc position))))))))
 
-(defn view-occurrences [view: QueryView] -> (Vec t/Triple)
-  (filterv
-   (fn [event: t/Triple] -> Bool
-     (> (occurrence-sequence event) (queryview-lower-exclusive view)))
-   (store/operation-occurrences (queryview-root view))))
+(defn- stratum-uses-any-relation?
+  [rules: (Vec d/Rule)
+   relations: (Set String)] -> Bool
+  (loop [position 0]
+    (if (>= position (count rules))
+      false
+      (if (rule-uses-any-relation? (nth rules position) relations)
+        true
+        (recur (inc position))))))
+
+(defn- plan-uses-any-relation?
+  [plan: query/QueryPlan
+   relations: (Set String)] -> Bool
+  (if (contains? relations
+                 (query/findspec-relation (query/queryplan-find plan)))
+    true
+    (let [strata: (Vec (Vec d/Rule)) (query/queryplan-strata plan)]
+      (loop [stratum-position 0]
+        (if (>= stratum-position (count strata))
+          false
+          (if (stratum-uses-any-relation?
+               (nth strata stratum-position) relations)
+            true
+            (recur (inc stratum-position))))))))
 
 (defn query-rows!
   [view: QueryView
    plan: query/QueryPlan
    timeout-ms: Int] -> query/QueryExecutionResult
-  (let [root (queryview-root view)
-        propositions: (Vec t/Triple) (store/live-propositions root)
-        occurrences: (Vec t/Triple) (view-occurrences view)
+  (let [rotation (queryview-rotation view)
+        root: t/TermStore (deref (queryview-root view))
+        triple-candidate: d/CandidateSource
+        (d/rotation-candidate-source rotation)
+        occurrence-candidate: d/CandidateSource?
+        (if (plan-uses-any-relation? plan occurrence-relations)
+          (d/occurrence-candidate-source
+           root (queryview-lower-exclusive view) (queryview-version view))
+          nil)
+        text-result: d/CandidateSourcesResult
+        (if (plan-uses-any-relation? plan d/text-relations)
+          (d/build-text-candidates-result
+           (rot/propositions (rot/all-occurrences rotation)))
+          (d/->CandidateSourcesResult {} nil))
+        error-value (d/candidatesourcesresult-error text-result)
         control: d/QueryControl (d/query-control query-step-limit timeout-ms)]
-    (query/run-plan-with-occurrences-result!
-     propositions occurrences plan control)))
+    (if (some? error-value)
+      (query/->QueryExecutionResult nil error-value)
+      (let [text-candidates: d/CandidateSources
+            (d/candidatesourcesresult-sources text-result)
+            triple-candidates: d/CandidateSources
+            (assoc text-candidates d/triple-relation triple-candidate)
+            candidates: d/CandidateSources
+            (if (some? occurrence-candidate)
+              (assoc triple-candidates
+                     d/occurrence-relation occurrence-candidate)
+              triple-candidates)]
+        (query/run-plan-projected-result!
+         (query/project-with-candidates [] candidates) plan control)))))
 
 (defn query-row-position!
   [context: ReadContext
@@ -1014,11 +1087,12 @@
   (if (= 2 (count after-row))
     (let [position-value (nth after-row 0)
           expected (nth after-row 1)]
-      (if (integer? position-value)
-        (let [position: Int position-value]
+      (if (and (integer? position-value) (t/triple? expected))
+        (let [position: Int position-value
+              expected-value: t/Triple expected]
           (if (and (>= position 0)
                    (and (< position (count rows))
-                        (= expected (nth rows position))))
+                        (= expected-value (nth rows position))))
             position
             (do
               (record-read-error!
@@ -1091,7 +1165,7 @@
                   (vec (take limit (drop start rows)))
                   next-position (+ start (count selected))
                   done (>= next-position (count rows))
-                  next-cursor
+                  next-cursor: t/Term?
                   (if done
                     nil
                     (rpc-query-cursor
@@ -1132,7 +1206,7 @@
                   (vec (take limit (drop start rows)))
                   next-position (+ start (count selected))
                   done (>= next-position (count rows))
-                  next-cursor
+                  next-cursor: t/Term?
                   (if done
                     nil
                     (rpc-query-cursor
@@ -1244,7 +1318,7 @@
                   (query-rows-response!
                    context request head (querybounds-version bounds) digest
                    cursor (resultcachelookup-query-rows cached))
-                  (let [view: QueryView (query-view! context root bounds)]
+                  (let [view: QueryView (query-view! context session bounds)]
                     (if (not (read-context-ok? context))
                       (placeholder-error-response request head)
                       (let [execution: query/QueryExecutionResult
