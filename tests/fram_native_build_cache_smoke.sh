@@ -33,11 +33,20 @@ if [[ "$command" == "build" ]]; then
       *) sources+=("$1"); shift ;;
     esac
   done
-  [[ -n "$out" && ${#materializers[@]} -eq 2 &&
-    "${materializers[0]}" == "c17" && "${materializers[1]}" == "qbe" &&
-    ${#sources[@]} -gt 0 ]] || exit 96
-  printf '%s\n' 'build-c17+qbe' >>"$FAKE_NATIVE_CALLS"
+  want_qbe=0
+  case "${materializers[*]}" in
+    "c17 qbe") want_qbe=1 ;;
+    "c17") ;;
+    *) exit 96 ;;
+  esac
+  [[ -n "$out" && ${#sources[@]} -gt 0 ]] || exit 96
+  printf '%s\n' "build-$(IFS=+; printf '%s' "${materializers[*]}")" \
+    >>"$FAKE_NATIVE_CALLS"
   mkdir -p "$out"
+  # Mimic beagle-build-core: managed artifacts are wiped before the run.
+  rm -f "$out/module_0.h" "$out/module_0.c" "$out/module_0.ssa" \
+    "$out/native_shim.h" "$out/native_shim.c" "$out/report.txt" \
+    "$out/native_unicode15_data.h" "$out/UNICODE-LICENSE.txt"
   printf '%s\n' 'fake source facts' >"$out/source.facts"
   printf '%s\n' 'fake sealed Native World' >"$out/module.native-world"
   sha256sum "$out/module.native-world" | sed 's/ .*//' \
@@ -167,7 +176,8 @@ int fake_native_shim(void);
 C
     printf '%s\n' '/* fake Unicode data */' >"$out/native_unicode15_data.h"
     printf '%s\n' 'fake Unicode license' >"$out/UNICODE-LICENSE.txt"
-  printf '%s\n' 'export function w $main() { ret 0 }' >"$out/module_0.ssa"
+  [[ "$want_qbe" == 0 ]] ||
+    printf '%s\n' 'export function w $main() { ret 0 }' >"$out/module_0.ssa"
   cat >"$out/native_shim.c" <<'C'
 #include "native_shim.h"
 int fake_native_shim(void) { return 0; }
@@ -191,9 +201,14 @@ C
       'stage source-to-typed ACCEPTED' \
       'stage typed-to-native COMPLETE' \
       'native-lowering-result NativeLoweringCompleteV0'
-    printf '%s\n' \
-      'materialize-c17 OK module_0.h module_0.c' \
-      'materialize-qbe OK module_0.ssa'
+    printf '%s\n' 'materialize-c17 OK module_0.h module_0.c'
+    if [[ "$want_qbe" == 1 ]]; then
+      if [[ -n "${FAKE_QBE_REFUSAL:-}" ]]; then
+        printf 'materialize-qbe REFUSED %s\n' "$FAKE_QBE_REFUSAL"
+      else
+        printf '%s\n' 'materialize-qbe OK module_0.ssa'
+      fi
+    fi
     printf '%s\n' \
       'lowered fn_7 server-generated-abi 1 blocks' \
       'lowered fn_2 server-store-boot! 1 blocks' \
@@ -213,9 +228,20 @@ C
       'obligation-projection PASS checked-arithmetic' \
       'obligation-projection PASS legal-abi' \
       'obligation-projection PASS discharged-tokens' \
-      'obligation-projection PASS bounded-effects' \
-      'result PASS'
+      'obligation-projection PASS bounded-effects'
+    if [[ "$want_qbe" == 1 && -n "${FAKE_QBE_REFUSAL:-}" ]]; then
+      printf '%s\n' 'result FAIL materialization'
+    else
+      printf '%s\n' 'result PASS'
+    fi
   } >"$out/report.txt"
+  # A refused sibling makes beagle exit before persisting C17's artifacts.
+  if [[ "$want_qbe" == 1 && -n "${FAKE_QBE_REFUSAL:-}" ]]; then
+    rm -f "$out/module_0.h" "$out/module_0.c" "$out/native_shim.h" \
+      "$out/native_shim.c" "$out/native_unicode15_data.h" \
+      "$out/UNICODE-LICENSE.txt"
+    exit 1
+  fi
   exit 0
 fi
 exit 97
@@ -224,11 +250,14 @@ chmod +x "$scratch/tool/bin/beagle"
 
 printf '%s\n' '#lang beagle' '(ns demo.main)' '(defn start [] -> Nil nil)' \
   >"$scratch/sources/good.bgl"
+ledger="$scratch/qbe-frontier.ledger"
+printf '%s\n' '# scratch QBE frontier ledger' >"$ledger"
 build_env=(
   env
   FRAM_BEAGLE="$scratch/tool/bin/beagle"
   FRAM_NATIVE_CACHE="$scratch/cache"
   FRAM_NATIVE_CC="${CC:-cc}"
+  FRAM_QBE_FRONTIER_LEDGER="$ledger"
   FAKE_NATIVE_CALLS="$calls"
 )
 
@@ -385,6 +414,8 @@ void fram_server_codec_release_response(fram_server_response *response) {
 }
 C
 
+cp "$adapter" "$scratch/server_generated.pristine.c"
+
 calls_before_host="$(wc -l <"$calls")"
 host_artifact="$("${build_env[@]}" "$builder" --host server \
   --adapter "$adapter" "$scratch/sources/good.bgl")" ||
@@ -538,5 +569,83 @@ grep -Fq 'fram_server_codec_release_response' "$scratch/missing-export.err" ||
 [[ -z "$(find "$scratch/cache/.worlds/.tmp" -mindepth 1 -maxdepth 1 \
   -print -quit)" ]] ||
   fail "failed Native World build left temporary artifacts"
+
+cp "$scratch/server_generated.pristine.c" "$adapter"
+
+grep -Fqx 'native-qbe-frontier OK scope=fram-native-server ledger=clean' \
+  "$host_artifact/native-host.report.txt" ||
+  fail "clean QBE run did not leave a frontier receipt in the host report"
+[[ -f "$host_artifact/qbe-frontier.txt" &&
+  -f "$host_artifact/qbe-probe.report.txt" ]] ||
+  fail "artifact omitted its QBE frontier receipt"
+grep -Fqx 'native-qbe-frontier OK scope=fram-native-server ledger=clean' \
+  "$embed_artifact/native-host.report.txt" ||
+  fail "embed host report omitted its QBE frontier receipt"
+
+# A recorded refusal that no longer reproduces fails until it is deleted.
+printf '%s\n' \
+  "$(printf 'fram-native-server\tshape-outside-slice\t-')" >>"$ledger"
+if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
+    "$scratch/sources/good.bgl" >"$scratch/stale.out" 2>"$scratch/stale.err"; then
+  fail "stale QBE frontier entry did not fail the build"
+fi
+grep -Fq 'QBE frontier ledger is STALE for scope fram-native-server' \
+  "$scratch/stale.err" || fail "stale QBE frontier entry failed for the wrong reason"
+printf '%s\n' '# scratch QBE frontier ledger' >"$ledger"
+
+# An unrecorded refusal fails: the frontier may not grow.
+qbe_env=("${build_env[@]}"
+  FAKE_QBE_REFUSAL='unsupported native value-semantics op: hash')
+printf '%s\n' '#lang beagle' '(ns demo.refused)' '(defn start [] -> Nil nil)' \
+  >"$scratch/sources/refused.bgl"
+if "${qbe_env[@]}" "$builder" --host server --adapter "$adapter" \
+    "$scratch/sources/refused.bgl" \
+    >"$scratch/grew.out" 2>"$scratch/grew.err"; then
+  fail "unrecorded QBE refusal did not fail the build"
+fi
+grep -Fq 'QBE frontier GREW for scope fram-native-server' "$scratch/grew.err" ||
+  fail "unrecorded QBE refusal failed for the wrong reason"
+grep -Fq 'unsupported-value-semantics	hash' "$scratch/grew.err" ||
+  fail "QBE frontier failure did not name the observed refusal key"
+
+# Recorded, the same refusal builds — and C17's artifacts survive it.
+printf '%s\n' \
+  "$(printf 'fram-native-server\tunsupported-value-semantics\thash')" >>"$ledger"
+calls_before_refusal="$(wc -l <"$calls")"
+refused_artifact="$("${qbe_env[@]}" "$builder" --host server \
+  --adapter "$adapter" "$scratch/sources/refused.bgl")" ||
+  fail "recorded QBE refusal blocked a complete C17 build"
+[[ -f "$refused_artifact/module_0.c" && -f "$refused_artifact/module_0.h" &&
+  -f "$refused_artifact/native_shim.c" &&
+  -x "$refused_artifact/bin/fram-server-native" ]] ||
+  fail "QBE refusal discarded C17's artifacts"
+[[ ! -f "$refused_artifact/module_0.ssa" ]] ||
+  fail "refused QBE run published a module_0.ssa"
+grep -Fqx 'native-qbe-frontier REFUSED scope=fram-native-server ledger=unsupported-value-semantics/hash' \
+  "$refused_artifact/native-host.report.txt" ||
+  fail "refused QBE run did not attribute its frontier in the host report"
+grep -Fq 'materialize-qbe REFUSED unsupported native value-semantics op: hash' \
+  "$refused_artifact/qbe-probe.report.txt" ||
+  fail "refused QBE run did not preserve the probe report"
+[[ "$(sed -n "$((calls_before_refusal + 1)),\$p" "$calls" | head -2 | tr '\n' ' ')" == \
+  "build-c17+qbe build-c17 " ]] ||
+  fail "QBE refusal did not recover C17 through a second materialization"
+
+# --regen-qbe-frontier records the observed frontier for a world scope.
+printf '%s\n' '# scratch QBE frontier ledger' >"$ledger"
+"${qbe_env[@]}" "$builder" --host world --entry demo.main/start \
+  "$scratch/sources/refused.bgl" >"$scratch/regen.out" 2>"$scratch/regen.err" &&
+  fail "unrecorded QBE refusal did not fail --host world"
+"${qbe_env[@]}" "$builder" --host world --regen-qbe-frontier \
+  --entry demo.main/start "$scratch/sources/refused.bgl" \
+  >"$scratch/regen.out" 2>"$scratch/regen.err" ||
+  fail "--regen-qbe-frontier failed"
+grep -Fq "$(printf 'demo.main/start\tunsupported-value-semantics\thash')" \
+  "$ledger" || fail "--regen-qbe-frontier did not record the observed refusal"
+world_dir="$("${qbe_env[@]}" "$builder" --host world --entry demo.main/start \
+  "$scratch/sources/refused.bgl")" ||
+  fail "recorded QBE refusal blocked --host world"
+[[ -f "$world_dir/module_0.c" && -f "$world_dir/READY" ]] ||
+  fail "--host world did not persist the C17 projection"
 
 echo "fram native build cache smoke: PASS"

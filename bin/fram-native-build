@@ -13,19 +13,35 @@ usage() {
 Usage:
   fram-native-build --host server [--adapter FILE] SOURCE.bgl...
   fram-native-build --host embed [--adapter FILE] SOURCE.bgl...
+  fram-native-build --host world [--entry NS/NAME]... SOURCE.bgl...
+  fram-native-build --host world --regen-qbe-frontier [--entry NS/NAME]... SOURCE.bgl...
 
 Prints the absolute immutable artifact directory on success.
-Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, FRAM_NATIVE_CC, and
-FRAM_NATIVE_AR as needed.
+Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, FRAM_NATIVE_CC,
+FRAM_NATIVE_AR, and FRAM_QBE_FRONTIER_LEDGER as needed.
 
 Native hosts default to native/server_generated.c beside this script. The
-embed host emits include/fram.h, lib/libfram.a, and lib/libfram.so.
+embed host emits include/fram.h, lib/libfram.a, and lib/libfram.so. The world
+host stops at the sealed Native World and its C17 projection, emits no C host,
+and is how a source slice narrower than the server ABI is taken through the
+same release gate.
+
+RELEASE GATE
+  REQUIRED (build fails)  complete C17 materialization, all seven obligation
+                          projections PASS, no pending lowering work, and for
+                          server/embed a clean C17 host link.
+  RATCHETED (build fails) the QBE frontier: an unrecorded refusal fails, and a
+                          recorded refusal that no longer reproduces fails
+                          until its native/qbe-frontier.ledger line is deleted.
+                          --regen-qbe-frontier rewrites this scope's line.
 USAGE
 }
 
 host=""
 adapter=""
 sources=()
+entries=()
+regen_qbe_frontier=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host)
@@ -37,6 +53,15 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 && -z "$adapter" ]] || die "--adapter needs one source path"
       adapter="$2"
       shift 2
+      ;;
+    --entry)
+      [[ $# -ge 2 ]] || die "--entry needs one NS/NAME"
+      entries+=("$2")
+      shift 2
+      ;;
+    --regen-qbe-frontier)
+      regen_qbe_frontier=1
+      shift
       ;;
     --help|-h)
       usage
@@ -52,11 +77,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 case "$host" in
-  server|embed) ;;
-  "") die "--host must be server or embed" ;;
+  server|embed|world) ;;
+  "") die "--host must be server, embed, or world" ;;
   *) die "unsupported host: $host" ;;
 esac
 [[ ${#sources[@]} -gt 0 ]] || die "provide the dependency-first source closure"
+[[ ${#entries[@]} -eq 0 || "$host" == "world" ]] ||
+  die "--entry overrides the server ABI entry set and needs --host world"
+[[ "$regen_qbe_frontier" == 0 || "$host" == "world" ]] ||
+  die "--regen-qbe-frontier needs --host world"
 
 for command in awk cmp flock git grep mktemp realpath sed sha256sum; do
   command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
@@ -167,17 +196,31 @@ native_server_entries=(
   fram.native-server/server-codec-release-request
   fram.native-server/server-codec-release-response
 )
+# The QBE frontier ledger is keyed by the entry set, because that is what
+# selects the Native World QBE judges; the default set gets a stable short name.
+if [[ ${#entries[@]} -eq 0 ]]; then
+  world_entries=("${native_server_entries[@]}")
+  world_scope="fram-native-server"
+else
+  mapfile -t world_entries < <(printf '%s\n' "${entries[@]}" | LC_ALL=C sort -u)
+  world_scope="$(IFS='+'; printf '%s' "${world_entries[*]}")"
+fi
+[[ "$world_scope" != *[[:space:]]* ]] ||
+  die "entry names must not contain whitespace: $world_scope"
 native_server_entry_args=()
-for native_server_entry in "${native_server_entries[@]}"; do
+for native_server_entry in "${world_entries[@]}"; do
   native_server_entry_args+=(--entry "$native_server_entry")
 done
+
+qbe_ledger="${FRAM_QBE_FRONTIER_LEDGER:-$repo/native/qbe-frontier.ledger}"
 
 write_world_input_manifest() {
   local destination="$1" index source
   {
     printf 'fram-native-world-input/v1\n%s\n%s\nconfiguration=profile=3\n' \
       "$builder_identity" "$beagle_identity"
-    for native_server_entry in "${native_server_entries[@]}"; do
+    printf 'scope=%s\n' "$world_scope"
+    for native_server_entry in "${world_entries[@]}"; do
       printf 'entry=%s\n' "$native_server_entry"
     done
     for index in "${!normalized_sources[@]}"; do
@@ -206,8 +249,10 @@ write_input_manifest() {
   } >"$destination"
 }
 
+# The release requirement: C17 completeness plus all seven obligations, which
+# carry the target-neutrality contract (valid-ssa, closed-layouts, legal-abi).
 validate_native_report() {
-  local report_path="$1" materializer="$2" line
+  local report_path="$1" line
   local -a required_lines=(
     "stage source-seal ACCEPTED"
     "stage source-to-typed ACCEPTED"
@@ -221,13 +266,9 @@ validate_native_report() {
     "obligation-projection PASS legal-abi"
     "obligation-projection PASS discharged-tokens"
     "obligation-projection PASS bounded-effects"
+    "materialize-c17 OK module_0.h module_0.c"
   )
   [[ -f "$report_path" ]] || die "native build omitted $report_path"
-  case "$materializer" in
-    c17) required_lines+=("materialize-c17 OK module_0.h module_0.c") ;;
-    qbe) required_lines+=("materialize-qbe OK module_0.ssa") ;;
-    *) die "unknown report materializer: $materializer" ;;
-  esac
   for line in "${required_lines[@]}"; do
     [[ "$(grep -Fxc -- "$line" "$report_path" || true)" == "1" ]] ||
       die "native report must contain exactly once: $line"
@@ -237,6 +278,121 @@ validate_native_report() {
     die "native report must contain exactly seven passing obligations"
   ! grep -q '^pending ' "$report_path" ||
     die "native report contains pending lowering work"
+}
+
+# Keys must name the refused construct, never anything that churns per build.
+classify_qbe_refusal() {
+  local detail="$1"
+  case "$detail" in
+    "unsupported native value-semantics op: "*)
+      printf 'unsupported-value-semantics\t%s\n' "${detail#unsupported native value-semantics op: }" ;;
+    "QBE codec primitive is unsupported: "*)
+      printf 'codec-primitive\t%s\n' "${detail#QBE codec primitive is unsupported: }" ;;
+    "QBE Unicode text primitive is unsupported: "*)
+      printf 'unicode-primitive\t%s\n' "${detail#QBE Unicode text primitive is unsupported: }" ;;
+    "QBE checked integer division is unsupported: "*)
+      printf 'checked-division\t%s\n' "${detail#QBE checked integer division is unsupported: }" ;;
+    "QBE socket extern ABI is unsupported:"*) printf 'socket-extern\t-\n' ;;
+    "QBE monotonic clock extern ABI is unsupported:"*) printf 'clock-extern\t-\n' ;;
+    "QBE stdout extern ABI is unsupported:"*) printf 'stdout-extern\t-\n' ;;
+    "QBE host extern ABI is unsupported:"*) printf 'host-extern\t-\n' ;;
+    "QBE vector sort is unsupported:"*) printf 'vector-sort\t-\n' ;;
+    "native world uses a shape outside the QBE materializer's slice")
+      printf 'shape-outside-slice\t-\n' ;;
+    "native world contains a Text or Keyword literal outside the QBE literal slice")
+      printf 'literal-outside-slice\t-\n' ;;
+    "native world is not sealed: validation obligations failed")
+      printf 'world-not-sealed\t-\n' ;;
+    "module index must be nonnegative") printf 'module-index\t-\n' ;;
+    # Unrecognised refusals key on their own text so they fail the ratchet.
+    *) printf 'unclassified\t%s\n' "$detail" ;;
+  esac
+}
+
+write_qbe_frontier() {
+  local report_path="$1" destination="$2"
+  local -a qbe_lines=()
+  local detail key class
+  mapfile -t qbe_lines < <(grep '^materialize-qbe ' "$report_path" || true)
+  [[ ${#qbe_lines[@]} -eq 1 ]] ||
+    die "native report must carry exactly one materialize-qbe line (found ${#qbe_lines[@]}); QBE must always run and report"
+  case "${qbe_lines[0]}" in
+    "materialize-qbe OK module_0.ssa")
+      printf 'qbe-frontier/v1\nscope\t%s\nstatus\tOK\n' "$world_scope" \
+        >"$destination"
+      ;;
+    "materialize-qbe REFUSED "*)
+      detail="${qbe_lines[0]#materialize-qbe REFUSED }"
+      key="$(classify_qbe_refusal "$detail")"
+      class="${key%%$'\t'*}"
+      printf 'qbe-frontier/v1\nscope\t%s\nstatus\tREFUSED\nkey\t%s\ndetail\t%s\n' \
+        "$world_scope" "$key" "$detail" >"$destination"
+      [[ -n "$class" ]] || die "QBE refusal classified to an empty key"
+      ;;
+    *)
+      die "unreadable materialize-qbe line: ${qbe_lines[0]}"
+      ;;
+  esac
+}
+
+# QBE stays visible in the host receipt; an invisible QBE is worse than a red one.
+write_qbe_frontier_receipt() {
+  local status key
+  status="$(awk -F'\t' '$1 == "status" { print $2 }' "$stage/qbe-frontier.txt")"
+  key="$(awk -F'\t' '$1 == "key" { print $2 "/" $3 }' "$stage/qbe-frontier.txt")"
+  printf 'native-qbe-frontier %s scope=%s ledger=%s\n' \
+    "$status" "$world_scope" "${key:-clean}"
+}
+
+# Two-sided and shrink-only: a new refusal fails, a stale one fails until deleted.
+check_qbe_frontier() {
+  local frontier_path="$1" status observed recorded
+  local -a recorded_rows=()
+  status="$(awk -F'\t' '$1 == "status" { print $2 }' "$frontier_path")"
+  observed="$(awk -F'\t' '$1 == "key" { print $2 "\t" $3 }' "$frontier_path")"
+  [[ -f "$qbe_ledger" ]] ||
+    die "QBE frontier ledger is unavailable: $qbe_ledger"
+  mapfile -t recorded_rows < <(
+    awk -F'\t' -v scope="$world_scope" \
+      '/^[^#]/ && NF >= 3 && $1 == scope { print $2 "\t" $3 }' "$qbe_ledger"
+  )
+  [[ ${#recorded_rows[@]} -le 1 ]] ||
+    die "QBE frontier ledger records ${#recorded_rows[@]} refusals for scope $world_scope; QBE reports at most one per world"
+  recorded="${recorded_rows[0]:-}"
+
+  if [[ "$regen_qbe_frontier" == 1 ]]; then
+    local regenerated
+    regenerated="$(mktemp "$cache_root/.tmp/ledger.XXXXXX")"
+    awk -F'\t' -v scope="$world_scope" \
+      '/^#/ || NF < 3 || $1 != scope' "$qbe_ledger" >"$regenerated"
+    [[ "$status" != "REFUSED" ]] ||
+      printf '%s\t%s\n' "$world_scope" "$observed" >>"$regenerated"
+    cat "$regenerated" >"$qbe_ledger"
+    rm -f "${regenerated:?}"
+    if [[ "$status" == "REFUSED" ]]; then
+      echo "qbe frontier: recorded $world_scope -> $observed" >&2
+    else
+      echo "qbe frontier: cleared $world_scope (QBE materializes it)" >&2
+    fi
+    return 0
+  fi
+
+  if [[ "$status" == "OK" ]]; then
+    [[ -z "$recorded" ]] || die "$(printf '%s\n%s\n%s' \
+      "QBE frontier ledger is STALE for scope $world_scope: QBE now materializes it." \
+      "  recorded: $recorded" \
+      "  delete that line from $qbe_ledger (or rerun with --regen-qbe-frontier).")"
+    return 0
+  fi
+  [[ -n "$recorded" ]] || die "$(printf '%s\n%s\n%s\n%s' \
+    "QBE frontier GREW for scope $world_scope: an unrecorded QBE refusal." \
+    "  observed: $observed" \
+    "  QBE is the anti-C-capture check; a new refusal means this world left" \
+    "  QBE's slice. Fix it, or record it in $qbe_ledger with a justification.")"
+  [[ "$recorded" == "$observed" ]] || die "$(printf '%s\n%s\n%s' \
+    "QBE frontier MOVED for scope $world_scope." \
+    "  recorded: $recorded" \
+    "  observed: $observed")"
 }
 
 write_server_symbols() {
@@ -412,27 +568,65 @@ flock "$world_lock_fd"
 if [[ ! -e "$world_dir" ]]; then
   world_stage="$(mktemp -d "$world_cache/.tmp/$world_closure_hash.XXXXXX")"
   cp "$world_input_manifest" "$world_stage/input.manifest"
-  if ! "$beagle" build --materializer c17 --materializer qbe \
+  combined_status=0
+  "$beagle" build --materializer c17 --materializer qbe \
       --out "$world_stage" \
       "${native_server_entry_args[@]}" \
       -- \
       "${normalized_sources[@]}" \
-      >"$world_stage/materialize.log" 2>&1; then
-    sed -n '1,240p' "$world_stage/materialize.log" >&2
-    die "Beagle Native World materialization failed"
+      >"$world_stage/materialize.log" 2>&1 || combined_status=$?
+  # beagle-build-core wipes managed artifacts up front and, on any materializer
+  # failure, exits before copying the successful ones out (:118-133, :713-720).
+  [[ -f "$world_stage/report.txt" ]] ||
+    die "$(sed -n '1,240p' "$world_stage/materialize.log"; echo "Beagle Native World materialization produced no report")"
+  cp "$world_stage/report.txt" "$world_stage/qbe-probe.report.txt"
+  combined_world_digest=""
+  [[ ! -f "$world_stage/module.native-world" ]] ||
+    combined_world_digest="$(sha256sum "$world_stage/module.native-world" | sed 's/ .*//')"
+  if [[ "$combined_status" -ne 0 ]]; then
+    # Recover C17's output from the sibling refusal; any other failure is fatal.
+    grep -Fxq 'materialize-c17 OK module_0.h module_0.c' \
+      "$world_stage/qbe-probe.report.txt" &&
+      grep -Fxq 'result FAIL materialization' \
+        "$world_stage/qbe-probe.report.txt" &&
+      grep -q '^materialize-qbe REFUSED ' "$world_stage/qbe-probe.report.txt" || {
+        sed -n '1,240p' "$world_stage/materialize.log" >&2
+        die "Beagle Native World materialization failed"
+      }
+    "$beagle" build --materializer c17 \
+        --out "$world_stage" \
+        "${native_server_entry_args[@]}" \
+        -- \
+        "${normalized_sources[@]}" \
+        >"$world_stage/materialize.log" 2>&1 || {
+      sed -n '1,240p' "$world_stage/materialize.log" >&2
+      die "C17 recovery materialization failed after a QBE refusal"
+    }
   fi
+  write_qbe_frontier "$world_stage/qbe-probe.report.txt" \
+    "$world_stage/qbe-frontier.txt"
   for artifact in source.facts module.native-world module.native-world.sha256 \
       module_0.h module_0.c native_shim.h native_shim.c \
-      native_unicode15_data.h UNICODE-LICENSE.txt module_0.ssa report.txt; do
+      native_unicode15_data.h UNICODE-LICENSE.txt report.txt; do
     [[ -f "$world_stage/$artifact" ]] ||
-      die "combined materialization omitted $artifact"
+      die "C17 materialization omitted $artifact"
   done
-  validate_native_report "$world_stage/report.txt" c17
-  validate_native_report "$world_stage/report.txt" qbe
-  write_server_symbols "$world_stage/report.txt" "$world_stage/module_0.h" \
-    "$world_stage/server_symbols.validate"
-  rm -f "$world_stage/server_symbols.validate"
+  validate_native_report "$world_stage/report.txt"
+  [[ "$host" == "world" ]] ||
+    { write_server_symbols "$world_stage/report.txt" "$world_stage/module_0.h" \
+        "$world_stage/server_symbols.validate"
+      rm -f "$world_stage/server_symbols.validate"; }
   native_world_digest="$(sha256sum "$world_stage/module.native-world" | sed 's/ .*//')"
+  # The frontier receipt only attributes anything if QBE judged this world.
+  [[ "$combined_world_digest" == "$native_world_digest" ]] ||
+    die "QBE and C17 materialized different Native Worlds; the frontier receipt cannot be attributed"
+  if [[ "$(awk -F'\t' '$1 == "status" { print $2 }' "$world_stage/qbe-frontier.txt")" == "OK" ]]; then
+    [[ -f "$world_stage/module_0.ssa" ]] ||
+      die "QBE reported OK but omitted module_0.ssa"
+  else
+    rm -f "$world_stage/module_0.ssa"
+  fi
+  check_qbe_frontier "$world_stage/qbe-frontier.txt"
   [[ "$(<"$world_stage/module.native-world.sha256")" == "$native_world_digest" ]] ||
     die "materializer Native World digest does not match its bytes"
   write_world_input_manifest "$world_stage/input.after"
@@ -456,8 +650,16 @@ native_world_digest="$(sha256sum "$world_dir/module.native-world" | sed 's/ .*//
   "$(<"$world_dir/READY")" == \
     "fram-native-world/v1 $world_closure_hash $native_world_digest" ]] ||
   die "Native World cache entry failed its digest receipt: $world_dir"
-validate_native_report "$world_dir/report.txt" c17
-validate_native_report "$world_dir/report.txt" qbe
+validate_native_report "$world_dir/report.txt"
+[[ -f "$world_dir/qbe-frontier.txt" && -f "$world_dir/qbe-probe.report.txt" ]] ||
+  die "Native World cache entry omitted its QBE frontier receipt: $world_dir"
+check_qbe_frontier "$world_dir/qbe-frontier.txt"
+[[ "$regen_qbe_frontier" == 0 ]] || exit 0
+
+if [[ "$host" == "world" ]]; then
+  printf '%s\n' "$world_dir"
+  exit 0
+fi
 
 input_manifest="$(mktemp "$cache_root/.tmp/input.XXXXXX")"
 write_input_manifest "$input_manifest"
@@ -493,11 +695,13 @@ cp "$input_manifest" "$stage/input.manifest"
 for artifact in source.facts module.native-world module.native-world.sha256 \
     module_0.h module_0.c native_shim.h native_shim.c \
     native_unicode15_data.h UNICODE-LICENSE.txt report.txt \
-    module_0.ssa materialize.log; do
+    qbe-frontier.txt qbe-probe.report.txt materialize.log; do
   [[ -f "$world_dir/$artifact" ]] ||
     die "Native World cache entry omitted $artifact"
   cp "$world_dir/$artifact" "$stage/$artifact"
 done
+[[ ! -f "$world_dir/module_0.ssa" ]] ||
+  cp "$world_dir/module_0.ssa" "$stage/module_0.ssa"
 
 report="$stage/report.txt"
 
@@ -525,6 +729,7 @@ if [[ "$host" == "server" ]]; then
     printf 'native-host-c17 PASS compiler=%s output=%s\n' \
       "$cc" "$stage/bin/fram-server-native"
     printf 'native-host-abi PASS host=server exports=8\n'
+    write_qbe_frontier_receipt
   } >"$stage/native-host.report.txt"
 else
   mkdir -p "$stage/objects"
@@ -566,6 +771,7 @@ else
     printf 'native-host-static PASS archiver=%s output=%s\n' \
       "$ar" "$stage/lib/libfram.a"
     printf 'native-host-abi PASS host=embed exports=7 version=1\n'
+    write_qbe_frontier_receipt
   } >"$stage/native-host.report.txt"
 fi
 if [[ "$host" == "embed" ]]; then
