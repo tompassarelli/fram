@@ -22,6 +22,12 @@
   [bytes: (U Nil (Vec Int))
    error: String?])
 
+(defrecord TermDigestResult
+  [ok: Bool
+   digest: String
+   code: Keyword
+   message: String])
+
 (defrecord Decoder
   [bytes: (Vec Int)
    position: (Atom Int)
@@ -436,15 +442,24 @@
   (append-term-limited! encoder term depth rpc-v1-max-string-bytes
                         rpc-v1-max-term-nodes rpc-v1-max-term-depth))
 
-(defn canonical-term-sha256! [term: Any] -> String
+(defn canonical-term-sha256-result! [term: Any] -> TermDigestResult
   (let [encoder (->Encoder (empty-byte-cell) (atom 0) (empty-error-cell))]
     (append-term! encoder term 0)
     (let [error (deref (encoder-error encoder))]
       (if error
-        (throw (ex-info error {:type :term-codec-encode-failed
-                               :fram/code :term-codec-encode-failed
-                               :message error}))
-        (sha256-bytes (deref (encoder-bytes encoder)))))))
+        (->TermDigestResult false "" :term-codec-encode-failed error)
+        (->TermDigestResult true
+                            (sha256-bytes (deref (encoder-bytes encoder)))
+                            :rpc/none "")))))
+
+(defn canonical-term-sha256! [term: Any] -> String
+  (let [result: TermDigestResult (canonical-term-sha256-result! term)]
+    (if (termdigestresult-ok result)
+      (termdigestresult-digest result)
+      (let [message (termdigestresult-message result)]
+        (throw (ex-info message {:type (termdigestresult-code result)
+                                 :fram/code (termdigestresult-code result)
+                                 :message message}))))))
 
 (defn read-keyword-term!
   [decoder: Decoder
