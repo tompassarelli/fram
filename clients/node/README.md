@@ -138,7 +138,7 @@ FRAMRPC v1 set:
 - `scan`, `query`, `occurrences`
 - `leaseAcquire`, `leaseRenew`, `leaseRelease`, `leaseCheck`
 
-Daemon errors throw `FramRpcError` with `code`, `retryable`, `detail`,
+Server errors throw `FramRpcError` with `code`, `retryable`, `detail`,
 `servedVersion`, and operation identity. Transport and malformed-frame errors
 use `FramTransportError` and `FramProtocolError`.
 

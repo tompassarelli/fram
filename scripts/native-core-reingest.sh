@@ -21,17 +21,17 @@ SPACE_ID="native-core-reingest-scratch-$$"
 CODE_LOG="$SCRATCH_ROOT/code.framlog"
 SCRATCH_SRC="$SCRATCH_ROOT/src"
 MANIFEST="$SCRATCH_ROOT/modules.tsv"
-DAEMON_PID=""
+SERVER_PID=""
 
 reap() {
   local status=$?
-  if [[ -n "$DAEMON_PID" ]] && kill -0 "$DAEMON_PID" 2>/dev/null; then
-    kill "$DAEMON_PID" 2>/dev/null || true
+  if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+    kill "$SERVER_PID" 2>/dev/null || true
     for _ in $(seq 1 40); do
-      kill -0 "$DAEMON_PID" 2>/dev/null || break
+      kill -0 "$SERVER_PID" 2>/dev/null || break
       sleep 0.25
     done
-    kill -9 "$DAEMON_PID" 2>/dev/null || true
+    kill -9 "$SERVER_PID" 2>/dev/null || true
   fi
   if [[ "${FRAM_REINGEST_KEEP:-0}" != "1" ]]; then
     rm -rf "${SCRATCH_ROOT:?}"
@@ -92,10 +92,10 @@ echo "  [2/3] booting scratch server on :$PORT"
 ( cd "$HERE" && exec env -u FRAM_TELEMETRY_LOG BEAGLE_HOME="$BEAGLE_HOME" \
     bin/fram-server serve "$PORT" "$CODE_LOG" "$SPACE_ID" \
     >"$SCRATCH_ROOT/server-$PORT.log" 2>&1 ) &
-DAEMON_PID=$!
+SERVER_PID=$!
 for _ in $(seq 1 480); do
   grep -q "listening on" "$SCRATCH_ROOT/server-$PORT.log" 2>/dev/null && break
-  kill -0 "$DAEMON_PID" 2>/dev/null || {
+  kill -0 "$SERVER_PID" 2>/dev/null || {
     echo "reingest: server exited" >&2
     tail -n 20 "$SCRATCH_ROOT/server-$PORT.log" >&2 || true
     exit 1

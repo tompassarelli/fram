@@ -796,6 +796,6 @@
 
 (if (seq @failures)
   (do
-    (println (str "\n" (count @failures) " native RPC daemon checks failed"))
+    (println (str "\n" (count @failures) " native RPC server checks failed"))
     (System/exit 1))
-  (println "\nFRAMRPC v1 JVM daemon: all checks passed"))
+  (println "\nFRAMRPC v1 JVM server: all checks passed"))

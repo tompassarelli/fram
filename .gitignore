@@ -3,7 +3,7 @@
 *.log
 
 # native build artifacts (build with native/build.sh)
-/native/fram-daemon-graal
+/native/fram-server-graal
 /native/classes/
 /native/classpath.txt
 /native/.cpcache/

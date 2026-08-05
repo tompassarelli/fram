@@ -47,7 +47,7 @@
 ;; Every piece of computed resolution state lives in a dynamic var with an INERT
 ;; root binding (nil / empty atom). `resolve-edn!` rebinds them all to a FRESH
 ;; store before loading EDN, so the resolver runs over an ARBITRARY bound store
-;; (a daemon's warm in-memory store) — not a load-time global. The CLI path is
+;; (a server's warm in-memory store) — not a load-time global. The CLI path is
 ;; byte-identical: it just calls `resolve-edn!` inside the same binding scope and
 ;; reads the bound vars exactly as before. Predicate/marker VALUE IDS are
 ;; store-local (cnf interns ids per store), so they MUST be recomputed against
@@ -68,20 +68,20 @@
   ([store writers] (ri/graph store writers)))
 ;; *reject!* — how a verb signals an UNACCEPTABLE edit (collision / no-capture /
 ;; nothing-to-do / shape violation). The CLI path (-main) wants a process exit code;
-;; a LONG-LIVED daemon running the verb in-process must NOT die on a rejected edit —
+;; a LONG-LIVED server running the verb in-process must NOT die on a rejected edit —
 ;; it binds *reject!* to throw, converting the exit into a catchable signal. Default
 ;; = real exit (verbatim CLI behavior). Verb arms call (*reject!* code) — or
 ;; (*reject!* code detail) to hand the driver a structured disambiguation payload
 ;; (replace-in-body's candidates/:within remedy) — instead of (System/exit code), so
 ;; the same verb body serves both drivers. The default ignores the detail (the CLI
-;; exits); the daemon binding threads it into the ex-info it throws so `handle`
+;; exits); the server binding threads it into the ex-info it throws so `handle`
 ;; surfaces the candidates to the model.
 (def ^:dynamic *reject!* (fn [code & _] (System/exit code)))
 ;; *resolve-walk?* — does resolve-warm-store! run the whole-corpus lexical walk
 ;; (run-resolution!, ~the dominant verb-setup cost)? The walk WRITES refers_to over
-;; every module. The MINIMAL-OP authoring path (daemon :edit-min) does NOT need that
+;; every module. The MINIMAL-OP authoring path (server :edit-min) does NOT need that
 ;; walk: set-body/upsert-form mint/supersede AST facts and never read refers_to, and
-;; rename's no-capture check reads refers_to that the daemon has ALREADY materialized
+;; rename's no-capture check reads refers_to that the server has ALREADY materialized
 ;; on the store (the clone inherits it) — so re-walking is pure waste AND would double
 ;; the inherited edges. Bound false by do-edit-min => corpus tables only, no walk. The
 ;; CLI/text path + cold materialize leave it true (verbatim whole-corpus resolution).
@@ -94,8 +94,8 @@
 ;; modules' frames is waste. nil => full frames for every module (verbatim behavior;
 ;; rename, which walks consumers' require/frame tables cross-module, leaves it nil).
 (def ^:dynamic *corpus-scope* nil)
-;; *corpus-cache* — when bound (by the daemon), the module->entity-ids map to use INSTEAD of the
-;; O(total) name-fact reduce in corpus-from-store!. The daemon maintains it incrementally (add the
+;; *corpus-cache* — when bound (by the server), the module->entity-ids map to use INSTEAD of the
+;; O(total) name-fact reduce in corpus-from-store!. The server maintains it incrementally (add the
 ;; commit's new named nodes to their module — O(delta)), so the per-verb corpus build drops from
 ;; O(total-app) to O(edited-module-frame). Valid because the verb's clone == the committed store at
 ;; clone time, which the cache reflects. nil => full reduce (cold path, reads, the CLI). Just the
@@ -264,12 +264,12 @@
 
 ;; --- the lexical walk: resolve each reference to its nearest binding ---------
 ;; resolution counters — DYNAMIC (fresh atoms per `resolve-edn!` call), so a
-;; long-lived daemon's repeated resolves don't accumulate across runs.
+;; long-lived server's repeated resolves don't accumulate across runs.
 (def ^:dynamic n-resolved (atom 0)) (def ^:dynamic n-unresolved (atom 0))
 (def ^:dynamic n-xmod (atom 0)) (def ^:dynamic n-type (atom 0))
 (def ^:dynamic n-comment (atom 0))               ; Turtle #6: comment identifier mentions resolved
 ;; S3.3 scoped-walk instrumentation — count the TOP-LEVEL FORMS the walk visited and
-;; the modules it walked, so a caller (the daemon's gate) can prove a scoped re-resolve
+;; the modules it walked, so a caller (the server's gate) can prove a scoped re-resolve
 ;; is genuinely O(edit-scope): it walks only the affected modules' forms, not O(corpus).
 (def ^:dynamic n-forms-walked (atom 0)) (def ^:dynamic walked-modules (atom #{}))
 (def ^:dynamic *xresolve* (fn [_] nil))          ; cross-module value resolver: name -> {:node :mode :alias}
@@ -505,7 +505,7 @@
 ;; bound store; computes + binds the corpus tables from those srcs; runs the
 ;; resolution driver; then invokes `body` WITHIN the binding scope (so CLI
 ;; dispatch — rename/delete/extract/author — and tests read the bound state).
-;; The store is local to this call: a daemon resolving over its warm store gets a
+;; The store is local to this call: a server resolving over its warm store gets a
 ;; clean store B every time, and NOTHING leaks to the inert root binding.
 ;; ============================================================================
 (defn resolve-edn!
@@ -513,8 +513,8 @@
   ([edn-paths body] (rco/resolve-edn! (corpus-host) (vec edn-paths) body)))
 
 ;; ============================================================================
-;; S3.2 — resolve WARM, over the daemon's live store (no EDN reload).
-;; The daemon holds a populated store whose AST nodes are entities carrying the
+;; S3.2 — resolve WARM, over the server's live store (no EDN reload).
+;; The server holds a populated store whose AST nodes are entities carrying the
 ;; same kind/v/fN facts an --emit-edn projection has, PLUS a `name` fact
 ;; `@<module>#<int>` (fram.schema/name!). Grouping there is by the name prefix,
 ;; not by load-edn's per-src tracking — so the ONLY thing that differs from the
@@ -522,7 +522,7 @@
 ;; is DERIVED. Everything downstream (module-defs/forms-of/run-resolution!/...)
 ;; reads file->ents + ctx, which are the bound store, so it is reused verbatim.
 ;; ============================================================================
-;; module of `@kernel#127` -> "kernel" ; the daemon names every node `@<mod>#<int>`.
+;; module of `@kernel#127` -> "kernel" ; the server names every node `@<mod>#<int>`.
 (defn name->module [nm]
   (rco/name->module nm))
 ;; corpus-from-store! — from the BOUND, already-populated store, derive the SAME
@@ -536,7 +536,7 @@
 ;; ============================================================================
 ;; S3.3 scoped-classifier helpers — computed from the BOUND warm corpus (call
 ;; under a binding that has run corpus-from-store!, e.g. with-resolve-read or
-;; resolve-modules!'s body). These let the daemon classify an edit by its
+;; resolve-modules!'s body). These let the server classify an edit by its
 ;; binding-SET delta (the load-bearing correctness point), not by syntactic site.
 ;; ============================================================================
 ;; module-src-of: the corpus `src` (= module-name string, in the warm path) for a
@@ -559,17 +559,17 @@
   (rco/import-graph rctx *view* (rco/file-entity-map file->ents) (vec srcs)))
 ;; module-has-macro?: does M define a defmacro at top level? A macro edit can change
 ;; how OTHER modules expand, so its blast radius isn't bounded by the import graph —
-;; the daemon falls back to a whole-corpus re-resolve (sound; dormant in fram, which
+;; the server falls back to a whole-corpus re-resolve (sound; dormant in fram, which
 ;; has zero defmacro).
 (defn module-has-macro? [src]
   (rco/module-has-macro? rctx *view* (rco/file-entity-map file->ents) src))
 
-;; resolve-warm-store! — bind ctx=the daemon's store (+ a fresh tx + the value-ids
+;; resolve-warm-store! — bind ctx=the server's store (+ a fresh tx + the value-ids
 ;; recomputed against THAT store — store-local ids must match their store, the
 ;; same seam GATE B guards), derive the corpus FROM the store, run the lexical
 ;; walk (writing refers_to into the store), then invoke body within the scope.
 ;; Mirror of resolve-edn! with the ONLY change being the corpus source. The store
-;; is supplied (the daemon's warm `co`), not minted, and is mutated in place: the
+;; is supplied (the server's warm `co`), not minted, and is mutated in place: the
 ;; warm refers_to edges callers-of / blast-radius read come straight from here.
 (defn resolve-warm-store!
   ([store] (resolve-warm-store! store (fn [])))
@@ -580,14 +580,14 @@
 ;; Identical store-binding + corpus derivation to resolve-warm-store! (so it sees
 ;; the FULL cross-module export/import tables — M's imports resolve against every
 ;; module's exports), but only WALKS (and writes refers_to for) `module-set`. The
-;; caller (the daemon) is responsible for stripping the affected modules' prior
-;; refers_to first (resolve-warm-store! re-walks the whole corpus, so the daemon's
+;; caller (the server) is responsible for stripping the affected modules' prior
+;; refers_to first (resolve-warm-store! re-walks the whole corpus, so the server's
 ;; whole-corpus strip suffices there; the scoped path strips only module-set). The
 ;; module list is exposed via `body` (corpus-from-store! sets `srcs` = all modules,
 ;; so a caller can read it under the binding) and `module-set` selects the walk.
 ;; module-set is a set of module-name strings (the `@<module>#` prefix), matching
 ;; the keys `srcs` carries after corpus-from-store!. An empty set walks nothing
-;; (a pure table rebuild) — sound when the daemon classified no module dirty.
+;; (a pure table rebuild) — sound when the server classified no module dirty.
 ;; ============================================================================
 (defn resolve-modules!
   ([store module-set] (resolve-modules! store module-set (fn [])))
@@ -738,10 +738,10 @@
 ;; only that one, and projecting the 11-module warm corpus would be wasteful.
 ;; Default = nil => "all srcs" (verbatim text-path behavior).
 (defn- emit-srcs [] (rmi/emit-srcs (vec srcs)))
-;; *capture-only?* — the MINIMAL-OP graph edit (daemon :edit-min) runs the verb ONLY
+;; *capture-only?* — the MINIMAL-OP graph edit (server :edit-min) runs the verb ONLY
 ;; to capture its fact mint/supersede ops; it does NOT want the verb's two heavy
 ;; downstream SIDE EFFECTS: (1) re-resolve! (a whole-corpus lexical re-walk that
-;; writes DERIVED refers_to edges — discarded, since the daemon re-resolves SCOPED
+;; writes DERIVED refers_to edges — discarded, since the server re-resolves SCOPED
 ;; over the real store after the commit), and (2) author-emit-scoped! (rendering the
 ;; module's resolved EDN to disk — the minimal path commits fact ops, not text).
 ;; Bound true by do-edit-min so the verb does its fact work and stops. The CLI/text
@@ -863,7 +863,7 @@
 ;; ares did. `binding [*out* *err*]` cannot move namespace, so stderr reporting is
 ;; the `warn` closure, called once per LINE (the goldens compare bytes).
 ;; *reject!* is passed at BOTH arities: callers bind it as `(fn [code] …)` (the
-;; unit tests) or `(fn [code & [detail]] …)` (the daemon), so each call site keeps
+;; unit tests) or `(fn [code & [detail]] …)` (the server), so each call site keeps
 ;; the arity the original used — 1 everywhere but replace-in-body's structured
 ;; disambiguation payload. Docstrings + per-def rationale live in the module header.
 ;; ============================================================================
@@ -997,7 +997,7 @@
 ;; ============================================================================
 ;; call graph — the scope-correct calls_defn edges + transitive blast radius.
 ;; ============================================================================
-;; Factored out of the `callgraph` MODE so the daemon's warm :blast/:concern-overlap,
+;; Factored out of the `callgraph` MODE so the server's warm :blast/:concern-overlap,
 ;; the offline `callgraph` mode, and codegraph/src/callgraph.bclj all share ONE derivation
 ;; (call-edges) and ONE reaches closure (blast-closure) — the per-query throwaway-store
 ;; rebuild now lives in exactly one place (decision J: "one implementation shared by
@@ -1011,7 +1011,7 @@
 ;; NODE entity-id (@mod#int identity — rename-stable, scope-correct: same-named fns in
 ;; different modules are distinct nodes, so they never false-merge). Returns
 ;; {:defn-meta {leaf -> {:key :file :module :name}} :edges [[caller-leaf callee-leaf]]
-;; :defn-set #{leaf}} — the daemon joins footprint @concern->@node against :edges; the
+;; :defn-set #{leaf}} — the server joins footprint @concern->@node against :edges; the
 ;; CLI maps leaf->:key for JSON.
 (defn call-edges [] (rq/call-edges rctx *view* BOUND REFERS (vec srcs) file-modframe (rco/file-entity-map file->ents)))
 
@@ -1069,6 +1069,6 @@
 
 ;; GUARD: run the pipeline only when invoked as a CLI with a recognized mode.
 ;; Loaded as a library (no mode arg, or an unrecognized one), this is a no-op —
-;; so a daemon can `require`/load this file and call `resolve-edn!` over its own
+;; so a server can `require`/load this file and call `resolve-edn!` over its own
 ;; warm store without the old top-level load-edn crashing on mis-sliced args.
 (when (MODES (first *command-line-args*)) (apply -main *command-line-args*))

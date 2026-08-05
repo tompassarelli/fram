@@ -196,10 +196,10 @@
       (let [st (server-rt port log-path {:op :status})
             _ (when (:reject st)
                 (die "SAFETY: server log fence rejected —" (pr-str st)))
-            daemon-log (str (:log st))]
-        (when (str/blank? daemon-log) (die "server on" port "reports no :log — refusing"))
-        (when-not (str/includes? daemon-log "code.log")
-          (die "SAFETY: server on" port "serves" daemon-log "— NOT a *code.log; refusing"))
+            server-log (str (:log st))]
+        (when (str/blank? server-log) (die "server on" port "reports no :log — refusing"))
+        (when-not (str/includes? server-log "code.log")
+          (die "SAFETY: server on" port "serves" server-log "— NOT a *code.log; refusing"))
         (let [resp (server-rt port log-path {:op :edit-min :spec spec})]
           (if (:ok resp)
             (do (log! (str "fram-edit-code: MINIMAL-OP " op " on " module
@@ -211,7 +211,7 @@
                 (when out
                   (let [r (proc/sh {:err :string :extra-env (into {} (System/getenv))}
                                    "bb" "-cp" fram-out (str bin-dir "/fram-render-code")
-                                   module "--log" daemon-log "--out" out)]
+                                   module "--log" server-log "--out" out)]
                     (when (zero? (:exit r)) (log! "fram-edit-code: rendered" module "->" out))))
                 (println (or out (str "@" module " committed via :edit-min")))
                 (System/exit 0))

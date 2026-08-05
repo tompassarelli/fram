@@ -4,5 +4,5 @@
 # and reports a dead child fast and diagnostically instead of waiting out
 # its full deadline.
 set -euo pipefail
-echo "dead-daemon fixture: simulated boot failure (seeded)" >&2
+echo "dead-server fixture: simulated boot failure (seeded)" >&2
 exit 7

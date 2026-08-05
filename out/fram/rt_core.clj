@@ -103,7 +103,7 @@
   (cond
   (:ok resp) (str "ok:" (:ok resp))
   (= (:reject resp) :conflict) "conflict"
-  (= (:code resp) :log-mismatch) (str "log-mismatch: expected " (:expected-log resp) "; daemon serves " (:served-log resp))
+  (= (:code resp) :log-mismatch) (str "log-mismatch: expected " (:expected-log resp) "; server serves " (:served-log resp))
   (= "unknown op" (:error resp)) "protocol-incompatible"
   (:reject resp) (str "reject:" (reject-message (:reject resp)))
   :else (str "error:" (pr-str resp))))
@@ -121,8 +121,8 @@
 (defn ^String server-status-response [port resp]
   (cond
   (integer? (:version resp)) (str "server UP on 127.0.0.1:" port " (v" (:version resp) ")")
-  (= :log-mismatch (:code resp)) (str "server WRONG LOG on 127.0.0.1:" port " — expected " (:expected-log resp) "; daemon serves " (:served-log resp) "; refusing fenced reads and writes")
-  (= "unknown op" (:error resp)) (str "server INCOMPATIBLE on 127.0.0.1:" port " — daemon lacks required log-fence protocol; restart it with current Fram")
+  (= :log-mismatch (:code resp)) (str "server WRONG LOG on 127.0.0.1:" port " — expected " (:expected-log resp) "; server serves " (:served-log resp) "; refusing fenced reads and writes")
+  (= "unknown op" (:error resp)) (str "server INCOMPATIBLE on 127.0.0.1:" port " — server lacks required log-fence protocol; restart it with current Fram")
   :else (str "server UNUSABLE on 127.0.0.1:" port " — " (pr-str resp))))
 
 (defn ^String server-status-down [port]

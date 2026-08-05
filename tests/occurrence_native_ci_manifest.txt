@@ -28,7 +28,7 @@ run-bb	current-model	tests/profile_lint_test.clj	-
 run-bb	current-model	tests/program_inspection_test.clj	-
 run-bb	current-model	tests/program_inspection_freshness_test.clj	-
 run-bb	current-model	tests/native_rpc_boundary_ratchet_test.clj	-
-run-bb	current-model	tests/native_rpc_daemon_test.clj	-
+run-bb	current-model	tests/native_rpc_server_test.clj	-
 run-bb	current-model	tests/provider_host_test.clj	-
 run-bb	current-model	tests/query_aggregate_test.clj	-
 run-bb	current-model	tests/query_projection_test.clj	-
@@ -54,7 +54,7 @@ run-shell	current-boundary	tests/zig_rpc_source_ratchet.sh	-
 run-node	current-cloudflare	tests/cloudflare_worker_client_test.mjs	-
 run-node	current-node-client	tests/node_framrpc_client_test.mjs	-
 aggregate-nix	package-closure	tests/package_server_smoke.sh	flake.nix#package_server_smoke
-aggregate-zig	zig-bootstrap	tests/zig_daemon_bootstrap_test.sh	build.zig#fram-server-zig
+aggregate-zig	zig-bootstrap	tests/zig_server_bootstrap_test.sh	build.zig#fram-server-zig
 aggregate-zig	zig-oracle	tests/zig_occ_oracle_test.sh	build.zig#fram-server-zig
 baseline-shell	vocab-residue	tests/vocab_ratchet_test.sh	tests/vocab_ratchet_test.sh#REGROWTH
 

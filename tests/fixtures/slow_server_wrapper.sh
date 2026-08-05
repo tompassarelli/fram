@@ -5,7 +5,7 @@
 # host machine's actual JVM startup variance and without touching
 # server.clj / bin/fram-server.
 #
-#   FRAM_TEST_BOOT_DELAY_S=8 tests/fixtures/slow_daemon_wrapper.sh <port> <log>
+#   FRAM_TEST_BOOT_DELAY_S=8 tests/fixtures/slow_server_wrapper.sh <port> <log>
 set -euo pipefail
 sleep "${FRAM_TEST_BOOT_DELAY_S:-8}"
 exec "$(cd "$(dirname "$0")/../.." && pwd)/bin/fram-server" "$@"

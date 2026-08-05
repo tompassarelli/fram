@@ -94,7 +94,7 @@
 (defn- server-version [port log-path]
   (:version (server-rt port log-path {:op :version})))
 
-;; Pull one module through the daemon's existing module-scoped :render surface.
+;; Pull one module through the server's existing module-scoped :render surface.
 ;; Re-render and emit it so file-local ids use the same deterministic traversal
 ;; mapping as POST. This avoids the former whole-corpus Datalog scan, whose server
 ;; query budget was exhausted on the canonical code log.
@@ -139,7 +139,7 @@
       (boolean (re-matches #"(f|seg|comment)\d+" p))))
 
 ;; commit one op (:assert|:retract) at base v, retry on :conflict (route-write loop).
-;; op is a KEYWORD — the daemon's handle dispatches on (:op req) as a keyword.
+;; op is a KEYWORD — the server's handle dispatches on (:op req) as a keyword.
 (defn- commit-op! [port log-path op te p r]
   (loop [tries 5]
     (let [v (server-version port log-path)

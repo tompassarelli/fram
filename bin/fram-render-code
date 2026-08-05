@@ -3,7 +3,7 @@
 ;; fram-render-code — THE FLIP, stage 2: canonical CODE log -> .bclj (a VIEW).
 ;; ============================================================================
 ;; The .bclj is a PURE FUNCTION of the fact log. This boots the reified store
-;; over .fram/code.log (the SAME migrate-flat->co the daemon uses — IN-PROCESS,
+;; over .fram/code.log (the SAME migrate-flat->co the server uses — IN-PROCESS,
 ;; no socket; a pure render needs no server), materializes refers_to over the
 ;; warm store (so references render via identity), projects the module's facts to
 ;; resolved EDN via resolve.clj extract-file!, and asks Beagle's public
@@ -44,7 +44,7 @@
                                  (str fram-home "/out/resolve.clj")))
 
 ;; NOTE: server.clj + resolve.clj are load-file'd LAZILY in the COLD path only
-;; (see below). The --port WARM path doesn't need them (the daemon does the projection),
+;; (see below). The --port WARM path doesn't need them (the server does the projection),
 ;; so skipping the load keeps warm render light. bb/SCI resolves the forward refs at runtime.
 
 (defn- parse-args [args]
@@ -56,7 +56,7 @@
       (= "--port" (first a)) (recur (drop 2 a) (assoc opts :port (Integer/parseInt (second a))))
       :else (recur (rest a) opts))))
 
-;; WARM render path: ask the live daemon's :render op (it projects off the warm `co`
+;; WARM render path: ask the live server's :render op (it projects off the warm `co`
 ;; store — no cold migrate-flat->co boot, no whole-corpus resolve-warm-store!), then
 ;; Beagle facts-roundtrip --render the returned EDN. ~43% faster than the cold path, byte-identical.
 (defn- server-rt [port log-path req]
@@ -75,11 +75,11 @@
         (if out
           (do (spit out (:out r))
               (log! "fram-render-code: WARM-rendered" module "->" out
-                    (str "(" (count (:out r)) " bytes; off daemon :render @" port ")")))
+                    (str "(" (count (:out r)) " bytes; off server :render @" port ")")))
           (print (:out r)))
         (flush)))))
 
-;; --port => WARM render off the live daemon, as a TOP-LEVEL early exit. This must run
+;; --port => WARM render off the live server, as a TOP-LEVEL early exit. This must run
 ;; (and System/exit) BEFORE bb reads the cold forms below — those reference
 ;; migrate-flat->co (load-file'd only in the cold branch), and bb/SCI analyzes a whole
 ;; top-level form before running it, so the cold code can't be in the same form as this.

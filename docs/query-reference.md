@@ -49,7 +49,7 @@ Set `:neg true` on a relation clause. All variables it reads must already be bou
 
 Tokenizer v0 takes maximal Unicode Letter/DecimalDigit runs, lowercases without locale, and treats punctuation, whitespace, `_`, and `-` as delimiters. Repeated tokens deduplicate; multiple tokens form an unordered conjunction. There is no stemming, ranking, scoring, or substring search.
 
-Each immutable snapshot owns a lazy, single-flight inverted index keyed by daemon generation, SpaceId, and version. The LRU holds four versions and 64 MiB; an oversized index fails with `:query-text-index-limit`. Version identity replaces TTL, and there is no scan fallback.
+Each immutable snapshot owns a lazy, single-flight inverted index keyed by server generation, SpaceId, and version. The LRU holds four versions and 64 MiB; an oversized index fails with `:query-text-index-limit`. Version identity replaces TTL, and there is no scan fallback.
 
 ## Occurrence history and views
 
@@ -96,8 +96,8 @@ Compilation rejects malformed Terms, unknown relations, arity disagreement, unde
 
 Nonaggregate rows have deterministic Term ordering. An opaque page cursor binds the last row, resolved upper sequence, and lower-exclusive occurrence bound. Continuations stay on the same immutable snapshot.
 
-The server caches a complete ordered result by daemon generation, SpaceId, resolved view, operation, and canonical request digest. Selector-equivalent current/as-of requests share an entry; different since lower bounds do not. Continuation slices the cached vector rather than rerunning the plan. Eviction changes cost, never the pinned answer.
+The server caches a complete ordered result by server generation, SpaceId, resolved view, operation, and canonical request digest. Selector-equivalent current/as-of requests share an entry; different since lower bounds do not. Continuation slices the cached vector rather than rerunning the plan. Eviction changes cost, never the pinned answer.
 
 Historical state uses the newest valid prefix-bound FRI2 checkpoint at or before `U`, then replays its tail. Corrupt or stale derived state falls back to canonical replay; sealed epochs use the same prefix proof through a fingerprinted range manifest.
 
-The executable contract is [`../tests/triple_query_test.clj`](../tests/triple_query_test.clj); native lowering and paging are covered by [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj). Text, cache, differential, and performance gates are the `text_match`, `text_index_cache`, `datalog_diff`, and `text_index_perf` tests in that directory.
+The executable contract is [`../tests/triple_query_test.clj`](../tests/triple_query_test.clj); native lowering and paging are covered by [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj). Text, cache, differential, and performance gates are the `text_match`, `text_index_cache`, `datalog_diff`, and `text_index_perf` tests in that directory.

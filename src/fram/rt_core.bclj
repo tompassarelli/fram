@@ -194,7 +194,7 @@
     (= (:code resp) :log-mismatch)
     (str "log-mismatch: expected "
       (:expected-log resp)
-      "; daemon serves "
+      "; server serves "
       (:served-log resp))
     (= "unknown op" (:error resp))
     "protocol-incompatible"
@@ -226,13 +226,13 @@
       port
       " — expected "
       (:expected-log resp)
-      "; daemon serves "
+      "; server serves "
       (:served-log resp)
       "; refusing fenced reads and writes")
     (= "unknown op" (:error resp))
     (str "server INCOMPATIBLE on 127.0.0.1:"
       port
-      " — daemon lacks required log-fence protocol; restart it with current Fram")
+      " — server lacks required log-fence protocol; restart it with current Fram")
     :else
     (str "server UNUSABLE on 127.0.0.1:" port " — " (pr-str resp))))
 

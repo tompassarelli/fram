@@ -2,7 +2,7 @@
 # Fram CLI. Public data commands require FRAM_SPACE_ID and speak FRAMRPC.
 # Legacy migration/projection commands retain their explicit local-file setup.
 HERE="${BASH_SOURCE[0]%/*}/.."
-# Deep daemon/recovery selfcheck is a bash-orchestrated command (boots isolated
+# Deep server/recovery selfcheck is a bash-orchestrated command (boots isolated
 # scratch coordinators with trap-based cleanup) — dispatch before the bb exec.
 if [[ "${1:-}" == "selfcheck" ]]; then
   shift

@@ -16,7 +16,7 @@
 (def boot-delay-s 8) ;; > old fixed 5s window; well inside the new bounded deadline
 
 (def child
-  (p/process [(str (System/getProperty "user.dir") "/tests/fixtures/slow_daemon_wrapper.sh")
+  (p/process [(str (System/getProperty "user.dir") "/tests/fixtures/slow_server_wrapper.sh")
               (str port) database]
              {:dir (System/getProperty "user.dir")
               :extra-env {"FRAM_TEST_BOOT_DELAY_S" (str boot-delay-s)}

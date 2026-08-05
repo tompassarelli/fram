@@ -5,7 +5,7 @@
 
   Paths default to the current working directory (./threads, ./coordination.log) and
   are overridable via FRAM_THREADS / FRAM_LOG."
-  (:refer-clojure :exclude [slurp])   ; fram.rt/slurp wraps clojure.core/slurp; keep the JVM daemon's stderr clean
+  (:refer-clojure :exclude [slurp])   ; fram.rt/slurp wraps clojure.core/slurp; keep the JVM server's stderr clean
   (:require [clojure.string :as str]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
@@ -271,7 +271,7 @@
 ;; nil on parse failure so the caller can report it instead of crashing.
 (defn parse-edn [s] (try (edn/read-string s) (catch Exception _ nil)))
 
-;; read-log — torn-tail recovery + fail-closed corruption. The live daemon
+;; read-log — torn-tail recovery + fail-closed corruption. The live server
 ;; appends WITHOUT fsync, so a reader can catch the file mid-write: the FINAL
 ;; line may be truncated (its terminating newline not yet flushed). Policy, at
 ;; the EDN parse boundary:
@@ -362,7 +362,7 @@
 ;; revert lands HERE, never on a binary with live unguarded rewrite verbs.
 ;; Four laws, all in this block:
 ;;
-;;   1. WRITER ADMISSION — every supported append (daemon group batch, cold
+;;   1. WRITER ADMISSION — every supported append (server group batch, cold
 ;;      `fram set`, merge/import whole-file writes) holds the SHARED
 ;;      FileChannel lock on <dir>/.fram.rewrite.lock across
 ;;      open→write→fsync→close. A generation flip holds the EXCLUSIVE lock, so
@@ -383,7 +383,7 @@
 ;;      :phase — rolls the flip forward (coordination already renamed) or back
 ;;      (not renamed), and always restores the EXACT recorded modes
 ;;      (0600/0660 stay 0600/0660 — never a constant).
-;;   4. BOOT PARTICIPATION — a daemon acquires the lock BEFORE first serve:
+;;   4. BOOT PARTICIPATION — a server acquires the lock BEFORE first serve:
 ;;      exclusive-if-free (heal any crashed flip), else it BLOCKS on a shared
 ;;      acquire until the live flip releases.
 ;;
@@ -633,7 +633,7 @@
     (when (and telem-recorded? (.exists (io/file telem)))
       (set-file-mode! telem (get-in intent [:telem :mode])))
     ;; (11) sweep sidecar + snapshots — the log identity flipped, so they are
-    ;; stale by construction (an old daemon would also invalidate them; sweeping
+    ;; stale by construction (an old server would also invalidate them; sweeping
     ;; makes it unconditional).
     (delete-if-exists! (str log-path ".snap"))
     (delete-tree! (str log-path ".snapshots"))
@@ -677,7 +677,7 @@
   "Run write-fn while holding the SHARED rewrite lock (blocking: a live flip
   DELAYS the append until its exclusive lock releases). If a rewrite intent
   still exists once the shared lock is granted, the flip crashed without being
-  healed — REFUSE LOUD (the caller's ack path delivers the throw; the daemon
+  healed — REFUSE LOUD (the caller's ack path delivers the throw; the server
   NACKs, a CLI prints), never append into a half-flipped corpus."
   [log-path write-fn]
   (let [h (acquire-rewrite-lock! log-path true true)]
@@ -712,11 +712,11 @@
   (heal-if-crashed! log-path)
   (with-append-admission log-path write-fn))
 
-;; --- daemon boot participation (law 4) --------------------------------------
+;; --- server boot participation (law 4) --------------------------------------
 (defn boot-rewrite-gate!
   "Acquire the rewrite lock BEFORE first serve and RETURN a SHARED lock handle
   the caller holds across its boot fold (close it with close-rewrite-lock!
-  before serving — a serving daemon holds the shared lock per append batch,
+  before serving — a serving server holds the shared lock per append batch,
   never continuously). While an intent exists: exclusive-if-free heals the
   crashed flip; exclusive unobtainable = a LIVE flip (or a peer healing) —
   BLOCK on a shared acquire until it releases, then re-check. The exclusive
@@ -845,14 +845,14 @@
               (println (str "  " (format "%-30s" ts) "  " (format "%-5s" txn) "  "
                             op "  " (format "%-8s" who) "  " (:p m) " = " rv)))))))))
 
-;; --- server client: write THROUGH the daemon (safe concurrent path) -----
-;; One request/response over the local socket. The daemon serializes writes
+;; --- server client: write THROUGH the server (safe concurrent path) -----
+;; One request/response over the local socket. The server serializes writes
 ;; (optimistic base_version + obligation rules), so this is the safe multi-agent
 ;; write path — unlike append-fact-op, which writes the log directly.
 
 ;; client-side mutual TLS: present FRAM_SERVER_TLS_KEYSTORE, verify the server against
 ;; FRAM_SERVER_TLS_TRUSTSTORE. Works on babashka (client SSL classes are present; only the
-;; SERVER-side SSLServerSocket is absent, which is why the daemon runs on the JVM).
+;; SERVER-side SSLServerSocket is absent, which is why the server runs on the JVM).
 (defn- client-ssl-context [ks ts pass]
   (let [pw (.toCharArray ^String pass)
         load (fn [p] (with-open [in (io/input-stream p)]
@@ -1522,7 +1522,7 @@
       (parse-server-edn-line! (read-server-terminal-line! reader)))))
 
 ;; Protocol-level corpus identity. The distinct :for-log operation is deliberate:
-;; an older daemon rejects it as unknown instead of ignoring an optional field and
+;; an older server rejects it as unknown instead of ignoring an optional field and
 ;; mutating the wrong corpus. Low-level legacy functions below remain available for
 ;; compatibility; CLI/MCP entry points use the explicit *-for-log variants.
 (defn canonical-log-path [path]
@@ -1570,14 +1570,14 @@
   (try
     (server-write-response
      (server-rt port {:op op :te te :p pred :r value :base base :frame "agent"}))
-    (catch Exception _ "error:nodaemon")))
+    (catch Exception _ "error:noserver")))
 
 (defn- server-write-for-log [op port log te pred value base]
   (try
     (server-write-response
      (server-request-for-log
       port log {:op op :te te :p pred :r value :base base :frame "agent"}))
-    (catch Exception _ "error:nodaemon")))
+    (catch Exception _ "error:noserver")))
 
 (defn server-assert  [port te pred value base] (server-write :assert  port te pred value base))
 (defn server-retract [port te pred value base] (server-write :retract port te pred value base))
@@ -1621,10 +1621,10 @@
 ;;
 ;;
 
-;; warm READ ops — served off the daemon's in-memory warm store / index, avoiding the
+;; warm READ ops — served off the server's in-memory warm store / index, avoiding the
 ;; COLD full-log fold the MCP/CLI read path pays per request (interface investigation
 ;; #1: ~60x tax — cold load-state ~450ms vs warm ~7ms on the canonical log). warm-read
-;; returns the parsed resp, or NIL if the daemon is down OR doesn't support the op
+;; returns the parsed resp, or NIL if the server is down OR doesn't support the op
 ;; ({:error "unknown op"} from an older server predating the warm-op commits):
 ;; the caller falls back to the cold path on nil. This IS the capability handshake.
 ;; Keyed on (l,p,r) / Datalog strings — REP-STABLE across the fractional/CRDT ordering
@@ -1665,18 +1665,18 @@
   [port log te]
   (warm-read-for-log port log {:op :show :te te}))
 
-;; :facts — the daemon's WHOLE live view as [l p r] triples: the daemon-first read
+;; :facts — the server's WHOLE live view as [l p r] triples: the server-first read
 ;; path (thread 019f2190). The CLI rebuilds its kernel index from this instead of
 ;; paying the per-process cold fold (read-log EDN parse + fold ≈ 700ms on the 11k-line
-;; north log). The daemon serves the triples IN FOLD EMISSION ORDER (its contract —
+;; north log). The server serves the triples IN FOLD EMISSION ORDER (its contract —
 ;; fram.fold/refold-order, cached per version), so the records returned here feed
 ;; build-index directly and every listing stays byte-identical to the cold fold's.
 ;; Asked with {:fmt :json} DELIBERATELY: this is a multi-megabyte whole-corpus
 ;; payload, and bb parses JSON (cheshire, native) substantially faster than EDN.
 ;; server-live-state retains the response version beside the facts so long-lived
 ;; clients can cache one built projection and refresh only after the server
-;; version moves. nil is the capability sentinel: daemon down, old daemon, malformed
-;; response, or a daemon serving another log. server-live-facts preserves the older
+;; version moves. nil is the capability sentinel: server down, old server, malformed
+;; response, or a server serving another log. server-live-facts preserves the older
 ;; Vec-only interface for Beagle/CLI callers.
 (defn server-live-state [port log]
   (let [facts-timeout

@@ -1,4 +1,4 @@
-//! Frozen FRAMRPC v1 codec shared by the live daemon and native test peer.
+//! Frozen FRAMRPC v1 codec shared by the live server and native test peer.
 
 const std = @import("std");
 const log = @import("log.zig");

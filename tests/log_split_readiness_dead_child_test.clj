@@ -10,7 +10,7 @@
 
 (def port (free-port))
 (def child
-  (p/process [(str (System/getProperty "user.dir") "/tests/fixtures/dead_daemon_wrapper.sh")]
+  (p/process [(str (System/getProperty "user.dir") "/tests/fixtures/dead_server_wrapper.sh")]
              {:dir (System/getProperty "user.dir")
               :out :string :err :string}))
 

@@ -222,7 +222,7 @@
 
 ;;     {:defn-meta {leaf -> {...}} :edges [[caller-leaf callee-leaf]] :defn-set #{leaf}}
 
-;;     — the daemon joins footprint @concern->@node against :edges; the CLI maps
+;;     — the server joins footprint @concern->@node against :edges; the CLI maps
 
 ;;     leaf -> :key for JSON.
 

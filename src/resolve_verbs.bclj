@@ -50,7 +50,7 @@
 ;;      goldens compare bytes, so line order and spelling are preserved verbatim.
 ;;
 ;;   4. TWO REJECT ARITIES. Callers bind *reject!* with either arity — tests
-;;      bind `(fn [code] …)`, the daemon `(fn [code & [detail]] …)` — so the
+;;      bind `(fn [code] …)`, the server `(fn [code & [detail]] …)` — so the
 ;;      record carries `reject` (1-arg) and `reject2` (2-arg, the structured
 ;;      disambiguation payload path) and each call site keeps its original arity.
 ;;
@@ -196,8 +196,8 @@
           (warn (str "projected -> " (op src) "   <- " src)))))))
 
 ;; ---------------------------------------------------------------------------
-;; the CRDT tie a verb writes. On the daemon (capture-only) path defer to
-;; "PENDING" — the daemon sets the tie to the new node's ATOMIC name-int, so
+;; the CRDT tie a verb writes. On the server (capture-only) path defer to
+;; "PENDING" — the server sets the tie to the new node's ATOMIC name-int, so
 ;; concurrent same-path inserts get distinct keys and BOTH land (commute). The
 ;; single-writer CLI path has no race -> tie "0".
 ;; ord-str* is ord-str with a STRING tie: the sentinel "PENDING" is not an
@@ -365,7 +365,7 @@
     {:n idx :breadcrumb breadcrumb :within within :context ctx-str}))
 
 ;; assemble the structured disambiguation payload (+ a human-readable :message) the
-;; daemon threads through *reject!* into `handle`'s reject response. `case` is removed
+;; server threads through *reject!* into `handle`'s reject response. `case` is removed
 ;; surface in beagle, so the two-reason dispatch is a cond — same arms, same strings.
 (defn disambig-payload
   [v: Verb

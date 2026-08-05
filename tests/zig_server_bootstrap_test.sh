@@ -3,12 +3,12 @@ set -euo pipefail
 
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 test_dir="$(mktemp -d)"
-daemon_pid=
+server_pid=
 
 cleanup() {
-  if [[ -n "${daemon_pid:-}" ]] && kill -0 "$daemon_pid" 2>/dev/null; then
-    kill -TERM "$daemon_pid" 2>/dev/null || true
-    wait "$daemon_pid" 2>/dev/null || true
+  if [[ -n "${server_pid:-}" ]] && kill -0 "$server_pid" 2>/dev/null; then
+    kill -TERM "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
   fi
   rm -rf "${test_dir:?}"
 }
@@ -22,9 +22,9 @@ if [[ -z "${FRAM_ZIG_SERVER:-}" || -z "${FRAM_RPC_CLIENT:-}" ]]; then
     "${zig[@]}" build -Doptimize=ReleaseSafe --prefix "$install_dir"
   )
 fi
-daemon_bin="${FRAM_ZIG_SERVER:-$install_dir/bin/fram-server-zig}"
+server_bin="${FRAM_ZIG_SERVER:-$install_dir/bin/fram-server-zig}"
 client_bin="${FRAM_RPC_CLIENT:-$install_dir/bin/fram-rpc-client}"
-[[ -x "$daemon_bin" ]]
+[[ -x "$server_bin" ]]
 [[ -x "$client_bin" ]]
 
 free_port() {
@@ -50,9 +50,9 @@ log="$test_dir/bootstrap.framlog"
 initial_hash="$(sha256sum "$log" | cut -d' ' -f1)"
 port="$(free_port)"
 FRAM_SPACE_ID=bootstrap-space FRAM_CREATE_LOG=1 \
-  "$daemon_bin" serve-log "$port" "$log" \
-  >"$test_dir/daemon.out" 2>&1 &
-daemon_pid=$!
+  "$server_bin" serve-log "$port" "$log" \
+  >"$test_dir/server.out" 2>&1 &
+server_pid=$!
 wait_ready "$port" 0
 
 "$client_bin" bootstrap "$port" bootstrap-space
@@ -72,11 +72,11 @@ set -e
 [[ $wrong_space_status -ne 0 ]]
 [[ "$committed_hash" == "$(sha256sum "$log" | cut -d' ' -f1)" ]]
 
-# The log-scoped writer authority excludes a second daemon generation.
+# The log-scoped writer authority excludes a second server generation.
 duplicate_port="$(free_port)"
 set +e
 FRAM_SPACE_ID=bootstrap-space timeout 5 \
-  "$daemon_bin" serve-log "$duplicate_port" "$log" \
+  "$server_bin" serve-log "$duplicate_port" "$log" \
   >"$test_dir/duplicate.out" 2>&1
 duplicate_status=$?
 set -e
@@ -92,17 +92,17 @@ printf '%s\n' \
 legacy_port="$(free_port)"
 set +e
 FRAM_SPACE_ID=bootstrap-space timeout 5 \
-  "$daemon_bin" serve-log "$legacy_port" "$legacy_log" \
+  "$server_bin" serve-log "$legacy_port" "$legacy_log" \
   >"$test_dir/legacy.out" 2>&1
 legacy_status=$?
 set -e
 [[ $legacy_status -ne 0 && $legacy_status -ne 124 ]]
 grep -q "requires one-shot FRAMLOG v1 migration" "$test_dir/legacy.out"
 
-kill -TERM "$daemon_pid"
-wait "$daemon_pid"
-daemon_pid=
-grep -q "\\[fram\\] shutdown complete" "$test_dir/daemon.out"
+kill -TERM "$server_pid"
+wait "$server_pid"
+server_pid=
+grep -q "\\[fram\\] shutdown complete" "$test_dir/server.out"
 
 # An incomplete final frame is not a transaction. Authority replay truncates
 # only that prefix and returns to the exact complete boundary.
@@ -110,24 +110,24 @@ printf '\x40\x00\x00' >>"$log"
 [[ "$committed_hash" != "$(sha256sum "$log" | cut -d' ' -f1)" ]]
 restart_port="$(free_port)"
 FRAM_SPACE_ID=bootstrap-space \
-  "$daemon_bin" serve-log "$restart_port" "$log" \
+  "$server_bin" serve-log "$restart_port" "$log" \
   >"$test_dir/restart.out" 2>&1 &
-daemon_pid=$!
+server_pid=$!
 wait_ready "$restart_port" 9
 [[ "$committed_hash" == "$(sha256sum "$log" | cut -d' ' -f1)" ]]
 [[ "$committed_size" == "$(stat -c %s "$log")" ]]
 grep -q "incomplete final transaction" "$test_dir/restart.out"
 
-kill -TERM "$daemon_pid"
-wait "$daemon_pid"
-daemon_pid=
+kill -TERM "$server_pid"
+wait "$server_pid"
+server_pid=
 grep -q "\\[fram\\] shutdown complete" "$test_dir/restart.out"
 
 # The immutable SpaceId is part of the log header, not a caller convention.
 mismatch_port="$(free_port)"
 set +e
 FRAM_SPACE_ID=other-space timeout 5 \
-  "$daemon_bin" serve-log "$mismatch_port" "$log" \
+  "$server_bin" serve-log "$mismatch_port" "$log" \
   >"$test_dir/space-mismatch.out" 2>&1
 mismatch_status=$?
 set -e
@@ -135,6 +135,6 @@ set -e
 grep -q "SpaceId does not match" "$test_dir/space-mismatch.out"
 
 printf '%s\n' \
-  'zig-daemon: FRAMRPC-only transport, recursive triples, direct occurrence coordinates,' \
+  'zig-server: FRAMRPC-only transport, recursive triples, direct occurrence coordinates,' \
   'atomic FRAMLOG transactions, OCC, leases, schema, cancellation/disconnect,' \
   'cold restart, torn-tail replay, migration refusal, writer exclusion, and SIGTERM passed'
