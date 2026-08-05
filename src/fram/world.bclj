@@ -191,7 +191,7 @@
 
 (defn overlay-of [ops: Any] -> Any
   (let [v (vec ops) by-slot (reduce (fn [acc: Any op: Any] -> Any (assoc acc (get op :slot) op)) {} v) slots (vec (sort-by (fn
-                                                                                                                  [s: Any] -> String (byte-key s)) (vec (keys by-slot))))]
+                                                                                                                             [s: Any] -> String (byte-key s)) (vec (keys by-slot))))]
     (mapv (fn [s: Any] -> Any (get by-slot s)) slots)))
 
 (defn version-record [base-version-id: Any ops: Any] -> Any

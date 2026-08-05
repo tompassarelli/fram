@@ -56,9 +56,7 @@
    error: (Atom QueryEvaluationError?)])
 (defrecord QueryEvaluationResult [db: Db error: QueryEvaluationError?])
 
-(defrecord BuiltinValueResult
-  [int-value: Int?
-   double-value: Double?])
+(defrecord BuiltinValueResult [int-value: Int? double-value: Double?])
 
 (defrecord OccurrenceCandidateSource
   [root: t/TermStore
@@ -808,12 +806,8 @@
            (assoc first-node second-key
                   (assoc second-node third-key (conj leaf handle))))))
 
-(defn- add-handle-values
-  [handles: (Set Int)
-   values: (Vec Int)] -> (Set Int)
-  (reduce (fn
-            [current: (Set Int)
-             handle: Int] -> (Set Int)
+(defn- add-handle-values [handles: (Set Int) values: (Vec Int)] -> (Set Int)
+  (reduce (fn [current: (Set Int) handle: Int] -> (Set Int)
             (conj current handle))
           handles values))
 
@@ -847,9 +841,7 @@
                 (add-handle-values handles (trie-branch-handles child)))
               #{} node)))
 
-(defn- trie-probe
-  [trie: HandleTrie
-   prefix: (Vec Any)] -> (Vec Int)
+(defn- trie-probe [trie: HandleTrie prefix: (Vec Any)] -> (Vec Int)
   (let [depth (count prefix)]
     (cond
       [(= 0 depth) (trie-node-handles trie)]
