@@ -6,7 +6,7 @@
 (ns database
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
-            [coord-daemon-wire :as wire]
+            [framrpc :as framrpc]
             [fram.kernel :as kernel]
             [fram.store :as term-store]
             [fram.types :as t]))
@@ -97,7 +97,7 @@
     (fail! :invalid-term-depth "FRAMLOG Term encoding must begin at depth zero"
            {:depth depth}))
   (try
-    (wire/write-term-codec-v1!
+    (framrpc/write-term-codec-v1!
      out value Integer/MAX_VALUE Integer/MAX_VALUE max-term-depth)
     (catch clojure.lang.ExceptionInfo e
       (let [code (:fram/code (ex-data e))]
@@ -129,7 +129,7 @@
            {:depth depth}))
   (try
     (t/termcodecdecoded-value
-     (wire/decode-term-codec-v1!
+     (framrpc/decode-term-codec-v1!
       buffer Integer/MAX_VALUE Integer/MAX_VALUE max-term-depth))
     (catch clojure.lang.ExceptionInfo e
       (if (= :term-depth-exceeded (:fram/code (ex-data e)))
