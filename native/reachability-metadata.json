@@ -894,6 +894,22 @@
       "type": "java.util.concurrent.LinkedBlockingQueue"
     },
     {
+      "type": "java.util.concurrent.ThreadPoolExecutor",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "int",
+            "int",
+            "long",
+            "java.util.concurrent.TimeUnit",
+            "java.util.concurrent.BlockingQueue",
+            "java.util.concurrent.ThreadFactory"
+          ]
+        }
+      ]
+    },
+    {
       "type": "java.util.concurrent.TimeUnit"
     },
     {
