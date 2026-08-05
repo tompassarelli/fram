@@ -88,7 +88,7 @@
 (defn response
   [request: t/RpcRequest
    served-version: Int
-   payload: Any] -> t/RpcResponse
+   payload: t/Term] -> t/RpcResponse
   (t/->RpcResponse (t/rpcrequest-space request)
                    (t/rpcrequest-op request)
                    served-version nil nil payload))
