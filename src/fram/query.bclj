@@ -36,6 +36,9 @@
    errors: (Vec QueryError)
    over-limit: Int?
    maximum: Int?])
+(defrecord QueryExecutionResult
+  [query-result: QueryResult?
+   error: d/QueryEvaluationError?])
 (defrecord QueryPage
   [rows: (Vec d/Tuple)
    next: String?
@@ -123,6 +126,12 @@
   (queryresult-over-limit result))
 (defn result-maximum [result: QueryResult] -> Int?
   (queryresult-maximum result))
+
+(defn execution-query-result [result: QueryExecutionResult] -> QueryResult?
+  (queryexecutionresult-query-result result))
+
+(defn execution-error [result: QueryExecutionResult] -> d/QueryEvaluationError?
+  (queryexecutionresult-error result))
 
 (defn page-ok? [page: QueryPage] -> Bool (empty? (querypage-errors page)))
 (defn page-rows [page: QueryPage] -> (Vec d/Tuple) (querypage-rows page))
@@ -897,20 +906,15 @@
           nil)]
     (if (and (some? parsed) (> parsed 0)) parsed 100000)))
 
-(defn- evaluate-plan-controlled!
+(defn- evaluate-plan-result!
   [projection: Projection
    plan: QueryPlan
-   control: d/QueryControl?] -> d/Db
-  (d/run-strata-db-with-candidates-controlled!
+   control: d/QueryControl?] -> d/QueryEvaluationResult
+  (d/run-strata-db-with-candidates-result!
    (projection-edb projection)
    (queryplan-strata plan)
    (projection-candidates projection)
    control))
-
-(defn- evaluate-plan!
-  [projection: Projection
-   plan: QueryPlan] -> d/Db
-  (evaluate-plan-controlled! projection plan *query-control*))
 
 (defn- abort-result [problem: Any] -> QueryResult
   (let [data (ex-data problem)]
@@ -1141,16 +1145,20 @@
                count-value max-results)
               (success-result (order-row-vector survivors)))))))))
 
-(defn run-plan-projected-controlled!
+(defn run-plan-projected-result!
   [projection: Projection
    plan: QueryPlan
-   control: d/QueryControl?] -> QueryResult
+   control: d/QueryControl?] -> QueryExecutionResult
   (let [errors (validate-plan plan)]
     (if (not (empty? errors))
-      (failure-result errors)
-      (try
-        (let [db (evaluate-plan-controlled! projection plan control)
-              find (queryplan-find plan)]
+      (->QueryExecutionResult (failure-result errors) nil)
+      (let [evaluation (evaluate-plan-result! projection plan control)
+            error-value (d/query-evaluation-result-error evaluation)]
+        (if (some? error-value)
+          (->QueryExecutionResult nil error-value)
+          (let [db (d/query-evaluation-db evaluation)
+                find (queryplan-find plan)
+                result
           (if (aggregate-find? find)
             (aggregate-result db find)
             (let [rows (get db (findspec-relation find) #{})
@@ -1161,8 +1169,34 @@
                               (str "result has " count-value
                                    " rows, over limit " max-results))
                  count-value max-results)
-                (success-result (ordered-rows rows))))))
-        (catch Exception problem (abort-result problem))))))
+                (success-result (ordered-rows rows)))))]
+            (->QueryExecutionResult result nil)))))))
+
+(defn- execution-result-or-raise! [execution: QueryExecutionResult] -> QueryResult
+  (let [result (queryexecutionresult-query-result execution)
+        error-value (queryexecutionresult-error execution)]
+    (cond
+      [(some? result) result]
+      [(some? error-value)
+       (if (= :fram-query-abort
+              (d/query-evaluation-error-type error-value))
+         (failure-result
+          [(query-error (d/query-evaluation-error-code error-value)
+                        (d/query-evaluation-error-message error-value))])
+         (d/raise-query-evaluation-error! error-value))]
+      [:else
+       (failure-result
+        [(query-error :query-evaluation-missing-result
+                      "query evaluation produced no result")])])))
+
+(defn run-plan-projected-controlled!
+  [projection: Projection
+   plan: QueryPlan
+   control: d/QueryControl?] -> QueryResult
+  (try
+    (execution-result-or-raise!
+     (run-plan-projected-result! projection plan control))
+    (catch Exception problem (abort-result problem))))
 
 (defn run-plan-projected!
   [projection: Projection
@@ -1254,6 +1288,13 @@
       (failure-page [(query-error (:code data) (.getMessage problem))])
       (throw problem))))
 
+(defn- evaluation-error-page-or-raise! [error-value: d/QueryEvaluationError] -> QueryPage
+  (if (= :fram-query-abort (d/query-evaluation-error-type error-value))
+    (failure-page
+     [(query-error (d/query-evaluation-error-code error-value)
+                   (d/query-evaluation-error-message error-value))])
+    (d/raise-query-evaluation-error! error-value)))
+
 (defn run-page-plan-projected!
   [projection: Projection
    plan: QueryPlan
@@ -1279,27 +1320,34 @@
          (if (some? cursor-error)
            (failure-page [cursor-error])
            (try
-             (let [db (evaluate-plan! projection plan)
-                   relation (get db (findspec-relation (queryplan-find plan)) #{})
-                   ordered (ordered-rows relation)
-                   after-key (cursorresult-key decoded)
-                   eligible
-                   (if (some? after-key)
-                     (filterv (fn [row: d/Tuple] -> Bool
-                                (pos? (compare (row-key row) after-key)))
-                              ordered)
-                     ordered)
-                   window (vec (take (+ limit 1) eligible))
-                   wanted (min limit (count window))]
-               (if (= wanted 0)
-                 (page-envelope window 0)
-                 (let [count-value (fitting-prefix window wanted)]
-                   (if (= count-value 0)
-                     (wire-failure-page
-                      (query-error :query-page-row-too-large
-                                   "page contains a row too large for the bounded response")
-                      max-page-wire-bytes)
-                     (page-envelope window count-value)))))
+             (let [evaluation
+                   (evaluate-plan-result! projection plan *query-control*)
+                   error-value (d/query-evaluation-result-error evaluation)]
+               (if (some? error-value)
+                 (evaluation-error-page-or-raise! error-value)
+                 (let [db (d/query-evaluation-db evaluation)
+                       relation
+                       (get db (findspec-relation (queryplan-find plan)) #{})
+                       ordered (ordered-rows relation)
+                       after-key (cursorresult-key decoded)
+                       eligible
+                       (if (some? after-key)
+                         (filterv (fn [row: d/Tuple] -> Bool
+                                    (pos? (compare (row-key row) after-key)))
+                                  ordered)
+                         ordered)
+                       window (vec (take (+ limit 1) eligible))
+                       wanted (min limit (count window))]
+                   (if (= wanted 0)
+                     (page-envelope window 0)
+                     (let [count-value (fitting-prefix window wanted)]
+                       (if (= count-value 0)
+                         (wire-failure-page
+                          (query-error
+                           :query-page-row-too-large
+                           "page contains a row too large for the bounded response")
+                          max-page-wire-bytes)
+                         (page-envelope window count-value)))))))
              (catch Exception problem (abort-page problem)))))])))
 
 (defn run-page-projected!
