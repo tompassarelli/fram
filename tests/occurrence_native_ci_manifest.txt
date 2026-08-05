@@ -77,17 +77,14 @@ exclude	moved-graph-control	tests/database_authority_test.clj	tests/database_aut
 exclude	removed-flat-store	tests/commit_batch_test.clj	tests/commit_batch_test.clj#fram\.store
 exclude	removed-flat-store	tests/database_cardinality_fact_test.clj	tests/database_cardinality_fact_test.clj#fram\.store
 exclude	removed-flat-store	tests/commit_causality_test.clj	tests/commit_causality_test.clj#c/value-id
-exclude	removed-flat-log	tests/framrpc_client_boundary_test.clj	tests/framrpc_client_boundary_test.clj#facts\.log
 exclude	moved-graph-control	tests/server_code_flip_test.clj	tests/server_code_flip_test.clj#set-body
 exclude	removed-flat-store	tests/commit_coexist_elect_test.clj	tests/commit_coexist_elect_test.clj#c/value-id
 exclude	moved-graph-control	tests/server_concern_overlap_test.clj	tests/server_concern_overlap_test.clj#edit-min
-exclude	removed-edn-wire	tests/framrpc_server_wire_test.clj	tests/framrpc_server_wire_test.clj#request-dispatch
 exclude	moved-graph-control	tests/server_defcheck_untyped_e2e_test.clj	tests/server_defcheck_untyped_e2e_test.clj#write-def
 exclude	removed-flat-store	tests/database_dropin_test.clj	tests/database_dropin_test.clj#c/fact-of
 exclude	moved-graph-control	tests/code_edit_min_core_test.clj	tests/code_edit_min_core_test.clj#edit-min
 exclude	moved-graph-control	tests/code_edit_min_socket_test.clj	tests/code_edit_min_socket_test.clj#edit-min
 exclude	moved-graph-control	tests/code_editpath_defect_test.clj	tests/code_editpath_defect_test.clj#edit-min
-exclude	removed-flat-log	tests/database_facts_serialization_cache_test.clj	tests/database_facts_serialization_cache_test.clj#facts\.log
 exclude	removed-flat-log	tests/commit_fenced_publish_kernel_test.clj	tests/commit_fenced_publish_kernel_test.clj#facts\.log
 exclude	removed-flat-store	tests/commit_fenced_write_kernel_test.clj	tests/commit_fenced_write_kernel_test.clj#fram\.store
 exclude	removed-flat-store	tests/server_flip_test.clj	tests/server_flip_test.clj#c/entity!

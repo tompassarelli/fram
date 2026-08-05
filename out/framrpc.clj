@@ -1,7 +1,5 @@
 (ns framrpc
-  (:require [clojure.edn :as edn]
-            [clojure.string :as str]
-            [fram.types :as t])
+  (:require [fram.types :as t])
   (:import [java.io ByteArrayOutputStream]
            [java.io OutputStream]
            [java.nio ByteBuffer]
@@ -11,944 +9,757 @@
            [java.nio.charset CodingErrorAction]
            [java.nio.charset StandardCharsets]))
 
-(defn effective-request-op [req]
-  (if (= :for-log (:op req)) (get-in req [:request :op]) (:op req)))
+^{:line 12 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def term-codec-v1-depth-limit 256)
 
-(defn ^Boolean query-request? [req]
-  (and (map? req) (or (contains? #{:query :query-page :pull} (:op req)) (and (= :as-of (:op req)) (:query req)))))
+^{:line 14 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- codec-fail! [code ^String message]
+  ^{:line 17 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (throw ^{:line 17 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (ex-info message ^{:line 17 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} {:type code :fram/code code})))
 
-(defrecord QueryLimitPlan [timeout-ms deadline-ns max-steps max-rows max-response-bytes])
+^{:line 19 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- require-codec-limits! [max-string-bytes max-nodes max-depth]
+  ^{:line 23 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 23 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 23 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> max-string-bytes 0) ^{:line 24 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 24 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> max-nodes 0) ^{:line 24 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 24 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> max-depth 0) ^{:line 24 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (<= max-depth 256)))) nil ^{:line 26 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-invalid-limit "TermCodecV1 limits must be positive and depth at most 256")))
 
-(defn querylimitplan-timeout-ms [r] (:timeout-ms r))
-
-(defn querylimitplan-deadline-ns [r] (:deadline-ns r))
-
-(defn querylimitplan-max-steps [r] (:max-steps r))
-
-(defn querylimitplan-max-rows [r] (:max-rows r))
-
-(defn querylimitplan-max-response-bytes [r] (:max-response-bytes r))
-
-(defn lower-limit [req key ceiling]
-  (let [n (get req key)]
-  (if (and (integer? n) (pos? n)) (min n ceiling) ceiling)))
-
-(defn ^QueryLimitPlan query-limit-plan [req ceilings now-ns]
-  (let [timeout (lower-limit req :query-timeout-ms (:timeout-ms ceilings))]
-  (->QueryLimitPlan timeout (+ now-ns (* 1000000 timeout)) (lower-limit req :query-max-steps (:max-steps ceilings)) (lower-limit req :query-max-rows (:max-rows ceilings)) (lower-limit req :query-max-response-bytes (:max-response-bytes ceilings)))))
-
-(def dispatch-table {:query {:route :query :handler :query :required [:query] :response :query} :query-page {:route :query :handler :query-page :required [:query :limit] :response :query} :pull {:route :query :handler :pull :required [:root :pattern] :response :query} :as-of {:route :locked :handler :as-of :required [:seq] :response :read} :for-log {:route :for-log :handler :for-log :required [] :validation :handler :response :fenced} :version-free {:route :direct :handler :version-free :required [] :response :version} :seen {:route :direct :handler :seen :required [:v] :response :read} :reload-status {:route :direct :handler :reload-status :required [] :response :status} :cutover-status {:route :direct :handler :cutover-status :required [:token] :response :status} :cutover-prepare {:route :direct :handler :cutover-prepare :required [:token :cutover-id] :response :status} :cutover-demote {:route :direct :handler :cutover-demote :required [:token :cutover-id :expected-instance] :response :status} :cutover-promote {:route :direct :handler :cutover-promote :required [:token :cutover-id :marker] :response :status} :write-def {:route :direct :handler :write-def :required [:spec] :response :structured} :read-def {:route :direct :handler :read-def :required [:spec] :response :structured} :index {:route :direct :handler :index :required [:spec] :response :structured} :check {:route :direct :handler :check :required [] :response :structured} :edit-min {:route :direct :handler :edit-min :required [:spec] :response :edit} :edit-prepare {:route :direct :handler :edit-prepare :required [:spec] :response :edit} :edit-commit {:route :direct :handler :edit-commit :required [:candidate] :response :edit} :version {:route :locked :handler :version :required [] :response :version} :assert {:route :locked :handler :assert :required [:te :p :r] :response :mutation} :assert-existing {:route :locked :handler :assert-existing :required [:te :p :r] :response :mutation} :assert-batch {:route :locked :handler :assert-batch :required [:te :facts] :response :mutation} :assert-batch-at-version {:route :locked :handler :assert-batch-at-version :required [:te :facts :base] :response :mutation} :claim-cite {:route :locked :handler :claim-cite :required [] :validation :handler :response :mutation} :claim-decision {:route :locked :handler :claim-decision :required [] :validation :handler :response :mutation} :claim-unverify {:route :locked :handler :claim-unverify :required [] :validation :handler :response :mutation} :managed-agent-publish {:route :locked :handler :managed-agent-publish :required [] :validation :handler :response :mutation} :assert-with-fence {:route :locked :handler :assert-with-fence :required [:te :p :r :res :holder :epoch] :response :mutation} :assert-at-version {:route :locked :handler :assert-at-version :required [:te :p :r] :response :mutation} :assert-at-version-with-fence {:route :locked :handler :assert-at-version-with-fence :required [:te :p :r :base :res :holder :epoch] :response :mutation} :retract {:route :locked :handler :retract :required [:te :p :r] :response :mutation} :retract-existing {:route :locked :handler :retract-existing :required [:te :p :r] :response :mutation} :retract-with-fence {:route :locked :handler :retract-with-fence :required [:te :p :r :res :holder :epoch] :response :mutation} :bump {:route :locked :handler :bump :required [:te :p :n] :response :mutation} :acquire-lease {:route :locked :handler :acquire-lease :required [:res :holder :ttl-ms] :response :lease} :renew-lease {:route :locked :handler :renew-lease :required [:res :holder :epoch :ttl-ms] :response :lease} :release-lease {:route :locked :handler :release-lease :required [:res :holder] :response :lease} :fence-ok {:route :locked :handler :fence-ok :required [:res :holder :epoch] :response :read} :edit-protocol {:route :locked :handler :edit-protocol :required [] :response :status} :validate {:route :locked :handler :validate :required [] :response :read} :show {:route :locked :handler :show :required [:te] :response :read} :warm-check {:route :locked :handler :warm-check :required [] :response :status} :status {:route :locked :handler :status :required [] :response :status} :claim-read {:route :locked :handler :claim-read :required [] :validation :handler :response :read} :claims-read {:route :locked :handler :claims-read :required [] :validation :handler :response :read} :claims-needing-reverification {:route :locked :handler :claims-needing-reverification :required [] :validation :handler :response :read} :facts {:route :locked :handler :facts :required [] :response :read} :facts-for-subjects {:route :locked :handler :facts-for-subjects :required [:subjects] :response :read} :snapshot {:route :locked :handler :snapshot :required [] :response :snapshot} :snapshot-reconcile {:route :locked :handler :snapshot-reconcile :required [] :response :snapshot} :built-through {:route :locked :handler :built-through :required [] :response :status} :module-path {:route :locked :handler :module-path :required [:module] :response :read} :render {:route :locked :handler :render :required [:module] :response :read} :callers {:route :locked :handler :callers :required [] :response :read} :blast {:route :locked :handler :blast :required [] :response :read} :concern-overlap {:route :locked :handler :concern-overlap :required [:te] :response :read} :refers-ensure {:route :locked :handler :refers-ensure :required [] :response :read} :refers-keyset {:route :locked :handler :refers-keyset :required [] :response :read} :resolved {:route :locked :handler :resolved :required [:te :p] :response :read}})
-
-(defn request-dispatch [req state config]
-  (let [op (:op req)
-   base (get dispatch-table op {:route :locked :handler :unknown :required [] :response :error})
-   route (cond
-  (:durability-stop? state) :durability-stop
-  (and (= op :for-log) (query-request? (:request req))) :fenced-query
-  (query-request? req) :query
-  :else (:route base))
-   reload-policy (cond
-  (:reload-checked? config) :already-checked
-  (contains? (:reload-deferred-ops config) op) :deferred
-  (contains? (:reload-mutation-ops config) op) :mutation
-  :else :fresh)]
-  (assoc base :op op :route route :reload-policy reload-policy)))
-
-(defn ^Boolean target-request? [req]
-  (or (contains? req :te) (and (contains? req :module) (contains? req :name))))
-
-(defn request-validation-errors [req decision]
-  (cond
-  (not (map? req)) ["request must be a map"]
-  (not (contains? req :op)) [":op is required"]
-  (= :unknown (:handler decision)) []
-  (= :handler (:validation decision)) []
-  :else (let [missing (vec (filter (fn [k] (not (contains? req k))) (:required decision)))
-   base (mapv (fn [k] (str (name k) " is required")) missing)
-   op (:op req)]
-  (cond
-  (and (contains? #{:callers :blast} op) (not (target-request? req))) (conj base "te or module+name is required")
-  (and (= op :as-of) (not (:query req)) (not (and (contains? req :te) (contains? req :p)))) (conj base "query or te+p is required")
-  :else base))))
-
-(defn invalid-request-response [errors]
-  (if (seq errors) (do
-  {:error (vec errors) :code :invalid-request})))
-
-(defn ^Boolean json-format? [fmt]
-  (or (= fmt :json) (= fmt "json")))
-
-(defn ^Boolean edn-too-deep? [^String s max-depth]
-  (loop [i 0
-   depth 0
-   mx 0
-   in-str false
-   esc false]
-  (if (>= i (count s)) (> mx max-depth) (let [c (int (.charAt s i))]
-  (cond
-  esc (recur (inc i) depth mx in-str false)
-  (and in-str (= c 92)) (recur (inc i) depth mx in-str true)
-  in-str (recur (inc i) depth mx (not (= c 34)) false)
-  (= c 34) (recur (inc i) depth mx true false)
-  (or (= c 40) (= c 91) (= c 123)) (let [d (inc depth)]
-  (recur (inc i) d (max mx d) in-str false))
-  (or (= c 41) (= c 93) (= c 125)) (recur (inc i) (max 0 (dec depth)) mx in-str false)
-  :else (recur (inc i) depth mx in-str false))))))
-
-(defn parse-request [^String line max-depth]
-  (do
-  (if (edn-too-deep? line max-depth) (do
-  (throw (ex-info "edn too deep" {:type :edn-too-deep}))))
-  (edn/read-string line)))
-
-(defn strict-log-fence-rejection [^Boolean required? req served-log]
-  (if (and required? (not= :for-log (:op req))) (do
-  {:reject ["this server requires a :for-log envelope"] :code :log-fence-required :served-log served-log})))
-
-(defn ^Boolean fenced-subscribe? [req]
-  (let [inner (:request req)]
-  (and (= :for-log (:op req)) (map? inner) (= :subscribe (:op inner)))))
-
-(defn subscription-request [req]
-  (if (fenced-subscribe? req) (:request req) req))
-
-(defn actual-request [req]
-  (if (= :for-log (:op req)) (:request req) req))
-
-(defn subscription-response [version ^Boolean fenced? served-log]
-  (if fenced? {:subscribed version :log served-log} {:subscribed version}))
-
-(defrecord ConnectionState [phase request actual format response fenced-subscription query])
-
-(defn connectionstate-phase [r] (:phase r))
-
-(defn connectionstate-request [r] (:request r))
-
-(defn connectionstate-actual [r] (:actual r))
-
-(defn connectionstate-format [r] (:format r))
-
-(defn connectionstate-response [r] (:response r))
-
-(defn connectionstate-fenced-subscription [r] (:fenced-subscription r))
-
-(defn connectionstate-query [r] (:query r))
-
-(defn ^ConnectionState connection-start []
-  (->ConnectionState :reading nil nil nil nil false false))
-
-(defn ^ConnectionState connection-transition [^ConnectionState state event]
-  (let [kind (:event event)]
-  (cond
-  (= kind :request) (let [req (:request event)
-   strict-reject (:strict-reject event)
-   fence-reject (:fence-reject event)
-   fenced? (fenced-subscribe? req)
-   subscription? (or fenced? (= :subscribe (:op req)))
-   actual (actual-request req)
-   fmt (:fmt req)]
-  (cond
-  strict-reject (->ConnectionState :reply req actual fmt strict-reject fenced? false)
-  fence-reject (->ConnectionState :reply req actual fmt fence-reject fenced? false)
-  subscription? (->ConnectionState :subscribe req (subscription-request req) fmt nil fenced? false)
-  :else (->ConnectionState :handle req actual fmt nil false (query-request? actual))))
-  (= kind :handled) (->ConnectionState :reply (:request state) (:actual state) (:format state) (:response event) (:fenced-subscription state) (:query state))
-  (= kind :replied) (->ConnectionState :done (:request state) (:actual state) (:format state) (:response state) (:fenced-subscription state) (:query state))
-  (= kind :eof) (->ConnectionState :done (:request state) (:actual state) (:format state) (:response state) (:fenced-subscription state) (:query state))
-  :else state)))
-
-(defn ^String serialize-response [fmt resp to-json]
-  (if (json-format? fmt) (to-json resp) (pr-str resp)))
-
-(defn structured-error [stage at message expected got suggestion nearest]
-  (let [base {:ok false :stage stage}
-   with-at (if at (assoc base :at at) base)
-   with-message (if message (assoc with-at :message message) with-at)
-   with-expected (if expected (assoc with-message :expected expected) with-message)
-   with-got (if got (assoc with-expected :got got) with-expected)
-   with-suggestion (if suggestion (assoc with-got :suggestion suggestion) with-got)]
-  (if (seq nearest) (assoc with-suggestion :nearest (vec nearest)) with-suggestion)))
-
-(defn exception-gate-error [module nm t]
-  (let [d (ex-data t)
-   class-name (.getSimpleName (class t))
-   msg (or (not-empty (str (.getMessage t))) (:message d) (str "internal error: " class-name))]
-  (structured-error :gate {:module module :def nm} msg nil class-name (or (:suggestion d) "simplify the form; ensure every referenced helper/type exists") nil)))
-
-(defn reject-gate-error [module nm er]
-  (let [msg (if (vector? (:reject er)) (str/join "; " (:reject er)) (str (:reject er)))
-   base (structured-error :canon {:module module :def nm} (str "verb rejected: " msg) nil nil "send exactly one named value def per form; narrow ambiguous edits" nil)]
-  (if (:disambiguation er) (assoc base :disambiguation (:disambiguation er)) base)))
-
-(defn edit-min-error-response [spec t version]
-  (let [d (ex-data t)
-   msg (or (not-empty (str (.getMessage t))) (:message d) (str "internal error: " (.getSimpleName (class t))))
-   base {:reject [(str "edit-min: " msg)] :error (exception-gate-error (:module spec) (:name spec) t) :version version}]
-  (if (:disambiguation d) (assoc base :disambiguation (:disambiguation d)) base)))
-
-(defn unknown-op-response []
-  {:error "unknown op"})
-
-(defn bad-request-response [error-data ^String class-name]
-  {:error (str "bad request: " (or (:type error-data) class-name))})
-
-(defn connection-error-selection [scope error-kind error-data ^String class-name]
-  (cond
-  (not= scope :request) {:action :close}
-  (= error-kind :socket-timeout) {:action :close}
-  :else {:action :reply :response (bad-request-response error-data class-name)}))
-
-(def term-codec-v1-depth-limit 256)
-
-(defn- codec-fail! [code ^String message]
-  (throw (ex-info message {:type code :fram/code code})))
-
-(defn- require-codec-limits! [max-string-bytes max-nodes max-depth]
-  (if (and (> max-string-bytes 0) (and (> max-nodes 0) (and (> max-depth 0) (<= max-depth 256)))) nil (codec-fail! :term-codec-invalid-limit "TermCodecV1 limits must be positive and depth at most 256")))
-
-(defn- utf8-length! [^String value maximum ^String label]
-  (loop [index 0
+^{:line 29 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- utf8-length! [^String value maximum ^String label]
+  ^{:line 33 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (loop [index 0
    total 0]
-  (if (>= index (count value)) total (let [unit (int (.charAt value index))
-   high? (and (>= unit 55296) (<= unit 56319))
-   low? (and (>= unit 56320) (<= unit 57343))
-   pair-unit (if (and high? (< (+ index 1) (count value))) (int (.charAt value (+ index 1))) -1)
-   pair? (and high? (and (>= pair-unit 56320) (<= pair-unit 57343)))
-   width (cond
-  (<= unit 127) 1
-  (<= unit 2047) 2
+  ^{:line 34 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 34 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (>= index ^{:line 34 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (count value)) total ^{:line 36 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [unit ^{:line 36 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (int ^{:line 36 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.charAt value index))
+   high? ^{:line 37 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 37 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (>= unit 55296) ^{:line 37 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (<= unit 56319))
+   low? ^{:line 38 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 38 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (>= unit 56320) ^{:line 38 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (<= unit 57343))
+   pair-unit ^{:line 40 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 40 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and high? ^{:line 40 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (< ^{:line 40 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ index 1) ^{:line 40 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (count value))) ^{:line 41 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (int ^{:line 41 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.charAt value ^{:line 41 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ index 1))) -1)
+   pair? ^{:line 42 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and high? ^{:line 42 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 42 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (>= pair-unit 56320) ^{:line 42 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (<= pair-unit 57343)))
+   width ^{:line 44 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 45 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (<= unit 127) 1
+  ^{:line 46 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (<= unit 2047) 2
   pair? 4
-  (or high? low?) -1
+  ^{:line 48 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (or high? low?) -1
   :else 3)]
-  (if (= width -1) (codec-fail! :term-codec-invalid-utf8 (str label " contains an unpaired UTF-16 surrogate")) (let [next-total (+ total width)]
-  (if (> next-total maximum) (codec-fail! :term-codec-string-limit (str label " exceeds the UTF-8 byte limit")) (recur (+ index (if pair? 2 1)) next-total))))))))
+  ^{:line 50 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 50 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= width -1) ^{:line 51 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-invalid-utf8 ^{:line 52 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str label " contains an unpaired UTF-16 surrogate")) ^{:line 53 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [next-total ^{:line 53 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ total width)]
+  ^{:line 54 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 54 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> next-total maximum) ^{:line 55 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-string-limit ^{:line 56 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str label " exceeds the UTF-8 byte limit")) ^{:line 57 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (recur ^{:line 57 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ index ^{:line 57 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if pair? 2 1)) next-total))))))))
 
-(defn- strict-utf8-bytes! [^String value maximum ^String label]
-  (let [expected (utf8-length! value maximum label)]
-  (try
-  (let [encoder (doto (.newEncoder StandardCharsets/UTF_8)
-  (.onMalformedInput CodingErrorAction/REPORT)
-  (.onUnmappableCharacter CodingErrorAction/REPORT))
-   buffer (.encode encoder (CharBuffer/wrap value))
-   bytes (byte-array (.remaining buffer))]
-  (.get buffer bytes)
-  (if (= expected (alength bytes)) bytes (codec-fail! :term-codec-invalid-utf8 (str label " encoded to an unexpected byte length"))))
+^{:line 59 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- strict-utf8-bytes! [^String value maximum ^String label]
+  ^{:line 63 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [expected ^{:line 63 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (utf8-length! value maximum label)]
+  ^{:line 64 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (try
+  ^{:line 65 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [encoder ^{:line 65 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (doto ^{:line 65 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.newEncoder StandardCharsets/UTF_8)
+  ^{:line 66 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.onMalformedInput CodingErrorAction/REPORT)
+  ^{:line 67 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.onUnmappableCharacter CodingErrorAction/REPORT))
+   buffer ^{:line 68 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.encode encoder ^{:line 68 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (CharBuffer/wrap value))
+   bytes ^{:line 69 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (byte-array ^{:line 69 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.remaining buffer))]
+  ^{:line 70 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.get buffer bytes)
+  ^{:line 71 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 71 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= expected ^{:line 71 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (alength bytes)) bytes ^{:line 73 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-invalid-utf8 ^{:line 74 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str label " encoded to an unexpected byte length"))))
   (catch CharacterCodingException _
-    (codec-fail! :term-codec-invalid-utf8 (str label " is not valid UTF-8 text"))))))
+    ^{:line 76 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-invalid-utf8 ^{:line 77 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str label " is not valid UTF-8 text"))))))
 
-(defn- ^String strict-utf8-string! [bytes ^String label]
-  (try
-  (let [decoder (doto (.newDecoder StandardCharsets/UTF_8)
-  (.onMalformedInput CodingErrorAction/REPORT)
-  (.onUnmappableCharacter CodingErrorAction/REPORT))]
-  (str (.decode decoder (ByteBuffer/wrap bytes))))
+^{:line 79 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- ^String strict-utf8-string! [bytes ^String label]
+  ^{:line 82 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (try
+  ^{:line 83 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [decoder ^{:line 83 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (doto ^{:line 83 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.newDecoder StandardCharsets/UTF_8)
+  ^{:line 84 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.onMalformedInput CodingErrorAction/REPORT)
+  ^{:line 85 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.onUnmappableCharacter CodingErrorAction/REPORT))]
+  ^{:line 86 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str ^{:line 86 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.decode decoder ^{:line 86 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (ByteBuffer/wrap bytes))))
   (catch CharacterCodingException _
-    (codec-fail! :term-codec-invalid-utf8 (str label " is not valid UTF-8")))))
+    ^{:line 88 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-invalid-utf8 ^{:line 89 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str label " is not valid UTF-8")))))
 
-(defn- codec-write-u8! [out value]
-  (.write out (int (bit-and 255 value)))
+^{:line 91 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- codec-write-u8! [out value]
+  ^{:line 94 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.write out ^{:line 94 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (int ^{:line 94 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (bit-and 255 value)))
   nil)
 
-(defn- codec-write-u32-le! [out value]
-  (if (and (>= value 0) (<= value 4294967295)) (do
-  (loop [offset 0]
-  (if (< offset 4) (do
-  (codec-write-u8! out (unsigned-bit-shift-right value (* offset 8)))
-  (recur (+ offset 1))) nil))
-  nil) (codec-fail! :term-codec-integer-range "u32 value is out of range")))
+^{:line 97 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- codec-write-u32-le! [out value]
+  ^{:line 100 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 100 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 100 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (>= value 0) ^{:line 100 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (<= value 4294967295)) ^{:line 101 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 102 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (loop [offset 0]
+  ^{:line 103 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 103 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (< offset 4) ^{:line 104 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 105 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out ^{:line 105 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (unsigned-bit-shift-right value ^{:line 105 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (* offset 8)))
+  ^{:line 106 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (recur ^{:line 106 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ offset 1))) nil))
+  nil) ^{:line 109 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-integer-range "u32 value is out of range")))
 
-(defn- codec-write-i64-le! [out value]
-  (loop [offset 0]
-  (if (< offset 8) (do
-  (codec-write-u8! out (unsigned-bit-shift-right value (* offset 8)))
-  (recur (+ offset 1))) nil)))
+^{:line 111 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- codec-write-i64-le! [out value]
+  ^{:line 114 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (loop [offset 0]
+  ^{:line 115 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 115 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (< offset 8) ^{:line 116 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 117 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out ^{:line 117 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (unsigned-bit-shift-right value ^{:line 117 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (* offset 8)))
+  ^{:line 118 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (recur ^{:line 118 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ offset 1))) nil)))
 
-(defn- codec-node! [counter maximum]
-  (let [count-value (swap! counter inc)]
-  (if (> count-value maximum) (codec-fail! :term-codec-node-limit "TermCodecV1 node count exceeds the configured bound") nil)))
+^{:line 121 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- codec-node! [counter maximum]
+  ^{:line 124 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [count-value ^{:line 124 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (swap! counter inc)]
+  ^{:line 125 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 125 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> count-value maximum) ^{:line 126 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-node-limit "TermCodecV1 node count exceeds the configured bound") nil)))
 
-(defn- measure-term-core! [term depth max-string-bytes max-nodes max-depth counter]
-  (if (> depth max-depth) (codec-fail! :term-depth-exceeded "recursive Term exceeds the TermCodecV1 depth bound") (do
-  (codec-node! counter max-nodes)
-  (cond
-  (t/triple? term) (+ 1 (+ (measure-term-core! (t/triple-slot0 term) (+ depth 1) max-string-bytes max-nodes max-depth counter) (+ (measure-term-core! (t/triple-slot1 term) (+ depth 1) max-string-bytes max-nodes max-depth counter) (measure-term-core! (t/triple-slot2 term) (+ depth 1) max-string-bytes max-nodes max-depth counter))))
-  (string? term) (+ 5 (utf8-length! term max-string-bytes "String atom"))
-  (integer? term) 9
-  (and (number? term) (not (integer? term))) 9
-  (boolean? term) 1
-  (keyword? term) (let [spelling (subs (str term) 1)]
-  (if (empty? spelling) (codec-fail! :term-codec-invalid-keyword "Keyword atom spelling must be nonempty") (+ 5 (utf8-length! spelling max-string-bytes "Keyword atom"))))
-  (t/instant? term) 13
-  :else (codec-fail! :term-codec-unsupported-term "TermCodecV1 encountered a value outside Term")))))
+^{:line 130 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- measure-term-core! [term depth max-string-bytes max-nodes max-depth counter]
+  ^{:line 137 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 137 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> depth max-depth) ^{:line 138 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-depth-exceeded "recursive Term exceeds the TermCodecV1 depth bound") ^{:line 140 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 141 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-node! counter max-nodes)
+  ^{:line 142 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 143 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple? term) ^{:line 144 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ 1 ^{:line 145 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 145 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (measure-term-core! ^{:line 145 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot0 term) ^{:line 145 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ depth 1) max-string-bytes max-nodes max-depth counter) ^{:line 147 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 147 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (measure-term-core! ^{:line 147 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot1 term) ^{:line 147 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ depth 1) max-string-bytes max-nodes max-depth counter) ^{:line 149 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (measure-term-core! ^{:line 149 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot2 term) ^{:line 149 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ depth 1) max-string-bytes max-nodes max-depth counter))))
+  ^{:line 151 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (string? term) ^{:line 151 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ 5 ^{:line 151 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (utf8-length! term max-string-bytes "String atom"))
+  ^{:line 152 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (integer? term) 9
+  ^{:line 153 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 153 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (number? term) ^{:line 153 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (not ^{:line 153 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (integer? term))) 9
+  ^{:line 154 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (boolean? term) 1
+  ^{:line 155 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (keyword? term) ^{:line 156 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [spelling ^{:line 156 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (subs ^{:line 156 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str term) 1)]
+  ^{:line 157 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 157 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (empty? spelling) ^{:line 158 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-invalid-keyword "Keyword atom spelling must be nonempty") ^{:line 160 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ 5 ^{:line 160 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (utf8-length! spelling max-string-bytes "Keyword atom"))))
+  ^{:line 161 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/instant? term) 13
+  :else ^{:line 163 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-unsupported-term "TermCodecV1 encountered a value outside Term")))))
 
-(defn measure-term-codec-v1! [term max-string-bytes max-nodes max-depth]
-  (require-codec-limits! max-string-bytes max-nodes max-depth)
-  (let [counter (atom 0)
-   byte-count (measure-term-core! term 0 max-string-bytes max-nodes max-depth counter)]
-  (t/->TermCodecMeasure byte-count (deref counter))))
+^{:line 166 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn measure-term-codec-v1! [term max-string-bytes max-nodes max-depth]
+  ^{:line 171 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-codec-limits! max-string-bytes max-nodes max-depth)
+  ^{:line 172 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [counter ^{:line 172 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (atom 0)
+   byte-count ^{:line 174 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (measure-term-core! term 0 max-string-bytes max-nodes max-depth counter)]
+  ^{:line 175 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/->TermCodecMeasure byte-count ^{:line 175 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (deref counter))))
 
-(defn- write-sized-text-core! [out ^String value max-string-bytes ^String label]
-  (let [bytes (strict-utf8-bytes! value max-string-bytes label)]
-  (codec-write-u32-le! out (alength bytes))
-  (.write out bytes)
+^{:line 177 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- write-sized-text-core! [out ^String value max-string-bytes ^String label]
+  ^{:line 182 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [bytes ^{:line 182 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (strict-utf8-bytes! value max-string-bytes label)]
+  ^{:line 183 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u32-le! out ^{:line 183 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (alength bytes))
+  ^{:line 184 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.write out bytes)
   nil))
 
-(defn- write-term-core! [out term max-string-bytes]
-  (cond
-  (t/triple? term) (do
-  (codec-write-u8! out 7)
-  (write-term-core! out (t/triple-slot0 term) max-string-bytes)
-  (write-term-core! out (t/triple-slot1 term) max-string-bytes)
-  (write-term-core! out (t/triple-slot2 term) max-string-bytes))
-  (string? term) (do
-  (codec-write-u8! out 1)
-  (write-sized-text-core! out term max-string-bytes "String atom"))
-  (integer? term) (do
-  (codec-write-u8! out 2)
-  (codec-write-i64-le! out term))
-  (and (number? term) (not (integer? term))) (do
-  (codec-write-u8! out 3)
-  (codec-write-i64-le! out (Double/doubleToLongBits (double term))))
-  (false? term) (codec-write-u8! out 4)
-  (true? term) (codec-write-u8! out 5)
-  (keyword? term) (do
-  (codec-write-u8! out 6)
-  (write-sized-text-core! out (subs (str term) 1) max-string-bytes "Keyword atom"))
-  (t/instant? term) (do
-  (codec-write-u8! out 8)
-  (codec-write-i64-le! out (t/instant-epoch-seconds term))
-  (codec-write-u32-le! out (t/instant-nanos term)))
-  :else (codec-fail! :term-codec-unsupported-term "TermCodecV1 encountered a value outside Term")))
+^{:line 187 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- write-term-core! [out term max-string-bytes]
+  ^{:line 191 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 192 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple? term) ^{:line 193 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 194 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out 7)
+  ^{:line 195 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-term-core! out ^{:line 195 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot0 term) max-string-bytes)
+  ^{:line 196 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-term-core! out ^{:line 196 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot1 term) max-string-bytes)
+  ^{:line 197 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-term-core! out ^{:line 197 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot2 term) max-string-bytes))
+  ^{:line 198 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (string? term) ^{:line 199 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 199 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out 1)
+  ^{:line 200 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-sized-text-core! out term max-string-bytes "String atom"))
+  ^{:line 201 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (integer? term) ^{:line 202 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 202 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out 2)
+  ^{:line 202 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-i64-le! out term))
+  ^{:line 203 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 203 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (number? term) ^{:line 203 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (not ^{:line 203 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (integer? term))) ^{:line 204 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 204 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out 3)
+  ^{:line 205 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-i64-le! out ^{:line 205 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (Double/doubleToLongBits ^{:line 205 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (double term))))
+  ^{:line 206 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (false? term) ^{:line 206 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out 4)
+  ^{:line 207 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (true? term) ^{:line 207 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out 5)
+  ^{:line 208 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (keyword? term) ^{:line 209 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 209 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out 6)
+  ^{:line 210 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-sized-text-core! out ^{:line 210 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (subs ^{:line 210 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str term) 1) max-string-bytes "Keyword atom"))
+  ^{:line 212 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/instant? term) ^{:line 213 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 214 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out 8)
+  ^{:line 215 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-i64-le! out ^{:line 215 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/instant-epoch-seconds term))
+  ^{:line 216 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u32-le! out ^{:line 216 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/instant-nanos term)))
+  :else ^{:line 218 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-unsupported-term "TermCodecV1 encountered a value outside Term")))
 
-(defn write-term-codec-v1! [out term max-string-bytes max-nodes max-depth]
-  (let [measure (measure-term-codec-v1! term max-string-bytes max-nodes max-depth)]
-  (write-term-core! out term max-string-bytes)
-  (t/termcodecmeasure-nodes measure)))
+^{:line 221 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn write-term-codec-v1! [out term max-string-bytes max-nodes max-depth]
+  ^{:line 227 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [measure ^{:line 228 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (measure-term-codec-v1! term max-string-bytes max-nodes max-depth)]
+  ^{:line 229 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-term-core! out term max-string-bytes)
+  ^{:line 230 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/termcodecmeasure-nodes measure)))
 
-(defn- codec-ensure! [buffer count-value ^String context]
-  (if (< (.remaining buffer) count-value) (codec-fail! :term-codec-truncated (str "TermCodecV1 ended inside " context)) nil))
+^{:line 232 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- codec-ensure! [buffer count-value ^String context]
+  ^{:line 236 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 236 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (< ^{:line 236 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.remaining buffer) count-value) ^{:line 237 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-truncated ^{:line 238 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str "TermCodecV1 ended inside " context)) nil))
 
-(defn- codec-read-u8! [buffer ^String context]
-  (codec-ensure! buffer 1 context)
-  (let [one (byte-array 1)]
-  (.get buffer one)
-  (bit-and 255 (int (aget one 0)))))
+^{:line 241 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- codec-read-u8! [buffer ^String context]
+  ^{:line 244 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-ensure! buffer 1 context)
+  ^{:line 245 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [one ^{:line 245 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (byte-array 1)]
+  ^{:line 246 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.get buffer one)
+  ^{:line 247 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (bit-and 255 ^{:line 247 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (int ^{:line 247 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (aget one 0)))))
 
-(defn- codec-read-u32-le! [buffer ^String context]
-  (codec-ensure! buffer 4 context)
-  (Integer/toUnsignedLong (.getInt buffer)))
+^{:line 249 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- codec-read-u32-le! [buffer ^String context]
+  ^{:line 252 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-ensure! buffer 4 context)
+  ^{:line 253 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (Integer/toUnsignedLong ^{:line 253 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.getInt buffer)))
 
-(defn- ^String read-sized-text-core! [buffer max-string-bytes ^String context]
-  (let [length (codec-read-u32-le! buffer context)]
-  (if (> length max-string-bytes) (codec-fail! :term-codec-string-limit (str context " exceeds the UTF-8 byte limit")) (do
-  (codec-ensure! buffer length context)
-  (let [bytes (byte-array length)]
-  (.get buffer bytes)
-  (strict-utf8-string! bytes context))))))
+^{:line 255 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- ^String read-sized-text-core! [buffer max-string-bytes ^String context]
+  ^{:line 259 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [length ^{:line 259 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-read-u32-le! buffer context)]
+  ^{:line 260 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 260 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> length max-string-bytes) ^{:line 261 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-string-limit ^{:line 262 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str context " exceeds the UTF-8 byte limit")) ^{:line 263 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 264 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-ensure! buffer length context)
+  ^{:line 265 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [bytes ^{:line 265 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (byte-array length)]
+  ^{:line 266 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.get buffer bytes)
+  ^{:line 267 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (strict-utf8-string! bytes context))))))
 
-(defn- decode-term-core! [buffer depth max-string-bytes max-nodes max-depth counter]
-  (if (> depth max-depth) (codec-fail! :term-depth-exceeded "recursive Term exceeds the TermCodecV1 depth bound") (do
-  (codec-node! counter max-nodes)
-  (let [tag (codec-read-u8! buffer "Term tag")]
-  (cond
-  (= tag 1) (read-sized-text-core! buffer max-string-bytes "String atom")
-  (= tag 2) (do
-  (codec-ensure! buffer 8 "Int atom")
-  (.getLong buffer))
-  (= tag 3) (do
-  (codec-ensure! buffer 8 "Float atom")
-  (Double/longBitsToDouble (.getLong buffer)))
-  (= tag 4) false
-  (= tag 5) true
-  (= tag 6) (let [spelling (read-sized-text-core! buffer max-string-bytes "Keyword atom")]
-  (if (empty? spelling) (codec-fail! :term-codec-invalid-keyword "Keyword atom spelling must be nonempty") (keyword spelling)))
-  (= tag 7) (t/triple (decode-term-core! buffer (+ depth 1) max-string-bytes max-nodes max-depth counter) (decode-term-core! buffer (+ depth 1) max-string-bytes max-nodes max-depth counter) (decode-term-core! buffer (+ depth 1) max-string-bytes max-nodes max-depth counter))
-  (= tag 8) (do
-  (codec-ensure! buffer 12 "Instant atom")
-  (let [seconds (.getLong buffer)
-   nanos (codec-read-u32-le! buffer "Instant nanos")]
-  (if (< nanos 1000000000) (t/instant seconds nanos) (codec-fail! :term-codec-invalid-instant "Instant nanoseconds are outside the canonical range"))))
-  :else (codec-fail! :term-codec-bad-tag "TermCodecV1 contains an unknown tag"))))))
+^{:line 269 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- decode-term-core! [buffer depth max-string-bytes max-nodes max-depth counter]
+  ^{:line 276 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 276 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> depth max-depth) ^{:line 277 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-depth-exceeded "recursive Term exceeds the TermCodecV1 depth bound") ^{:line 279 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 280 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-node! counter max-nodes)
+  ^{:line 281 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [tag ^{:line 281 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-read-u8! buffer "Term tag")]
+  ^{:line 282 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 283 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= tag 1) ^{:line 283 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (read-sized-text-core! buffer max-string-bytes "String atom")
+  ^{:line 284 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= tag 2) ^{:line 284 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 284 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-ensure! buffer 8 "Int atom")
+  ^{:line 284 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.getLong buffer))
+  ^{:line 285 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= tag 3) ^{:line 286 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 286 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-ensure! buffer 8 "Float atom")
+  ^{:line 287 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (Double/longBitsToDouble ^{:line 287 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.getLong buffer)))
+  ^{:line 288 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= tag 4) false
+  ^{:line 289 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= tag 5) true
+  ^{:line 290 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= tag 6) ^{:line 291 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [spelling ^{:line 292 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (read-sized-text-core! buffer max-string-bytes "Keyword atom")]
+  ^{:line 293 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 293 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (empty? spelling) ^{:line 294 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-invalid-keyword "Keyword atom spelling must be nonempty") ^{:line 296 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (keyword spelling)))
+  ^{:line 297 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= tag 7) ^{:line 298 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple ^{:line 299 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (decode-term-core! buffer ^{:line 299 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ depth 1) max-string-bytes max-nodes max-depth counter) ^{:line 301 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (decode-term-core! buffer ^{:line 301 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ depth 1) max-string-bytes max-nodes max-depth counter) ^{:line 303 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (decode-term-core! buffer ^{:line 303 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ depth 1) max-string-bytes max-nodes max-depth counter))
+  ^{:line 305 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= tag 8) ^{:line 306 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 307 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-ensure! buffer 12 "Instant atom")
+  ^{:line 308 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [seconds ^{:line 308 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.getLong buffer)
+   nanos ^{:line 309 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-read-u32-le! buffer "Instant nanos")]
+  ^{:line 310 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 310 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (< nanos 1000000000) ^{:line 311 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/instant seconds nanos) ^{:line 312 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-invalid-instant "Instant nanoseconds are outside the canonical range"))))
+  :else ^{:line 315 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-fail! :term-codec-bad-tag "TermCodecV1 contains an unknown tag"))))))
 
-(defn decode-term-codec-v1! [buffer max-string-bytes max-nodes max-depth]
-  (require-codec-limits! max-string-bytes max-nodes max-depth)
-  (.order buffer ByteOrder/LITTLE_ENDIAN)
-  (let [counter (atom 0)
-   value (decode-term-core! buffer 0 max-string-bytes max-nodes max-depth counter)]
-  (t/->TermCodecDecoded value (deref counter))))
+^{:line 318 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn decode-term-codec-v1! [buffer max-string-bytes max-nodes max-depth]
+  ^{:line 323 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-codec-limits! max-string-bytes max-nodes max-depth)
+  ^{:line 324 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.order buffer ByteOrder/LITTLE_ENDIAN)
+  ^{:line 325 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [counter ^{:line 325 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (atom 0)
+   value ^{:line 327 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (decode-term-core! buffer 0 max-string-bytes max-nodes max-depth counter)]
+  ^{:line 328 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/->TermCodecDecoded value ^{:line 328 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (deref counter))))
 
-(def rpc-v1-major 1)
+^{:line 334 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-v1-major 1)
 
-(def rpc-v1-minor 0)
+^{:line 335 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-v1-minor 0)
 
-(def rpc-v1-header-bytes 26)
+^{:line 336 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-v1-header-bytes 26)
 
-(def rpc-v1-max-body-bytes 1048576)
+^{:line 337 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-v1-max-body-bytes 1048576)
 
-(def rpc-v1-max-frame-bytes 1048602)
+^{:line 338 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-v1-max-frame-bytes 1048602)
 
-(def rpc-v1-max-string-bytes 1048576)
+^{:line 339 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-v1-max-string-bytes 1048576)
 
-(def rpc-v1-max-space-bytes 4096)
+^{:line 340 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-v1-max-space-bytes 4096)
 
-(def rpc-v1-max-term-nodes 65536)
+^{:line 341 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-v1-max-term-nodes 65536)
 
-(def rpc-v1-max-term-depth 256)
+^{:line 342 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-v1-max-term-depth 256)
 
-(def rpc-v1-magic (.getBytes "FRAMRPC\u0000" StandardCharsets/UTF_8))
+^{:line 343 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-v1-magic ^{:line 344 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.getBytes "FRAMRPC\u0000" StandardCharsets/UTF_8))
 
-(defn- rpc-fail! [code ^String message]
-  (throw (ex-info message {:type code :fram/code code})))
+^{:line 346 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-fail! [code ^String message]
+  ^{:line 349 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (throw ^{:line 349 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (ex-info message ^{:line 349 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} {:type code :fram/code code})))
 
-(defn- ^Boolean rpc-u32? [value]
-  (and (>= value 0) (<= value 4294967295)))
+^{:line 351 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- ^Boolean rpc-u32? [value]
+  ^{:line 352 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 352 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (>= value 0) ^{:line 352 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (<= value 4294967295)))
 
-(defn- ^Boolean rpc-i64? [value]
-  (and (>= value -9223372036854775808) (<= value 9223372036854775807)))
+^{:line 354 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- ^Boolean rpc-i64? [value]
+  ^{:line 355 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 355 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (>= value -9223372036854775808) ^{:line 356 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (<= value 9223372036854775807)))
 
-(defn- rpc-kind-code! [kind]
-  (cond
-  (= kind :request) 1
-  (= kind :response) 2
-  (= kind :cancel) 3
-  (= kind :event) 4
-  :else (rpc-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown")))
+^{:line 358 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-kind-code! [kind]
+  ^{:line 359 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 360 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :request) 1
+  ^{:line 361 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :response) 2
+  ^{:line 362 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :cancel) 3
+  ^{:line 363 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :event) 4
+  :else ^{:line 364 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown")))
 
-(defn- rpc-code-kind! [code]
-  (cond
-  (= code 1) :request
-  (= code 2) :response
-  (= code 3) :cancel
-  (= code 4) :event
-  :else (rpc-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown")))
+^{:line 366 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-code-kind! [code]
+  ^{:line 367 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 368 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= code 1) :request
+  ^{:line 369 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= code 2) :response
+  ^{:line 370 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= code 3) :cancel
+  ^{:line 371 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= code 4) :event
+  :else ^{:line 372 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown")))
 
-(defn- require-rpc-term! [value ^String label]
-  (if (t/term? value) nil (rpc-fail! :rpc-invalid-term (str label " must be a Term"))))
+^{:line 374 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- require-rpc-term! [value ^String label]
+  ^{:line 377 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 377 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/term? value) nil ^{:line 379 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-term ^{:line 379 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str label " must be a Term"))))
 
-(defn- require-rpc-optional-term! [value ^String label]
-  (if (or (nil? value) (t/term? value)) nil (rpc-fail! :rpc-invalid-term (str label " must be nil or a Term"))))
+^{:line 381 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- require-rpc-optional-term! [value ^String label]
+  ^{:line 384 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 384 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (or ^{:line 384 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? value) ^{:line 384 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/term? value)) nil ^{:line 386 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-term ^{:line 386 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str label " must be nil or a Term"))))
 
-(defn- require-rpc-string! [value ^String label]
-  (if (string? value) nil (rpc-fail! :rpc-invalid-field (str label " must be a String"))))
+^{:line 388 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- require-rpc-string! [value ^String label]
+  ^{:line 391 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 391 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (string? value) nil ^{:line 393 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-field ^{:line 393 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str label " must be a String"))))
 
-(defn- require-rpc-keyword! [value ^String label]
-  (if (keyword? value) nil (rpc-fail! :rpc-invalid-field (str label " must be a Keyword"))))
+^{:line 395 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- require-rpc-keyword! [value ^String label]
+  ^{:line 398 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 398 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (keyword? value) nil ^{:line 400 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-field ^{:line 400 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str label " must be a Keyword"))))
 
-(defn- require-rpc-u32! [value ^String label]
-  (if (rpc-u32? value) nil (rpc-fail! :rpc-integer-range (str label " is outside u32"))))
+^{:line 402 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- require-rpc-u32! [value ^String label]
+  ^{:line 405 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 405 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-u32? value) nil ^{:line 407 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-integer-range ^{:line 407 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str label " is outside u32"))))
 
-(defn- require-rpc-i64! [value ^String label]
-  (if (rpc-i64? value) nil (rpc-fail! :rpc-integer-range (str label " is outside i64"))))
+^{:line 409 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- require-rpc-i64! [value ^String label]
+  ^{:line 412 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 412 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-i64? value) nil ^{:line 414 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-integer-range ^{:line 414 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str label " is outside i64"))))
 
-(defn rpc-page-request! [limit cursor]
-  (require-rpc-u32! limit "page limit")
-  (require-rpc-optional-term! cursor "page cursor")
-  (t/->RpcPageRequest limit cursor))
+^{:line 416 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-page-request! [limit cursor]
+  ^{:line 419 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-u32! limit "page limit")
+  ^{:line 420 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-optional-term! cursor "page cursor")
+  ^{:line 421 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/->RpcPageRequest limit cursor))
 
-(defn rpc-page-response! [ordinal next-cursor ^Boolean done]
-  (require-rpc-u32! ordinal "page ordinal")
-  (require-rpc-optional-term! next-cursor "next cursor")
-  (t/->RpcPageResponse ordinal next-cursor done))
+^{:line 423 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-page-response! [ordinal next-cursor ^Boolean done]
+  ^{:line 427 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-u32! ordinal "page ordinal")
+  ^{:line 428 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-optional-term! next-cursor "next cursor")
+  ^{:line 429 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/->RpcPageResponse ordinal next-cursor done))
 
-(defn rpc-error! [code ^Boolean retryable ^String message detail]
-  (require-rpc-keyword! code "error code")
-  (require-rpc-string! message "error message")
-  (require-rpc-optional-term! detail "error detail")
-  (t/->RpcError code retryable message detail))
+^{:line 431 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-error! [code ^Boolean retryable ^String message detail]
+  ^{:line 436 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-keyword! code "error code")
+  ^{:line 437 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-string! message "error message")
+  ^{:line 438 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-optional-term! detail "error detail")
+  ^{:line 439 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/->RpcError code retryable message detail))
 
-(defn rpc-request! [^String space op expected-version page timeout-ms payload]
-  (require-rpc-string! space "request space")
-  (require-rpc-keyword! op "request op")
-  (if expected-version (require-rpc-i64! expected-version "expected version") nil)
-  (if timeout-ms (require-rpc-u32! timeout-ms "timeout-ms") nil)
-  (require-rpc-term! payload "request payload")
-  (t/->RpcRequest space op expected-version page timeout-ms payload))
+^{:line 441 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-request! [^String space op expected-version page timeout-ms payload]
+  ^{:line 448 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-string! space "request space")
+  ^{:line 449 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-keyword! op "request op")
+  ^{:line 450 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if expected-version ^{:line 451 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-i64! expected-version "expected version") nil)
+  ^{:line 452 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if timeout-ms ^{:line 453 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-u32! timeout-ms "timeout-ms") nil)
+  ^{:line 454 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-term! payload "request payload")
+  ^{:line 455 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/->RpcRequest space op expected-version page timeout-ms payload))
 
-(defn rpc-response! [^String space op served-version page error payload]
-  (require-rpc-string! space "response space")
-  (require-rpc-keyword! op "response op")
-  (require-rpc-i64! served-version "served version")
-  (require-rpc-optional-term! payload "response payload")
-  (t/->RpcResponse space op served-version page error payload))
+^{:line 457 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-response! [^String space op served-version page error payload]
+  ^{:line 464 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-string! space "response space")
+  ^{:line 465 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-keyword! op "response op")
+  ^{:line 466 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-i64! served-version "served version")
+  ^{:line 467 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-optional-term! payload "response payload")
+  ^{:line 468 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/->RpcResponse space op served-version page error payload))
 
-(defn rpc-request-frame [request-id request]
-  (t/->RpcFrameV1 :request 0 request-id request nil))
+^{:line 470 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-request-frame [request-id request]
+  ^{:line 473 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/->RpcFrameV1 :request 0 request-id request nil))
 
-(defn rpc-response-frame [request-id response]
-  (t/->RpcFrameV1 :response 0 request-id nil response))
+^{:line 475 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-response-frame [request-id response]
+  ^{:line 478 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/->RpcFrameV1 :response 0 request-id nil response))
 
-(defn rpc-cancel-frame [request-id]
-  (t/->RpcFrameV1 :cancel 0 request-id nil nil))
+^{:line 480 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-cancel-frame [request-id]
+  ^{:line 481 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/->RpcFrameV1 :cancel 0 request-id nil nil))
 
-(defn rpc-event-frame [request-id event]
-  (t/->RpcFrameV1 :event 0 request-id nil event))
+^{:line 483 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-event-frame [request-id event]
+  ^{:line 486 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/->RpcFrameV1 :event 0 request-id nil event))
 
-(defn- validate-rpc-page-request! [page]
-  (require-rpc-u32! (t/rpcpagerequest-limit page) "page limit")
-  (require-rpc-optional-term! (t/rpc-page-request-cursor-value page) "page cursor"))
+^{:line 488 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- validate-rpc-page-request! [page]
+  ^{:line 489 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-u32! ^{:line 489 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcpagerequest-limit page) "page limit")
+  ^{:line 490 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-optional-term! ^{:line 490 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-page-request-cursor-value page) "page cursor"))
 
-(defn- validate-rpc-page-response! [page]
-  (require-rpc-u32! (t/rpcpageresponse-ordinal page) "page ordinal")
-  (require-rpc-optional-term! (t/rpc-page-response-cursor-value page) "next cursor"))
+^{:line 493 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- validate-rpc-page-response! [page]
+  ^{:line 494 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-u32! ^{:line 494 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcpageresponse-ordinal page) "page ordinal")
+  ^{:line 495 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-optional-term! ^{:line 495 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-page-response-cursor-value page) "next cursor"))
 
-(defn- validate-rpc-error! [error]
-  (require-rpc-keyword! (t/rpcerror-code error) "error code")
-  (require-rpc-string! (t/rpcerror-message error) "error message")
-  (require-rpc-optional-term! (t/rpc-error-detail-value error) "error detail"))
+^{:line 498 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- validate-rpc-error! [error]
+  ^{:line 499 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-keyword! ^{:line 499 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcerror-code error) "error code")
+  ^{:line 500 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-string! ^{:line 500 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcerror-message error) "error message")
+  ^{:line 501 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-optional-term! ^{:line 501 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-error-detail-value error) "error detail"))
 
-(defn- validate-rpc-request! [request]
-  (require-rpc-string! (t/rpcrequest-space request) "request space")
-  (utf8-length! (t/rpcrequest-space request) rpc-v1-max-space-bytes "SpaceId")
-  (require-rpc-keyword! (t/rpcrequest-op request) "request op")
-  (let [expected (t/rpcrequest-expected-version request)
-   page (t/rpcrequest-page request)
-   timeout (t/rpcrequest-timeout-ms request)]
-  (if expected (require-rpc-i64! expected "expected version") nil)
-  (if page (validate-rpc-page-request! page) nil)
-  (if timeout (require-rpc-u32! timeout "timeout-ms") nil)
-  (require-rpc-term! (t/rpc-request-payload-value request) "request payload")))
+^{:line 503 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- validate-rpc-request! [request]
+  ^{:line 504 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-string! ^{:line 504 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-space request) "request space")
+  ^{:line 505 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (utf8-length! ^{:line 505 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-space request) rpc-v1-max-space-bytes "SpaceId")
+  ^{:line 506 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-keyword! ^{:line 506 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-op request) "request op")
+  ^{:line 507 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [expected ^{:line 507 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-expected-version request)
+   page ^{:line 508 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-page request)
+   timeout ^{:line 509 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-timeout-ms request)]
+  ^{:line 510 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if expected ^{:line 510 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-i64! expected "expected version") nil)
+  ^{:line 511 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if page ^{:line 511 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (validate-rpc-page-request! page) nil)
+  ^{:line 512 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if timeout ^{:line 512 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-u32! timeout "timeout-ms") nil)
+  ^{:line 513 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-term! ^{:line 513 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-request-payload-value request) "request payload")))
 
-(defn- validate-rpc-response! [response]
-  (require-rpc-string! (t/rpcresponse-space response) "response space")
-  (utf8-length! (t/rpcresponse-space response) rpc-v1-max-space-bytes "SpaceId")
-  (require-rpc-keyword! (t/rpcresponse-op response) "response op")
-  (require-rpc-i64! (t/rpcresponse-served-version response) "served version")
-  (let [page (t/rpcresponse-page response)
-   error (t/rpcresponse-error response)]
-  (if page (validate-rpc-page-response! page) nil)
-  (if error (validate-rpc-error! error) nil)
-  (require-rpc-optional-term! (t/rpc-response-payload-value response) "response payload")))
+^{:line 515 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- validate-rpc-response! [response]
+  ^{:line 516 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-string! ^{:line 516 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-space response) "response space")
+  ^{:line 517 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (utf8-length! ^{:line 517 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-space response) rpc-v1-max-space-bytes "SpaceId")
+  ^{:line 518 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-keyword! ^{:line 518 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-op response) "response op")
+  ^{:line 519 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-i64! ^{:line 519 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-served-version response) "served version")
+  ^{:line 520 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [page ^{:line 520 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-page response)
+   error ^{:line 521 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-error response)]
+  ^{:line 522 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if page ^{:line 522 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (validate-rpc-page-response! page) nil)
+  ^{:line 523 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if error ^{:line 523 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (validate-rpc-error! error) nil)
+  ^{:line 524 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-optional-term! ^{:line 524 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-response-payload-value response) "response payload")))
 
-(defn- validate-rpc-frame! [frame]
-  (if (= 0 (t/rpcframev1-flags frame)) nil (rpc-fail! :rpc-invalid-flags "FRAMRPC v1 flags must be zero"))
-  (require-rpc-i64! (t/rpcframev1-request-id frame) "request id")
-  (let [kind (t/rpcframev1-kind frame)
-   request (t/rpcframev1-request frame)
-   response (t/rpcframev1-response frame)]
-  (cond
-  (= kind :request) (if (and request (nil? response)) (validate-rpc-request! request) (rpc-fail! :rpc-invalid-shape "request frame must carry exactly one RpcRequest"))
-  (or (= kind :response) (= kind :event)) (if (and response (nil? request)) (validate-rpc-response! response) (rpc-fail! :rpc-invalid-shape "response/event frame must carry exactly one RpcResponse"))
-  (= kind :cancel) (if (and (nil? request) (nil? response)) nil (rpc-fail! :rpc-invalid-shape "cancel frame body must be empty"))
-  :else (rpc-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown"))))
+^{:line 527 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- validate-rpc-frame! [frame]
+  ^{:line 528 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 528 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= 0 ^{:line 528 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-flags frame)) nil ^{:line 530 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-flags "FRAMRPC v1 flags must be zero"))
+  ^{:line 531 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-i64! ^{:line 531 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-request-id frame) "request id")
+  ^{:line 532 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [kind ^{:line 532 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-kind frame)
+   request ^{:line 533 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-request frame)
+   response ^{:line 534 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-response frame)]
+  ^{:line 535 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 536 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :request) ^{:line 537 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 537 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and request ^{:line 537 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? response)) ^{:line 538 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (validate-rpc-request! request) ^{:line 539 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-shape "request frame must carry exactly one RpcRequest"))
+  ^{:line 541 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (or ^{:line 541 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :response) ^{:line 541 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :event)) ^{:line 542 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 542 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and response ^{:line 542 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? request)) ^{:line 543 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (validate-rpc-response! response) ^{:line 544 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-shape "response/event frame must carry exactly one RpcResponse"))
+  ^{:line 546 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :cancel) ^{:line 547 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 547 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 547 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? request) ^{:line 547 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? response)) nil ^{:line 549 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-shape "cancel frame body must be empty"))
+  :else ^{:line 550 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown"))))
 
-(defn- rpc-add-measured-term! [term nodes]
-  (let [remaining (- rpc-v1-max-term-nodes (deref nodes))]
-  (if (<= remaining 0) (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") (let [measure (measure-term-codec-v1! term rpc-v1-max-string-bytes remaining rpc-v1-max-term-depth)]
-  (swap! nodes + (t/termcodecmeasure-nodes measure))
-  (t/termcodecmeasure-bytes measure)))))
+^{:line 552 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-add-measured-term! [term nodes]
+  ^{:line 555 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [remaining ^{:line 555 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (- rpc-v1-max-term-nodes ^{:line 555 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (deref nodes))]
+  ^{:line 556 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 556 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (<= remaining 0) ^{:line 557 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") ^{:line 559 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [measure ^{:line 560 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (measure-term-codec-v1! term rpc-v1-max-string-bytes remaining rpc-v1-max-term-depth)]
+  ^{:line 562 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (swap! nodes + ^{:line 562 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/termcodecmeasure-nodes measure))
+  ^{:line 563 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/termcodecmeasure-bytes measure)))))
 
-(defn- rpc-page-request-bytes! [page nodes]
-  (let [cursor (t/rpc-page-request-cursor-value page)]
-  (+ 5 (if (nil? cursor) 0 (rpc-add-measured-term! cursor nodes)))))
+^{:line 565 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-page-request-bytes! [page nodes]
+  ^{:line 568 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [cursor ^{:line 568 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-page-request-cursor-value page)]
+  ^{:line 569 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ 5 ^{:line 569 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 569 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? cursor) 0 ^{:line 569 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-add-measured-term! cursor nodes)))))
 
-(defn- rpc-page-response-bytes! [page nodes]
-  (let [cursor (t/rpc-page-response-cursor-value page)]
-  (+ 6 (if (nil? cursor) 0 (rpc-add-measured-term! cursor nodes)))))
+^{:line 571 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-page-response-bytes! [page nodes]
+  ^{:line 574 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [cursor ^{:line 574 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-page-response-cursor-value page)]
+  ^{:line 575 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ 6 ^{:line 575 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 575 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? cursor) 0 ^{:line 575 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-add-measured-term! cursor nodes)))))
 
-(defn- rpc-error-bytes! [error nodes]
-  (let [detail (t/rpc-error-detail-value error)]
-  (+ 2 (+ (rpc-add-measured-term! (t/rpcerror-code error) nodes) (+ (rpc-add-measured-term! (t/rpcerror-message error) nodes) (if (nil? detail) 0 (rpc-add-measured-term! detail nodes)))))))
+^{:line 577 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-error-bytes! [error nodes]
+  ^{:line 580 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [detail ^{:line 580 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-error-detail-value error)]
+  ^{:line 581 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ 2 ^{:line 582 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 582 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-add-measured-term! ^{:line 582 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcerror-code error) nodes) ^{:line 583 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 583 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-add-measured-term! ^{:line 583 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcerror-message error) nodes) ^{:line 584 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 584 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? detail) 0 ^{:line 584 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-add-measured-term! detail nodes)))))))
 
-(defn- rpc-request-body-bytes! [request nodes]
-  (let [expected (t/rpcrequest-expected-version request)
-   page (t/rpcrequest-page request)
-   timeout (t/rpcrequest-timeout-ms request)]
-  (+ 3 (+ (rpc-add-measured-term! (t/rpcrequest-space request) nodes) (+ (rpc-add-measured-term! (t/rpcrequest-op request) nodes) (+ (if expected 8 0) (+ (if page (rpc-page-request-bytes! page nodes) 0) (+ (if timeout 4 0) (rpc-add-measured-term! (t/rpc-request-payload-value request) nodes)))))))))
+^{:line 586 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-request-body-bytes! [request nodes]
+  ^{:line 589 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [expected ^{:line 589 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-expected-version request)
+   page ^{:line 590 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-page request)
+   timeout ^{:line 591 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-timeout-ms request)]
+  ^{:line 592 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ 3 ^{:line 593 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 593 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-add-measured-term! ^{:line 593 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-space request) nodes) ^{:line 594 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 594 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-add-measured-term! ^{:line 594 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-op request) nodes) ^{:line 595 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 595 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if expected 8 0) ^{:line 596 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 596 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if page ^{:line 596 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-page-request-bytes! page nodes) 0) ^{:line 597 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 597 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if timeout 4 0) ^{:line 598 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-add-measured-term! ^{:line 598 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-request-payload-value request) nodes)))))))))
 
-(defn- rpc-response-body-bytes! [response nodes]
-  (let [page (t/rpcresponse-page response)
-   error (t/rpcresponse-error response)
-   payload (t/rpc-response-payload-value response)]
-  (+ 11 (+ (rpc-add-measured-term! (t/rpcresponse-space response) nodes) (+ (rpc-add-measured-term! (t/rpcresponse-op response) nodes) (+ (if page (rpc-page-response-bytes! page nodes) 0) (+ (if error (rpc-error-bytes! error nodes) 0) (if (nil? payload) 0 (rpc-add-measured-term! payload nodes)))))))))
+^{:line 601 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-response-body-bytes! [response nodes]
+  ^{:line 604 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [page ^{:line 604 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-page response)
+   error ^{:line 605 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-error response)
+   payload ^{:line 606 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-response-payload-value response)]
+  ^{:line 607 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ 11 ^{:line 608 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 608 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-add-measured-term! ^{:line 608 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-space response) nodes) ^{:line 609 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 609 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-add-measured-term! ^{:line 609 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-op response) nodes) ^{:line 610 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 610 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if page ^{:line 610 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-page-response-bytes! page nodes) 0) ^{:line 611 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ ^{:line 611 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if error ^{:line 611 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-error-bytes! error nodes) 0) ^{:line 612 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 612 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? payload) 0 ^{:line 613 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-add-measured-term! payload nodes)))))))))
 
-(defn- rpc-body-bytes! [frame]
-  (validate-rpc-frame! frame)
-  (let [nodes (atom 0)
-   kind (t/rpcframev1-kind frame)
-   request (t/rpcframev1-request frame)
-   response (t/rpcframev1-response frame)
-   size (cond
-  (and (= kind :request) request) (rpc-request-body-bytes! request nodes)
-  (and (or (= kind :response) (= kind :event)) response) (rpc-response-body-bytes! response nodes)
+^{:line 615 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-body-bytes! [frame]
+  ^{:line 616 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (validate-rpc-frame! frame)
+  ^{:line 617 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [nodes ^{:line 617 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (atom 0)
+   kind ^{:line 618 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-kind frame)
+   request ^{:line 619 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-request frame)
+   response ^{:line 620 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-response frame)
+   size ^{:line 622 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 623 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 623 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :request) request) ^{:line 624 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-request-body-bytes! request nodes)
+  ^{:line 625 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 625 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (or ^{:line 625 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :response) ^{:line 625 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :event)) response) ^{:line 626 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-response-body-bytes! response nodes)
   :else 0)]
-  (if (> size rpc-v1-max-body-bytes) (rpc-fail! :rpc-frame-too-large "FRAMRPC body exceeds the configured byte limit") size)))
+  ^{:line 628 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 628 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> size rpc-v1-max-body-bytes) ^{:line 629 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-frame-too-large "FRAMRPC body exceeds the configured byte limit") size)))
 
-(defn- rpc-write-u16-le! [out value]
-  (codec-write-u8! out value)
-  (codec-write-u8! out (unsigned-bit-shift-right value 8)))
+^{:line 633 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-write-u16-le! [out value]
+  ^{:line 636 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out value)
+  ^{:line 637 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out ^{:line 637 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (unsigned-bit-shift-right value 8)))
 
-(defn- rpc-write-present! [out value]
-  (codec-write-u8! out (if (nil? value) 0 1)))
+^{:line 639 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-write-present! [out value]
+  ^{:line 642 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out ^{:line 642 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 642 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? value) 0 1)))
 
-(defn- rpc-write-term! [out value]
-  (write-term-codec-v1! out value rpc-v1-max-string-bytes rpc-v1-max-term-nodes rpc-v1-max-term-depth)
+^{:line 644 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-write-term! [out value]
+  ^{:line 647 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-term-codec-v1! out value rpc-v1-max-string-bytes rpc-v1-max-term-nodes rpc-v1-max-term-depth)
   nil)
 
-(defn- write-rpc-page-request! [out page]
-  (codec-write-u32-le! out (t/rpcpagerequest-limit page))
-  (let [cursor (t/rpc-page-request-cursor-value page)]
-  (rpc-write-present! out cursor)
-  (if (nil? cursor) nil (rpc-write-term! out cursor))))
+^{:line 651 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- write-rpc-page-request! [out page]
+  ^{:line 654 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u32-le! out ^{:line 654 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcpagerequest-limit page))
+  ^{:line 655 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [cursor ^{:line 655 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-page-request-cursor-value page)]
+  ^{:line 656 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-present! out cursor)
+  ^{:line 657 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 657 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? cursor) nil ^{:line 657 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-term! out cursor))))
 
-(defn- write-rpc-page-response! [out page]
-  (codec-write-u32-le! out (t/rpcpageresponse-ordinal page))
-  (let [cursor (t/rpc-page-response-cursor-value page)]
-  (rpc-write-present! out cursor)
-  (if (nil? cursor) nil (rpc-write-term! out cursor)))
-  (codec-write-u8! out (if (t/rpcpageresponse-done page) 1 0)))
+^{:line 659 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- write-rpc-page-response! [out page]
+  ^{:line 662 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u32-le! out ^{:line 662 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcpageresponse-ordinal page))
+  ^{:line 663 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [cursor ^{:line 663 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-page-response-cursor-value page)]
+  ^{:line 664 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-present! out cursor)
+  ^{:line 665 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 665 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? cursor) nil ^{:line 665 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-term! out cursor)))
+  ^{:line 666 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out ^{:line 666 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 666 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcpageresponse-done page) 1 0)))
 
-(defn- write-rpc-error! [out error]
-  (rpc-write-term! out (t/rpcerror-code error))
-  (codec-write-u8! out (if (t/rpcerror-retryable error) 1 0))
-  (rpc-write-term! out (t/rpcerror-message error))
-  (let [detail (t/rpc-error-detail-value error)]
-  (rpc-write-present! out detail)
-  (if (nil? detail) nil (rpc-write-term! out detail))))
+^{:line 668 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- write-rpc-error! [out error]
+  ^{:line 671 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-term! out ^{:line 671 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcerror-code error))
+  ^{:line 672 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out ^{:line 672 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 672 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcerror-retryable error) 1 0))
+  ^{:line 673 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-term! out ^{:line 673 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcerror-message error))
+  ^{:line 674 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [detail ^{:line 674 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-error-detail-value error)]
+  ^{:line 675 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-present! out detail)
+  ^{:line 676 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 676 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? detail) nil ^{:line 676 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-term! out detail))))
 
-(defn- write-rpc-request! [out request]
-  (rpc-write-term! out (t/rpcrequest-space request))
-  (rpc-write-term! out (t/rpcrequest-op request))
-  (let [expected (t/rpcrequest-expected-version request)
-   page (t/rpcrequest-page request)
-   timeout (t/rpcrequest-timeout-ms request)]
-  (rpc-write-present! out expected)
-  (if expected (codec-write-i64-le! out expected) nil)
-  (rpc-write-present! out page)
-  (if page (write-rpc-page-request! out page) nil)
-  (rpc-write-present! out timeout)
-  (if timeout (codec-write-u32-le! out timeout) nil)
-  (rpc-write-term! out (t/rpc-request-payload-value request))))
+^{:line 678 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- write-rpc-request! [out request]
+  ^{:line 681 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-term! out ^{:line 681 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-space request))
+  ^{:line 682 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-term! out ^{:line 682 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-op request))
+  ^{:line 683 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [expected ^{:line 683 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-expected-version request)
+   page ^{:line 684 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-page request)
+   timeout ^{:line 685 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcrequest-timeout-ms request)]
+  ^{:line 686 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-present! out expected)
+  ^{:line 687 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if expected ^{:line 687 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-i64-le! out expected) nil)
+  ^{:line 688 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-present! out page)
+  ^{:line 689 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if page ^{:line 689 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-rpc-page-request! out page) nil)
+  ^{:line 690 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-present! out timeout)
+  ^{:line 691 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if timeout ^{:line 691 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u32-le! out timeout) nil)
+  ^{:line 692 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-term! out ^{:line 692 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-request-payload-value request))))
 
-(defn- write-rpc-response! [out response]
-  (rpc-write-term! out (t/rpcresponse-space response))
-  (rpc-write-term! out (t/rpcresponse-op response))
-  (codec-write-i64-le! out (t/rpcresponse-served-version response))
-  (let [page (t/rpcresponse-page response)
-   error (t/rpcresponse-error response)
-   payload (t/rpc-response-payload-value response)]
-  (rpc-write-present! out page)
-  (if page (write-rpc-page-response! out page) nil)
-  (rpc-write-present! out error)
-  (if error (write-rpc-error! out error) nil)
-  (rpc-write-present! out payload)
-  (if (nil? payload) nil (rpc-write-term! out payload))))
+^{:line 694 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- write-rpc-response! [out response]
+  ^{:line 697 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-term! out ^{:line 697 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-space response))
+  ^{:line 698 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-term! out ^{:line 698 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-op response))
+  ^{:line 699 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-i64-le! out ^{:line 699 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-served-version response))
+  ^{:line 700 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [page ^{:line 700 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-page response)
+   error ^{:line 701 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcresponse-error response)
+   payload ^{:line 702 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpc-response-payload-value response)]
+  ^{:line 703 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-present! out page)
+  ^{:line 704 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if page ^{:line 704 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-rpc-page-response! out page) nil)
+  ^{:line 705 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-present! out error)
+  ^{:line 706 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if error ^{:line 706 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-rpc-error! out error) nil)
+  ^{:line 707 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-present! out payload)
+  ^{:line 708 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 708 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? payload) nil ^{:line 708 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-term! out payload))))
 
-(defn encode-rpc-frame-v1! [frame]
-  (let [body-size (rpc-body-bytes! frame)
-   body (ByteArrayOutputStream. body-size)
-   kind (t/rpcframev1-kind frame)
-   request (t/rpcframev1-request frame)
-   response (t/rpcframev1-response frame)]
-  (cond
-  (and (= kind :request) request) (write-rpc-request! body request)
-  (and (or (= kind :response) (= kind :event)) response) (write-rpc-response! body response)
+^{:line 710 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn encode-rpc-frame-v1! [frame]
+  ^{:line 711 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [body-size ^{:line 711 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-body-bytes! frame)
+   body ^{:line 712 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (ByteArrayOutputStream. body-size)
+   kind ^{:line 713 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-kind frame)
+   request ^{:line 714 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-request frame)
+   response ^{:line 715 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-response frame)]
+  ^{:line 716 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 717 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 717 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :request) request) ^{:line 718 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-rpc-request! body request)
+  ^{:line 719 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 719 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (or ^{:line 719 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :response) ^{:line 719 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :event)) response) ^{:line 720 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (write-rpc-response! body response)
   :else nil)
-  (if (= body-size (.size body)) (let [out (ByteArrayOutputStream. (+ rpc-v1-header-bytes body-size))]
-  (.write out rpc-v1-magic)
-  (rpc-write-u16-le! out rpc-v1-major)
-  (rpc-write-u16-le! out rpc-v1-minor)
-  (codec-write-u8! out (rpc-kind-code! kind))
-  (codec-write-u8! out 0)
-  (codec-write-u32-le! out body-size)
-  (codec-write-i64-le! out (t/rpcframev1-request-id frame))
-  (.write out (.toByteArray body))
-  (.toByteArray out)) (rpc-fail! :rpc-size-mismatch "FRAMRPC preflight size disagrees with encoded body"))))
+  ^{:line 722 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 722 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= body-size ^{:line 722 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.size body)) ^{:line 723 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [out ^{:line 723 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (ByteArrayOutputStream. ^{:line 723 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ rpc-v1-header-bytes body-size))]
+  ^{:line 724 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.write out rpc-v1-magic)
+  ^{:line 725 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-u16-le! out rpc-v1-major)
+  ^{:line 726 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-write-u16-le! out rpc-v1-minor)
+  ^{:line 727 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out ^{:line 727 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-kind-code! kind))
+  ^{:line 728 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u8! out 0)
+  ^{:line 729 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-u32-le! out body-size)
+  ^{:line 730 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (codec-write-i64-le! out ^{:line 730 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/rpcframev1-request-id frame))
+  ^{:line 731 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.write out ^{:line 731 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.toByteArray body))
+  ^{:line 732 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.toByteArray out)) ^{:line 733 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-size-mismatch "FRAMRPC preflight size disagrees with encoded body"))))
 
-(defn- rpc-ensure! [buffer count-value ^String context]
-  (if (< (.remaining buffer) count-value) (rpc-fail! :rpc-truncated (str "FRAMRPC ended inside " context)) nil))
+^{:line 736 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-ensure! [buffer count-value ^String context]
+  ^{:line 740 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 740 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (< ^{:line 740 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.remaining buffer) count-value) ^{:line 741 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-truncated ^{:line 741 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str "FRAMRPC ended inside " context)) nil))
 
-(defn- rpc-read-u8! [buffer ^String context]
-  (rpc-ensure! buffer 1 context)
-  (let [one (byte-array 1)]
-  (.get buffer one)
-  (bit-and 255 (int (aget one 0)))))
+^{:line 744 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-read-u8! [buffer ^String context]
+  ^{:line 747 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-ensure! buffer 1 context)
+  ^{:line 748 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [one ^{:line 748 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (byte-array 1)]
+  ^{:line 749 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.get buffer one)
+  ^{:line 750 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (bit-and 255 ^{:line 750 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (int ^{:line 750 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (aget one 0)))))
 
-(defn- rpc-read-u16-le! [buffer ^String context]
-  (rpc-ensure! buffer 2 context)
-  (bit-and 65535 (int (.getShort buffer))))
+^{:line 752 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-read-u16-le! [buffer ^String context]
+  ^{:line 755 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-ensure! buffer 2 context)
+  ^{:line 756 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (bit-and 65535 ^{:line 756 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (int ^{:line 756 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.getShort buffer))))
 
-(defn- rpc-read-u32-le! [buffer ^String context]
-  (rpc-ensure! buffer 4 context)
-  (Integer/toUnsignedLong (.getInt buffer)))
+^{:line 758 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-read-u32-le! [buffer ^String context]
+  ^{:line 761 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-ensure! buffer 4 context)
+  ^{:line 762 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (Integer/toUnsignedLong ^{:line 762 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.getInt buffer)))
 
-(defn- rpc-read-i64-le! [buffer ^String context]
-  (rpc-ensure! buffer 8 context)
-  (.getLong buffer))
+^{:line 764 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-read-i64-le! [buffer ^String context]
+  ^{:line 767 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-ensure! buffer 8 context)
+  ^{:line 768 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.getLong buffer))
 
-(defn- ^Boolean rpc-read-presence! [buffer ^String context]
-  (let [value (rpc-read-u8! buffer context)]
-  (cond
-  (= value 0) false
-  (= value 1) true
-  :else (rpc-fail! :rpc-invalid-presence (str context " must be the strict byte 0 or 1")))))
+^{:line 770 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- ^Boolean rpc-read-presence! [buffer ^String context]
+  ^{:line 773 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [value ^{:line 773 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u8! buffer context)]
+  ^{:line 774 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 775 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= value 0) false
+  ^{:line 776 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= value 1) true
+  :else ^{:line 778 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-presence ^{:line 779 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str context " must be the strict byte 0 or 1")))))
 
-(defn- ^Boolean rpc-read-bool! [buffer ^String context]
-  (let [value (rpc-read-u8! buffer context)]
-  (cond
-  (= value 0) false
-  (= value 1) true
-  :else (rpc-fail! :rpc-invalid-boolean (str context " must be the strict byte 0 or 1")))))
+^{:line 781 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- ^Boolean rpc-read-bool! [buffer ^String context]
+  ^{:line 784 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [value ^{:line 784 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u8! buffer context)]
+  ^{:line 785 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 786 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= value 0) false
+  ^{:line 787 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= value 1) true
+  :else ^{:line 789 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-boolean ^{:line 790 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str context " must be the strict byte 0 or 1")))))
 
-(defn- rpc-read-term! [buffer nodes]
-  (let [remaining (- rpc-v1-max-term-nodes (deref nodes))]
-  (if (<= remaining 0) (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") (let [decoded (decode-term-codec-v1! buffer rpc-v1-max-string-bytes remaining rpc-v1-max-term-depth)]
-  (swap! nodes + (t/termcodecdecoded-nodes decoded))
-  (t/termcodecdecoded-value decoded)))))
+^{:line 792 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-read-term! [buffer nodes]
+  ^{:line 795 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [remaining ^{:line 795 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (- rpc-v1-max-term-nodes ^{:line 795 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (deref nodes))]
+  ^{:line 796 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 796 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (<= remaining 0) ^{:line 797 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") ^{:line 799 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [decoded ^{:line 800 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (decode-term-codec-v1! buffer rpc-v1-max-string-bytes remaining rpc-v1-max-term-depth)]
+  ^{:line 802 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (swap! nodes + ^{:line 802 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/termcodecdecoded-nodes decoded))
+  ^{:line 803 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/termcodecdecoded-value decoded)))))
 
-(defn- ^String rpc-read-space-term! [buffer nodes]
-  (if (>= (deref nodes) rpc-v1-max-term-nodes) (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") (do
-  (swap! nodes inc)
-  (let [tag (rpc-read-u8! buffer "SpaceId Term tag")]
-  (if (= tag 1) (read-sized-text-core! buffer rpc-v1-max-space-bytes "SpaceId") (rpc-fail! :rpc-invalid-field "FRAMRPC SpaceId must be a String Term"))))))
+^{:line 805 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- ^String rpc-read-space-term! [buffer nodes]
+  ^{:line 808 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 808 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (>= ^{:line 808 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (deref nodes) rpc-v1-max-term-nodes) ^{:line 809 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") ^{:line 811 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (do
+  ^{:line 812 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (swap! nodes inc)
+  ^{:line 813 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [tag ^{:line 813 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u8! buffer "SpaceId Term tag")]
+  ^{:line 814 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 814 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= tag 1) ^{:line 815 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (read-sized-text-core! buffer rpc-v1-max-space-bytes "SpaceId") ^{:line 816 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-field "FRAMRPC SpaceId must be a String Term"))))))
 
-(defn- rpc-read-keyword-term! [buffer nodes ^String context]
-  (let [value (rpc-read-term! buffer nodes)]
-  (if (keyword? value) value (rpc-fail! :rpc-invalid-field (str context " must be a Keyword Term")))))
+^{:line 818 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- rpc-read-keyword-term! [buffer nodes ^String context]
+  ^{:line 822 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [value ^{:line 822 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-term! buffer nodes)]
+  ^{:line 823 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 823 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (keyword? value) value ^{:line 825 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-field ^{:line 825 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str context " must be a Keyword Term")))))
 
-(defn- ^String rpc-read-string-term! [buffer nodes ^String context]
-  (let [value (rpc-read-term! buffer nodes)]
-  (if (string? value) value (rpc-fail! :rpc-invalid-field (str context " must be a String Term")))))
+^{:line 827 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- ^String rpc-read-string-term! [buffer nodes ^String context]
+  ^{:line 831 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [value ^{:line 831 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-term! buffer nodes)]
+  ^{:line 832 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 832 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (string? value) value ^{:line 834 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-field ^{:line 834 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (str context " must be a String Term")))))
 
-(defn- read-rpc-page-request! [buffer nodes]
-  (let [limit (rpc-read-u32-le! buffer "page limit")
-   cursor? (rpc-read-presence! buffer "page cursor presence")
-   cursor (if cursor? (rpc-read-term! buffer nodes) nil)]
-  (rpc-page-request! limit cursor)))
+^{:line 836 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- read-rpc-page-request! [buffer nodes]
+  ^{:line 839 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [limit ^{:line 839 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u32-le! buffer "page limit")
+   cursor? ^{:line 840 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-presence! buffer "page cursor presence")
+   cursor ^{:line 841 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if cursor? ^{:line 841 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-term! buffer nodes) nil)]
+  ^{:line 842 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-page-request! limit cursor)))
 
-(defn- read-rpc-page-response! [buffer nodes]
-  (let [ordinal (rpc-read-u32-le! buffer "page ordinal")
-   cursor? (rpc-read-presence! buffer "next cursor presence")
-   cursor (if cursor? (rpc-read-term! buffer nodes) nil)
-   done (rpc-read-bool! buffer "page done")]
-  (rpc-page-response! ordinal cursor done)))
+^{:line 844 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- read-rpc-page-response! [buffer nodes]
+  ^{:line 847 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [ordinal ^{:line 847 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u32-le! buffer "page ordinal")
+   cursor? ^{:line 848 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-presence! buffer "next cursor presence")
+   cursor ^{:line 849 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if cursor? ^{:line 849 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-term! buffer nodes) nil)
+   done ^{:line 850 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-bool! buffer "page done")]
+  ^{:line 851 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-page-response! ordinal cursor done)))
 
-(defn- read-rpc-error! [buffer nodes]
-  (let [code (rpc-read-keyword-term! buffer nodes "error code")
-   retryable (rpc-read-bool! buffer "error retryable")
-   message (rpc-read-string-term! buffer nodes "error message")
-   detail? (rpc-read-presence! buffer "error detail presence")
-   detail (if detail? (rpc-read-term! buffer nodes) nil)]
-  (rpc-error! code retryable message detail)))
+^{:line 853 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- read-rpc-error! [buffer nodes]
+  ^{:line 856 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [code ^{:line 856 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-keyword-term! buffer nodes "error code")
+   retryable ^{:line 857 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-bool! buffer "error retryable")
+   message ^{:line 858 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-string-term! buffer nodes "error message")
+   detail? ^{:line 859 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-presence! buffer "error detail presence")
+   detail ^{:line 860 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if detail? ^{:line 860 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-term! buffer nodes) nil)]
+  ^{:line 861 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-error! code retryable message detail)))
 
-(defn- read-rpc-request! [buffer nodes]
-  (let [space (rpc-read-space-term! buffer nodes)
-   op (rpc-read-keyword-term! buffer nodes "request op")
-   expected? (rpc-read-presence! buffer "expected-version presence")
-   expected (if expected? (rpc-read-i64-le! buffer "expected-version") nil)
-   page? (rpc-read-presence! buffer "request page presence")
-   page (if page? (read-rpc-page-request! buffer nodes) nil)
-   timeout? (rpc-read-presence! buffer "timeout-ms presence")
-   timeout (if timeout? (rpc-read-u32-le! buffer "timeout-ms") nil)
-   payload (rpc-read-term! buffer nodes)]
-  (rpc-request! space op expected page timeout payload)))
+^{:line 863 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- read-rpc-request! [buffer nodes]
+  ^{:line 866 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [space ^{:line 866 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-space-term! buffer nodes)
+   op ^{:line 867 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-keyword-term! buffer nodes "request op")
+   expected? ^{:line 868 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-presence! buffer "expected-version presence")
+   expected ^{:line 869 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if expected? ^{:line 870 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-i64-le! buffer "expected-version") nil)
+   page? ^{:line 871 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-presence! buffer "request page presence")
+   page ^{:line 872 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if page? ^{:line 872 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (read-rpc-page-request! buffer nodes) nil)
+   timeout? ^{:line 873 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-presence! buffer "timeout-ms presence")
+   timeout ^{:line 874 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if timeout? ^{:line 874 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u32-le! buffer "timeout-ms") nil)
+   payload ^{:line 875 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-term! buffer nodes)]
+  ^{:line 876 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-request! space op expected page timeout payload)))
 
-(defn- read-rpc-response! [buffer nodes]
-  (let [space (rpc-read-space-term! buffer nodes)
-   op (rpc-read-keyword-term! buffer nodes "response op")
-   served (rpc-read-i64-le! buffer "served-version")
-   page? (rpc-read-presence! buffer "response page presence")
-   page (if page? (read-rpc-page-response! buffer nodes) nil)
-   error? (rpc-read-presence! buffer "response error presence")
-   error (if error? (read-rpc-error! buffer nodes) nil)
-   payload? (rpc-read-presence! buffer "response payload presence")
-   payload (if payload? (rpc-read-term! buffer nodes) nil)]
-  (rpc-response! space op served page error payload)))
+^{:line 878 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- read-rpc-response! [buffer nodes]
+  ^{:line 881 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [space ^{:line 881 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-space-term! buffer nodes)
+   op ^{:line 882 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-keyword-term! buffer nodes "response op")
+   served ^{:line 883 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-i64-le! buffer "served-version")
+   page? ^{:line 884 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-presence! buffer "response page presence")
+   page ^{:line 885 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if page? ^{:line 885 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (read-rpc-page-response! buffer nodes) nil)
+   error? ^{:line 886 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-presence! buffer "response error presence")
+   error ^{:line 887 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if error? ^{:line 887 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (read-rpc-error! buffer nodes) nil)
+   payload? ^{:line 888 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-presence! buffer "response payload presence")
+   payload ^{:line 889 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if payload? ^{:line 889 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-term! buffer nodes) nil)]
+  ^{:line 890 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-response! space op served page error payload)))
 
-(defn- ^Boolean rpc-magic-valid! [buffer]
-  (loop [index 0
+^{:line 892 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn- ^Boolean rpc-magic-valid! [buffer]
+  ^{:line 893 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (loop [index 0
    valid true]
-  (if (< index 8) (let [actual (rpc-read-u8! buffer "magic")
-   expected (bit-and 255 (int (aget rpc-v1-magic index)))]
-  (recur (+ index 1) (and valid (= actual expected)))) valid)))
+  ^{:line 894 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 894 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (< index 8) ^{:line 895 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [actual ^{:line 895 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u8! buffer "magic")
+   expected ^{:line 896 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (bit-and 255 ^{:line 896 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (int ^{:line 896 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (aget rpc-v1-magic index)))]
+  ^{:line 897 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (recur ^{:line 897 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ index 1) ^{:line 897 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and valid ^{:line 897 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= actual expected)))) valid)))
 
-(defn decode-rpc-frame-v1! [bytes]
-  (let [byte-count (alength bytes)]
-  (if (> byte-count rpc-v1-max-frame-bytes) (rpc-fail! :rpc-frame-too-large "FRAMRPC frame exceeds the configured byte limit") nil)
-  (if (< byte-count rpc-v1-header-bytes) (rpc-fail! :rpc-truncated "FRAMRPC frame ended inside its header") nil)
-  (let [buffer (doto (ByteBuffer/wrap bytes)
-  (.order ByteOrder/LITTLE_ENDIAN))]
-  (if (rpc-magic-valid! buffer) nil (rpc-fail! :rpc-invalid-magic "FRAMRPC magic does not match"))
-  (let [major (rpc-read-u16-le! buffer "major version")
-   minor (rpc-read-u16-le! buffer "minor version")
-   kind (rpc-code-kind! (rpc-read-u8! buffer "frame kind"))
-   flags (rpc-read-u8! buffer "frame flags")
-   body-length (rpc-read-u32-le! buffer "body length")
-   request-id (rpc-read-i64-le! buffer "request id")]
-  (if (and (= major rpc-v1-major) (= minor rpc-v1-minor)) nil (rpc-fail! :rpc-unsupported-version "FRAMRPC major/minor version is unsupported"))
-  (if (= flags 0) nil (rpc-fail! :rpc-invalid-flags "FRAMRPC v1 flags must be zero"))
-  (if (> body-length rpc-v1-max-body-bytes) (rpc-fail! :rpc-frame-too-large "FRAMRPC declared body exceeds the configured byte limit") nil)
-  (if (< (.remaining buffer) body-length) (rpc-fail! :rpc-truncated "FRAMRPC body is shorter than declared") nil)
-  (if (> (.remaining buffer) body-length) (rpc-fail! :rpc-trailing-bytes "FRAMRPC frame has bytes beyond its declared body") nil)
-  (let [nodes (atom 0)
-   frame (cond
-  (= kind :request) (rpc-request-frame request-id (read-rpc-request! buffer nodes))
-  (= kind :response) (rpc-response-frame request-id (read-rpc-response! buffer nodes))
-  (= kind :event) (rpc-event-frame request-id (read-rpc-response! buffer nodes))
-  :else (if (= body-length 0) (rpc-cancel-frame request-id) (rpc-fail! :rpc-invalid-shape "FRAMRPC cancel body must be exactly empty")))]
-  (if (zero? (.remaining buffer)) frame (rpc-fail! :rpc-trailing-bytes "FRAMRPC body decoder left trailing bytes")))))))
+^{:line 900 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn decode-rpc-frame-v1! [bytes]
+  ^{:line 901 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [byte-count ^{:line 901 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (alength bytes)]
+  ^{:line 902 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 902 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> byte-count rpc-v1-max-frame-bytes) ^{:line 903 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-frame-too-large "FRAMRPC frame exceeds the configured byte limit") nil)
+  ^{:line 906 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 906 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (< byte-count rpc-v1-header-bytes) ^{:line 907 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-truncated "FRAMRPC frame ended inside its header") nil)
+  ^{:line 909 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [buffer ^{:line 909 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (doto ^{:line 909 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (ByteBuffer/wrap bytes)
+  ^{:line 910 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.order ByteOrder/LITTLE_ENDIAN))]
+  ^{:line 911 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 911 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-magic-valid! buffer) nil ^{:line 913 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-magic "FRAMRPC magic does not match"))
+  ^{:line 914 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [major ^{:line 914 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u16-le! buffer "major version")
+   minor ^{:line 915 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u16-le! buffer "minor version")
+   kind ^{:line 916 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-code-kind! ^{:line 916 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u8! buffer "frame kind"))
+   flags ^{:line 917 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u8! buffer "frame flags")
+   body-length ^{:line 918 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-u32-le! buffer "body length")
+   request-id ^{:line 919 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-read-i64-le! buffer "request id")]
+  ^{:line 920 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 920 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 920 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= major rpc-v1-major) ^{:line 920 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= minor rpc-v1-minor)) nil ^{:line 922 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-unsupported-version "FRAMRPC major/minor version is unsupported"))
+  ^{:line 924 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 924 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= flags 0) nil ^{:line 926 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-flags "FRAMRPC v1 flags must be zero"))
+  ^{:line 927 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 927 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> body-length rpc-v1-max-body-bytes) ^{:line 928 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-frame-too-large "FRAMRPC declared body exceeds the configured byte limit") nil)
+  ^{:line 931 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 931 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (< ^{:line 931 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.remaining buffer) body-length) ^{:line 932 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-truncated "FRAMRPC body is shorter than declared") nil)
+  ^{:line 934 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 934 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (> ^{:line 934 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.remaining buffer) body-length) ^{:line 935 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-trailing-bytes "FRAMRPC frame has bytes beyond its declared body") nil)
+  ^{:line 938 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [nodes ^{:line 938 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (atom 0)
+   frame ^{:line 940 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 941 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :request) ^{:line 942 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-request-frame request-id ^{:line 942 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (read-rpc-request! buffer nodes))
+  ^{:line 943 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :response) ^{:line 944 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-response-frame request-id ^{:line 944 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (read-rpc-response! buffer nodes))
+  ^{:line 945 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= kind :event) ^{:line 946 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-event-frame request-id ^{:line 946 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (read-rpc-response! buffer nodes))
+  :else ^{:line 948 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 948 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= body-length 0) ^{:line 949 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-cancel-frame request-id) ^{:line 950 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-shape "FRAMRPC cancel body must be exactly empty")))]
+  ^{:line 952 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 952 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (zero? ^{:line 952 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (.remaining buffer)) frame ^{:line 954 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-trailing-bytes "FRAMRPC body decoder left trailing bytes")))))))
 
-(def rpc-unit :rpc/unit)
+^{:line 961 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-unit :rpc/unit)
 
-(def rpc-list-end :rpc/list-end)
+^{:line 962 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-list-end :rpc/list-end)
 
-(def rpc-none :rpc/none)
+^{:line 963 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-none :rpc/none)
 
-(def rpc-subject-any :rpc/subject-any)
+^{:line 964 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-subject-any :rpc/subject-any)
 
-(def rpc-subject-existing :rpc/subject-existing)
+^{:line 965 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def rpc-subject-existing :rpc/subject-existing)
 
-(def query-current :query/current)
+^{:line 966 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (def query-current :query/current)
 
-(defn rpc-list! [values]
-  (reduce (fn [tail value] (require-rpc-term! value "RPC list value")
-  (t/triple :rpc/list value tail)) rpc-list-end (reverse values)))
+^{:line 968 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-list! [values]
+  ^{:line 969 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (reduce ^{:line 969 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (fn [tail value] ^{:line 972 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-term! value "RPC list value")
+  ^{:line 973 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple :rpc/list value tail)) rpc-list-end ^{:line 974 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (reverse values)))
 
-(defn rpc-list-values! [value]
-  (loop [cursor value
-   result []
+^{:line 976 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-list-values! [value]
+  ^{:line 977 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (loop [cursor value
+   result ^{:line 977 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} []
    count-value 0]
-  (cond
-  (= cursor rpc-list-end) result
-  (>= count-value rpc-v1-max-term-nodes) (rpc-fail! :rpc-invalid-list "RPC list exceeds the Term node bound")
-  (and (t/triple? cursor) (= :rpc/list (t/triple-slot0 cursor))) (let [head (t/triple-slot1 cursor)
-   tail (t/triple-slot2 cursor)]
-  (require-rpc-term! head "RPC list head")
-  (require-rpc-term! tail "RPC list tail")
-  (recur tail (conj result head) (+ count-value 1)))
-  :else (rpc-fail! :rpc-invalid-list "RPC list must end with :rpc/list-end"))))
+  ^{:line 978 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 979 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= cursor rpc-list-end) result
+  ^{:line 980 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (>= count-value rpc-v1-max-term-nodes) ^{:line 981 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-list "RPC list exceeds the Term node bound")
+  ^{:line 982 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 982 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple? cursor) ^{:line 982 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= :rpc/list ^{:line 982 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot0 cursor))) ^{:line 983 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [head ^{:line 983 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot1 cursor)
+   tail ^{:line 984 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot2 cursor)]
+  ^{:line 985 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-term! head "RPC list head")
+  ^{:line 986 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-term! tail "RPC list tail")
+  ^{:line 987 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (recur tail ^{:line 987 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (conj result head) ^{:line 987 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (+ count-value 1)))
+  :else ^{:line 988 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-list "RPC list must end with :rpc/list-end"))))
 
-(defn rpc-some! [value]
-  (require-rpc-term! value "RPC option value")
-  (t/triple :rpc/some value :rpc/option))
+^{:line 991 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-some! [value]
+  ^{:line 992 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-term! value "RPC option value")
+  ^{:line 993 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple :rpc/some value :rpc/option))
 
-(defn rpc-option! [value]
-  (if (nil? value) rpc-none (rpc-some! value)))
+^{:line 995 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-option! [value]
+  ^{:line 996 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 996 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (nil? value) rpc-none ^{:line 996 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-some! value)))
 
-(defn ^Boolean rpc-option-present?! [value]
-  (cond
-  (= value rpc-none) false
-  (and (t/triple? value) (and (= :rpc/some (t/triple-slot0 value)) (= :rpc/option (t/triple-slot2 value)))) true
-  :else (rpc-fail! :rpc-invalid-option "RPC option must be :rpc/none or (:rpc/some value :rpc/option)")))
+^{:line 998 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn ^Boolean rpc-option-present?! [value]
+  ^{:line 999 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (cond
+  ^{:line 1000 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= value rpc-none) false
+  ^{:line 1001 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 1001 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple? value) ^{:line 1002 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 1002 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= :rpc/some ^{:line 1002 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot0 value)) ^{:line 1003 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= :rpc/option ^{:line 1003 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot2 value)))) true
+  :else ^{:line 1004 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-option "RPC option must be :rpc/none or (:rpc/some value :rpc/option)")))
 
-(defn rpc-option-value! [value]
-  (if (rpc-option-present?! value) (t/triple-slot1 value) nil))
+^{:line 1007 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-option-value! [value]
+  ^{:line 1008 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 1008 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-option-present?! value) ^{:line 1008 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot1 value) nil))
 
-(defn rpc-record! [tag fields]
-  (t/triple tag (rpc-list! fields) :rpc/record))
+^{:line 1010 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-record! [tag fields]
+  ^{:line 1013 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple tag ^{:line 1013 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! fields) :rpc/record))
 
-(defn rpc-record-fields! [value tag field-count]
-  (if (and (t/triple? value) (and (= tag (t/triple-slot0 value)) (= :rpc/record (t/triple-slot2 value)))) (let [fields (rpc-list-values! (t/triple-slot1 value))]
-  (if (= field-count (count fields)) fields (rpc-fail! :rpc-invalid-record "RPC record contains the wrong number of fields"))) (rpc-fail! :rpc-invalid-record "RPC record tag or marker is invalid")))
+^{:line 1015 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-record-fields! [value tag field-count]
+  ^{:line 1019 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 1019 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 1019 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple? value) ^{:line 1020 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (and ^{:line 1020 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= tag ^{:line 1020 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot0 value)) ^{:line 1021 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= :rpc/record ^{:line 1021 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot2 value)))) ^{:line 1022 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (let [fields ^{:line 1022 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list-values! ^{:line 1022 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (t/triple-slot1 value))]
+  ^{:line 1023 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 1023 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= field-count ^{:line 1023 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (count fields)) fields ^{:line 1025 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-record "RPC record contains the wrong number of fields"))) ^{:line 1027 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-record "RPC record tag or marker is invalid")))
 
-(defn rpc-fence! [resource holder epoch]
-  (require-rpc-term! resource "lease resource")
-  (require-rpc-term! holder "lease holder")
-  (rpc-record! :rpc/fence [resource holder epoch]))
+^{:line 1029 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-fence! [resource holder epoch]
+  ^{:line 1033 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-term! resource "lease resource")
+  ^{:line 1034 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (require-rpc-term! holder "lease holder")
+  ^{:line 1035 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/fence ^{:line 1035 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [resource holder epoch]))
 
-(defn rpc-action! [operation proposition policy]
-  (if (or (= operation :rpc/assert) (= operation :rpc/retract)) nil (rpc-fail! :rpc-invalid-action "RPC action operation is invalid"))
-  (if (or (= policy rpc-subject-any) (= policy rpc-subject-existing)) nil (rpc-fail! :rpc-invalid-policy "RPC subject policy is invalid"))
-  (rpc-record! :rpc/action [operation proposition policy]))
+^{:line 1037 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-action! [operation proposition policy]
+  ^{:line 1041 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 1041 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (or ^{:line 1041 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= operation :rpc/assert) ^{:line 1041 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= operation :rpc/retract)) nil ^{:line 1043 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-action "RPC action operation is invalid"))
+  ^{:line 1044 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 1044 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (or ^{:line 1044 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= policy rpc-subject-any) ^{:line 1044 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= policy rpc-subject-existing)) nil ^{:line 1046 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-policy "RPC subject policy is invalid"))
+  ^{:line 1047 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/action ^{:line 1047 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [operation proposition policy]))
 
-(defn rpc-action-result! [input-index ^Boolean changed occurrences]
-  (rpc-record! :rpc/action-result [input-index changed (rpc-list! occurrences)]))
+^{:line 1049 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-action-result! [input-index ^Boolean changed occurrences]
+  ^{:line 1053 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/action-result ^{:line 1054 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [input-index changed ^{:line 1054 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! occurrences)]))
 
-(defn rpc-mutation-result! [results]
-  (rpc-record! :rpc/mutation-result [(rpc-list! results)]))
+^{:line 1056 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-mutation-result! [results]
+  ^{:line 1057 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/mutation-result ^{:line 1057 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [^{:line 1057 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! results)]))
 
-(defn rpc-write! [proposition policy fence]
-  (if (or (= policy rpc-subject-any) (= policy rpc-subject-existing)) nil (rpc-fail! :rpc-invalid-policy "RPC subject policy is invalid"))
-  (rpc-record! :rpc/write [proposition policy (rpc-option! fence)]))
+^{:line 1059 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-write! [proposition policy fence]
+  ^{:line 1063 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (if ^{:line 1063 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (or ^{:line 1063 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= policy rpc-subject-any) ^{:line 1063 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (= policy rpc-subject-existing)) nil ^{:line 1065 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-fail! :rpc-invalid-policy "RPC subject policy is invalid"))
+  ^{:line 1066 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/write ^{:line 1066 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [proposition policy ^{:line 1066 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-option! fence)]))
 
-(defn rpc-batch! [actions fence]
-  (rpc-record! :rpc/batch [(rpc-list! actions) (rpc-option! fence)]))
+^{:line 1068 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-batch! [actions fence]
+  ^{:line 1071 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/batch ^{:line 1071 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [^{:line 1071 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! actions) ^{:line 1071 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-option! fence)]))
 
-(defn rpc-triple-pattern! [slot0 slot1 slot2]
-  (rpc-record! :rpc/triple-pattern [(rpc-option! slot0) (rpc-option! slot1) (rpc-option! slot2)]))
+^{:line 1073 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-triple-pattern! [slot0 slot1 slot2]
+  ^{:line 1077 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/triple-pattern ^{:line 1078 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [^{:line 1078 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-option! slot0) ^{:line 1078 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-option! slot1) ^{:line 1078 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-option! slot2)]))
 
-(defn rpc-status! [state live-count engine cache]
-  (rpc-record! :rpc/status [state live-count engine cache]))
+^{:line 1080 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-status! [state live-count engine cache]
+  ^{:line 1085 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/status ^{:line 1085 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [state live-count engine cache]))
 
-(defn rpc-triples! [values]
-  (rpc-record! :rpc/triples [(rpc-list! values)]))
+^{:line 1087 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-triples! [values]
+  ^{:line 1088 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/triples ^{:line 1088 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [^{:line 1088 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! values)]))
 
-(defn rpc-occurrences! [values]
-  (rpc-record! :rpc/occurrences [(rpc-list! values)]))
+^{:line 1090 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-occurrences! [values]
+  ^{:line 1091 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/occurrences ^{:line 1091 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [^{:line 1091 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! values)]))
 
-(defn rpc-lease-acquire! [resource holder ttl-ms]
-  (rpc-record! :lease/acquire [resource holder ttl-ms]))
+^{:line 1093 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-lease-acquire! [resource holder ttl-ms]
+  ^{:line 1097 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :lease/acquire ^{:line 1097 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [resource holder ttl-ms]))
 
-(defn rpc-lease-renew! [fence ttl-ms]
-  (rpc-record! :lease/renew [fence ttl-ms]))
+^{:line 1099 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-lease-renew! [fence ttl-ms]
+  ^{:line 1102 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :lease/renew ^{:line 1102 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [fence ttl-ms]))
 
-(defn rpc-lease-grant! [fence expires]
-  (rpc-record! :lease/grant [fence expires]))
+^{:line 1104 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-lease-grant! [fence expires]
+  ^{:line 1107 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :lease/grant ^{:line 1107 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [fence expires]))
 
-(defn rpc-lease-released! [^Boolean released]
-  (rpc-record! :lease/released [released]))
+^{:line 1109 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-lease-released! [^Boolean released]
+  ^{:line 1110 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :lease/released ^{:line 1110 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [released]))
 
-(defn rpc-lease-check! [^Boolean valid expires]
-  (rpc-record! :lease/check [valid (rpc-option! expires)]))
+^{:line 1112 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-lease-check! [^Boolean valid expires]
+  ^{:line 1115 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :lease/check ^{:line 1115 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [valid ^{:line 1115 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-option! expires)]))
 
-(defn rpc-violation! [code detail]
-  (rpc-record! :rpc/violation [code detail]))
+^{:line 1117 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-violation! [code detail]
+  ^{:line 1120 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/violation ^{:line 1120 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [code detail]))
 
-(defn rpc-validation! [^Boolean valid violations]
-  (rpc-record! :rpc/validation [valid (rpc-list! violations)]))
+^{:line 1122 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-validation! [^Boolean valid violations]
+  ^{:line 1125 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :rpc/validation ^{:line 1125 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [valid ^{:line 1125 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! violations)]))
 
-(defn rpc-query-variable! [^String name]
-  (rpc-record! :query/var [name]))
+^{:line 1127 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-variable! [^String name]
+  ^{:line 1128 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/var ^{:line 1128 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [name]))
 
-(defn rpc-query-constant! [value]
-  (rpc-record! :query/const [value]))
+^{:line 1130 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-constant! [value]
+  ^{:line 1131 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/const ^{:line 1131 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [value]))
 
-(defn rpc-query-head! [^String relation terms]
-  (rpc-record! :query/head [relation (rpc-list! terms)]))
+^{:line 1133 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-head! [^String relation terms]
+  ^{:line 1136 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/head ^{:line 1136 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [relation ^{:line 1136 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! terms)]))
 
-(defn rpc-query-relation! [^String relation terms ^Boolean negated]
-  (rpc-record! :query/relation [relation (rpc-list! terms) negated]))
+^{:line 1138 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-relation! [^String relation terms ^Boolean negated]
+  ^{:line 1142 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/relation ^{:line 1142 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [relation ^{:line 1142 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! terms) negated]))
 
-(defn rpc-query-predicate! [operation left right]
-  (rpc-record! :query/predicate [operation left right]))
+^{:line 1144 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-predicate! [operation left right]
+  ^{:line 1148 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/predicate ^{:line 1148 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [operation left right]))
 
-(defn rpc-query-function! [operation terms ^String bind-variable]
-  (rpc-record! :query/function [operation (rpc-list! terms) bind-variable]))
+^{:line 1150 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-function! [operation terms ^String bind-variable]
+  ^{:line 1154 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/function ^{:line 1155 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [operation ^{:line 1155 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! terms) bind-variable]))
 
-(defn rpc-query-rule! [head clauses]
-  (rpc-record! :query/rule [head (rpc-list! clauses)]))
+^{:line 1157 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-rule! [head clauses]
+  ^{:line 1160 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/rule ^{:line 1160 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [head ^{:line 1160 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! clauses)]))
 
-(defn rpc-query-stratum! [rules]
-  (rpc-record! :query/stratum [(rpc-list! rules)]))
+^{:line 1162 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-stratum! [rules]
+  ^{:line 1163 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/stratum ^{:line 1163 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [^{:line 1163 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! rules)]))
 
-(defn rpc-query-find-relation! [^String relation]
-  (rpc-record! :query/find-relation [relation]))
+^{:line 1165 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-find-relation! [^String relation]
+  ^{:line 1166 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/find-relation ^{:line 1166 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [relation]))
 
-(defn rpc-query-aggregate! [operation argument-index]
-  (rpc-record! :query/aggregate [operation (rpc-option! argument-index)]))
+^{:line 1168 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-aggregate! [operation argument-index]
+  ^{:line 1171 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/aggregate ^{:line 1171 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [operation ^{:line 1171 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-option! argument-index)]))
 
-(defn rpc-query-having! [comparison aggregate-index value]
-  (rpc-record! :query/having [comparison aggregate-index value]))
+^{:line 1173 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-having! [comparison aggregate-index value]
+  ^{:line 1177 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/having ^{:line 1177 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [comparison aggregate-index value]))
 
-(defn rpc-query-find-aggregate! [^String relation grouping aggregates having]
-  (rpc-record! :query/find-aggregate [relation (rpc-list! grouping) (rpc-list! aggregates) (rpc-list! having)]))
+^{:line 1179 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-find-aggregate! [^String relation grouping aggregates having]
+  ^{:line 1184 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/find-aggregate ^{:line 1185 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [relation ^{:line 1185 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! grouping) ^{:line 1185 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! aggregates) ^{:line 1186 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! having)]))
 
-(defn rpc-query-plan! [find strata]
-  (rpc-record! :query/plan [find (rpc-list! strata)]))
+^{:line 1188 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-plan! [find strata]
+  ^{:line 1191 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/plan ^{:line 1191 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [find ^{:line 1191 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! strata)]))
 
-(defn rpc-query-as-of! [version]
-  (rpc-record! :query/as-of [version]))
+^{:line 1193 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-as-of! [version]
+  ^{:line 1194 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/as-of ^{:line 1194 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [version]))
 
-(defn rpc-query-since! [lower-exclusive upper]
-  (rpc-record! :query/since [lower-exclusive upper]))
+^{:line 1196 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-since! [lower-exclusive upper]
+  ^{:line 1199 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/since ^{:line 1199 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [lower-exclusive upper]))
 
-(defn rpc-query-request! [plan snapshot]
-  (rpc-record! :query/request [plan snapshot]))
+^{:line 1201 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-request! [plan snapshot]
+  ^{:line 1204 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/request ^{:line 1204 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [plan snapshot]))
 
-(defn rpc-query-row! [values]
-  (rpc-record! :query/row [(rpc-list! values)]))
+^{:line 1206 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-row! [values]
+  ^{:line 1207 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/row ^{:line 1207 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [^{:line 1207 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! values)]))
 
-(defn rpc-query-rows! [rows]
-  (rpc-record! :query/rows [(rpc-list! rows)]))
+^{:line 1209 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-rows! [rows]
+  ^{:line 1210 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/rows ^{:line 1210 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [^{:line 1210 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-list! rows)]))
 
-(defn rpc-query-cursor! [snapshot-version ^String query-sha256 next-page-ordinal after-row]
-  (rpc-record! :query/cursor [snapshot-version query-sha256 next-page-ordinal after-row]))
+^{:line 1212 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (defn rpc-query-cursor! [snapshot-version ^String query-sha256 next-page-ordinal after-row]
+  ^{:line 1217 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} (rpc-record! :query/cursor ^{:line 1218 :file "/home/tom/code/fram/wt-legacy-surface-purge/src/framrpc.bclj"} [snapshot-version query-sha256 next-page-ordinal after-row]))

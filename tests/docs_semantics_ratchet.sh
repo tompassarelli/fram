@@ -17,11 +17,6 @@ canonical_docs=(
   deploy/cloudflare/PROCEDURE.md
 )
 
-scoped_v030_docs=(
-  THREAD-FORMAT.md
-  docs/v0.3-writer-handoff.md
-)
-
 # Historical documents are quarantined by location AND by banner; the policy
 # note is the one file in the archive that is not itself archived material.
 archive_dir=docs/archive
@@ -47,13 +42,8 @@ fail() {
   exit 1
 }
 
-for path in "${canonical_docs[@]}" "${scoped_v030_docs[@]}" "${historical_docs[@]}"; do
+for path in "${canonical_docs[@]}" "${historical_docs[@]}"; do
   [[ -f "$path" ]] || fail "missing classified document $path"
-done
-
-for path in "${scoped_v030_docs[@]}"; do
-  head -n 12 "$path" | grep -Eqi 'Status:.*Current.*v0\.3' ||
-    fail "$path lacks a current-v0.3 scope banner"
 done
 
 [[ -f "$archive_policy_doc" ]] ||
@@ -85,7 +75,7 @@ for path in "$archive_dir"/*.md; do
     fail "$path sits in $archive_dir/ but is not classified historical — add it to historical_docs in ${BASH_SOURCE[0]##*/} or move it back out"
 done
 
-for path in "${canonical_docs[@]}" "${scoped_v030_docs[@]}"; do
+for path in "${canonical_docs[@]}"; do
   [[ "$path" != "$archive_dir/"* ]] ||
     fail "$path is a current document but lives in $archive_dir/ — move it out of the archive"
 done
@@ -164,6 +154,6 @@ if rg -n 'bin/fram (import|export|tools|call)' README.md; then
   fail 'README quickstart regressed to a local legacy command'
 fi
 
-printf 'docs semantics: PASS — %d canonical / %d current-v0.3 / %d historical (all banner-marked in %s/); README %d native commands match fixtures\n' \
-  "${#canonical_docs[@]}" "${#scoped_v030_docs[@]}" "${#historical_docs[@]}" \
+printf 'docs semantics: PASS — %d canonical / %d historical (all banner-marked in %s/); README %d native commands match fixtures\n' \
+  "${#canonical_docs[@]}" "${#historical_docs[@]}" \
   "$archive_dir" "${#expected_verbs[@]}"

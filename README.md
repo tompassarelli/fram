@@ -57,11 +57,6 @@ type. See the [naming ledger](docs/naming.md).
 - [Node FRAMRPC client](clients/node/README.md) — the complete direct builder and application data plane.
 - [Isolation and deployment](docs/isolation-and-deployment.md) — trust domains and the Cloudflare edge shape.
 - [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
-- [Thread format](THREAD-FORMAT.md) — the current v0.3 Markdown
-  import/export compatibility projection.
-- [v0.3 writer handoff](docs/v0.3-writer-handoff.md) — the versioned v0.3
-  blue/green operator contract, pinned to the v0.3 runtime; the controller it
-  describes no longer runs on the current host.
 
 The rationale and positioning essays, plus the old pull, Worlds, claims, and Codegraph documents, live under
 [`docs/archive/`](docs/archive/README.md). Each one carries a `HISTORICAL`

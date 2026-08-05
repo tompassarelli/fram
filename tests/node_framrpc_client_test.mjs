@@ -208,7 +208,7 @@ try {
     assert.equal(events.result.length, 3);
   });
 
-  await check('v0.3.5 text-match runs through the same direct query operation', async () => {
+  await check('text-match runs through the same direct query operation', async () => {
     const response = await fram.query({
       find: 'matches',
       rules: [{

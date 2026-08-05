@@ -1,5 +1,4 @@
 1	README.md
-1	RELEASE-v0.3.0.md
 4	bench/in-class/results/2026-07-28-index-architecture.jsonl
 1	bench/in-class/scenario-contract.edn
 1	bin/fram-code-status

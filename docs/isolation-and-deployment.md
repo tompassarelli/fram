@@ -1,6 +1,6 @@
 # Isolation, wire, and deployment
 
-This document specifies the source-head database trust domain, server bind and FRAMRPC boundary, supported deployment shape, and v0.3 writer handoff.
+This document specifies the source-head database trust domain, server bind and FRAMRPC boundary, and supported deployment shape.
 
 ## Trust domain and bind
 
@@ -52,7 +52,8 @@ The native route consumes only a linked executable promoted behind the native ar
 
 Back up `history.framlog` as an append-only binary artifact with its SpaceId. Inspect it through scan, query, occurrences, and validate, never text scraping. Legacy flat logs enter only through the one-shot migration against explicit quiescent source and destination paths.
 
-Source head exposes no deployment control. Pinned v0.3 clusters use the live [v0.3 writer handoff](v0.3-writer-handoff.md) contract until migration; its flat-store and EDN control vocabulary is version-scoped, not kernel vocabulary. The current host instead uses systemd socket activation and a generation symlink.
+Source head exposes no deployment-control operation. Runtime publication uses
+systemd socket activation and a generation symlink outside the data protocol.
 
 Deployment worktrees stay pristine. Controller markers live in controller state, never the source tree being validated.
 

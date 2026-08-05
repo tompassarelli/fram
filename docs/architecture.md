@@ -57,9 +57,8 @@ Every cell is a Term. `triple` is live state, `occurrence` is explicit history, 
 3. **CLI EDN** is local human syntax lowered to typed records before FRAMRPC; it is not the wire.
 4. **Public JSON edges** are closed adapters. `bin/fram-mcp` exposes only the five verbs in the [tool catalog](tool-catalog.md).
 
-Graph-authoring and deployment controls are separate sealed services. The pinned
-v0.3 blue/green control protocol remains in [v0.3 writer handoff](v0.3-writer-handoff.md);
-it does not enlarge FRAMRPC.
+Graph-authoring and deployment controls are separate sealed services; they do
+not enlarge FRAMRPC.
 
 The engine has no tenant authorization. Loopback/private FRAMRPC, process, SpaceId, and log form a trust domain; authenticated TLS belongs at a gateway or sidecar. Bind, wire, deployment, and probe details are consolidated in [isolation and deployment](isolation-and-deployment.md).
 

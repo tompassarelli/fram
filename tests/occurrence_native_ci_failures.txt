@@ -2,7 +2,6 @@
 # Catalog drift is exact. Vocabulary failures may resolve but may never regrow;
 # the comparator reports every pristine failure absent from the candidate.
 catalog-drift	catalog-drift
-vocab-residue	RELEASE-v0.3.0.md
 vocab-residue	bench/in-class/results/2026-07-28-index-architecture.jsonl
 vocab-residue	bench/in-class/scenario-contract.edn
 vocab-residue	bin/fram-code-status

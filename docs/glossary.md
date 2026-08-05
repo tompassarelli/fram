@@ -20,7 +20,7 @@ This document is the single source for Fram's current semantic, storage, query, 
 
 **live set** — The propositions whose assertion occurrences remain in force after exact retractions; full occurrence history is retained.
 
-**fact** — A proposition admitted by a particular view's rules, not a stored kernel type; on the historical v0.3 line it meant one stored subject–predicate–object record.
+**fact** — A proposition admitted by a particular view's rules, not a stored kernel type.
 
 **Turtle** — The “turtles all the way down” architecture prior: prefer the same recursive Triple language for data, coordinates, history, and metadata; never a primitive or storage type.
 
@@ -54,10 +54,4 @@ This document is the single source for Fram's current semantic, storage, query, 
 
 **selector** — The operator-owned front end that holds and drains public connections, checks deployment generations, and switches all routes together.
 
-**blue/green generation** — A v0.3 compatibility deployment copy used by the frozen writer-handoff protocol.
-
-**promote** — A v0.3 writer-handoff operation that grants a prepared standby authority after it proves agreement with the former writer's final durable marker.
-
 **wire skew** — A client/server protocol-version or format mismatch that can make healthy endpoints reject, drop, or hang requests.
-
-**v0.3 line** — The deployed compatibility release using the older flat store, EDN line protocol, and blue/green cutover contract until cluster migration.
