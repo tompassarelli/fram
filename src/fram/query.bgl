@@ -896,16 +896,22 @@
 
 (defn- number-atom [value: Any] -> NumericAtom?
   (cond
-    [(integer? value) (let [integer-value: Int value] integer-value)]
-    [(number? value) (let [float-value: Float value] float-value)]
+    [(number? value)
+     (if (integer? value)
+       (let [integer-value: Int value] integer-value)
+       (let [float-value: Float value] float-value))]
     [(string? value)
      (let [text: String value
-           integer-result (parse-long text)]
+           integer-result: (U Int Nil) (parse-long text)]
        (if (some? integer-result)
-         integer-result
-         (let [float-result (parse-double text)]
-           (if (number? float-result)
-             (let [float-value: Float float-result] float-value)
+         (let [integer-value: Int integer-result
+               numeric-value: NumericAtom integer-value]
+           numeric-value)
+         (let [float-result: (U Float Nil) (parse-double text)]
+           (if (some? float-result)
+             (let [float-value: Float float-result
+                   numeric-value: NumericAtom float-value]
+               numeric-value)
              nil))))]
     [:else nil]))
 
@@ -1038,6 +1044,19 @@
           (aggregate-value rows spec))
         specs))
 
+(defn- append-aggregate-values
+  [row: d/Tuple
+   values: (Vec NumericAtom)] -> d/Tuple
+  (reduce (fn [current: d/Tuple value: NumericAtom] -> d/Tuple
+            (if (integer? value)
+              (let [integer-value: Int value
+                    element: Any integer-value]
+                (conj current element))
+              (let [float-value: Float value
+                    element: Any float-value]
+                (conj current element))))
+          row values))
+
 (defn- having-passes?
   [row: d/Tuple
    grouping-count: Int
@@ -1070,7 +1089,7 @@
                          key (aggregategroup-key group)
                          members (aggregategroup-members group)
                          values (aggregate-values members (findspec-aggregates find))]
-                     (conj acc (vec (concat key values)))))
+                     (conj acc (append-aggregate-values key values))))
                  [] (aggregategroups-order groups))
                 survivors
                 (filterv (fn [row: d/Tuple] -> Bool
