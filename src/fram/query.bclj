@@ -447,6 +447,15 @@
                 (if (reaches? relation relation edges) (conj acc relation) acc)))
             (empty-string-set) rules)))
 
+(defn- recursive-builtin? [rule: d/Rule] -> Bool
+  (let [body (d/rule-body rule)]
+    (loop [position: Int 0]
+      (if (>= position (count body))
+        false
+        (if (= :builtin (d/literal-kind (nth body position)))
+          true
+          (recur (inc position)))))))
+
 (defn- recursive-builtin-errors [rules: (Vec d/Rule)] -> (Vec QueryError)
   (let [recursive (recursive-relations rules)]
     (reduce
@@ -454,9 +463,7 @@
        [acc: (Vec QueryError)
         rule: d/Rule] -> (Vec QueryError)
        (if (and (contains? recursive (d/rule-head-relation rule))
-                (some (fn [literal: d/Literal] -> Bool
-                        (= :builtin (d/literal-kind literal)))
-                      (d/rule-body rule)))
+                (recursive-builtin? rule))
          (conj acc (query-error :query-recursive-builtin
                                 (str "recursive relation '" (d/rule-head-relation rule)
                                      "' cannot contain a builtin binding")))
@@ -945,6 +952,16 @@
     (let [integer-value: Int value] (double integer-value))
     (let [float-value: Float value] float-value)))
 
+(defn- nonnumeric-row?
+  [rows: (Vec d/Tuple)
+   position: Int] -> Bool
+  (loop [index: Int 0]
+    (if (>= index (count rows))
+      false
+      (if (nil? (number-atom (nth (nth rows index) position)))
+        true
+        (recur (inc index))))))
+
 (defn- numeric-column-error
   [rows: (Vec d/Tuple)
    find: FindSpec] -> QueryError?
@@ -955,9 +972,7 @@
         (let [spec (nth specs index)]
           (if (contains? numeric-aggregate-operators (aggregatespec-operator spec))
             (let [position: Int (or (aggregatespec-argument spec) 0)
-                  bad (some (fn [row: d/Tuple] -> Bool
-                              (nil? (number-atom (nth row position))))
-                            rows)]
+                  bad (nonnumeric-row? rows position)]
               (if bad
                 (query-error :query-nonnumeric-aggregate
                              (str "aggregate position " position
