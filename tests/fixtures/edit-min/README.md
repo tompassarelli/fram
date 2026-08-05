@@ -3,7 +3,7 @@
 `schema.code.factlog` is a **disposable, self-contained** code log carrying
 EXACTLY ONE canonical module — `fram.schema` (render/ingest @root key `schema`)
 — freshly ingested from `src/fram/schema.bclj`. It is the sole corpus the
-`coord_edit_min_*` receipts boot over.
+`code_edit_min_*` receipts boot over.
 
 ## Why it exists (the regression it fixes)
 
@@ -17,8 +17,8 @@ defect: only one `schema.bclj` exists in-tree. A fresh single-module ingest has
 the module exactly once, so the scope is unambiguous by construction.
 
 Booting over a committed fixture (never the live `.fram/code.log`) also removes
-the dependence on ambient FRAM telemetry (`FRAM_BIN` deployment, live
-coordinator), test order, and any other lane's runtime state — and the receipts
+the dependence on ambient FRAM telemetry (`FRAM_BIN` deployment, live Fram
+server), test order, and any other lane's runtime state — and the receipts
 fail loudly instead of silently `SKIP`ping when a required fixture/tool is
 missing.
 
@@ -34,7 +34,7 @@ missing.
 
 The ingest log carries transaction timestamps, so regeneration is not expected
 to reproduce the log's metadata bytes. Its semantic projection is deterministic:
-`~/code/fram/main/tests/coord_edit_min_byte_identical.clj` renders the fixture before
+`fram:tests/code_edit_min_byte_identical.clj` renders the fixture before
 editing and requires that render to be byte-identical to the captured source.
 Every receipt independently requires the exact singleton module-root set above,
 so a duplicate `fram.schema`/substring-resolved module cannot enter unnoticed.
