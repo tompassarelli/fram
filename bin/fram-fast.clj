@@ -1,15 +1,15 @@
 (ns fram-fast
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
-            [coord-daemon-wire :as wire]
+            [framrpc :as wire]
             [fram.rt :as rt]
             [fram.types :as t]))
 
 ;; Public data commands speak only FRAMRPC. EDN exists here solely as the
 ;; human command-line syntax and is lowered to Terms before any socket opens.
 
-(defn- coord-port []
-  (if-let [port (System/getenv "FRAM_PORT")]
+(defn- server-port []
+  (if-let [port (System/getenv "FRAM_SERVER_PORT")]
     (Integer/parseInt port)
     7977))
 
@@ -40,7 +40,7 @@
     (str (name (t/rpcerror-code error)) ": " (t/rpcerror-message error))))
 
 (defn- version! []
-  (let [response (rt/native-call! (coord-port) :rpc/version wire/rpc-unit)]
+  (let [response (rt/native-call! (server-port) :rpc/version wire/rpc-unit)]
     (rt/require-native-success! response)
     (t/rpcresponse-served-version response)))
 
@@ -56,7 +56,7 @@
   (let [base (version!)
         response
         (rt/native-call!
-         (coord-port) (rt/rpc-space-id) operation
+         (server-port) (rt/rpc-space-id) operation
          (wire/rpc-write! proposition policy nil) base nil nil)]
     response))
 
@@ -69,7 +69,7 @@
         response))))
 
 ;; north (bin/north:694) maps :subject-not-found to exit 3; all other
-;; coordinator rejections stay exit 1 (bin/north has no dedicated case).
+;; Server rejections stay exit 1 (bin/north has no dedicated case).
 (defn- write-failure-status [response]
   (if (= :rpc/subject-not-found (rt/native-error-code response))
     :subject-not-found
@@ -79,12 +79,12 @@
   (let [proposition (t/triple subject predicate value)
         response (write-retrying! operation proposition policy)]
     (if-let [message (response-error-message response)]
-      (do (println (str "REJECTED by coordinator: " message))
+      (do (println (str "REJECTED by server: " message))
           (write-failure-status response))
       (let [[[input-index changed occurrences]] (mutation-results! response)]
         (println
          (str (if changed "committed" "no change")
-              " via coordinator (v" (t/rpcresponse-served-version response) "): "
+              " via server (v" (t/rpcresponse-served-version response) "): "
               (render-term subject) " " (render-term predicate) " = "
               (render-term value)
               " [input " input-index ", occurrences "
@@ -94,7 +94,7 @@
 (defn fast-show! [subject]
   (let [response
         (rt/native-call!
-         (coord-port) :rpc/scan
+         (server-port) :rpc/scan
          (wire/rpc-triple-pattern! subject nil nil))]
     (rt/require-native-success! response)
     (let [[values] (rt/rpc-record-fields! (rt/native-payload response)
@@ -117,7 +117,7 @@
 (defn fast-query! [query-text]
   (let [response
         (rt/native-call!
-         (coord-port) :rpc/query
+         (server-port) :rpc/query
          (rt/native-query-payload! (parse-query! query-text)))]
     (rt/require-native-success! response)
     (let [[rows] (rt/rpc-record-fields! (rt/native-payload response)
@@ -132,7 +132,7 @@
       true)))
 
 (defn- show-status! []
-  (let [response (rt/native-call! (coord-port) :rpc/status wire/rpc-unit)]
+  (let [response (rt/native-call! (server-port) :rpc/status wire/rpc-unit)]
     (rt/require-native-success! response)
     (let [[state live-count engine _]
           (rt/rpc-record-fields! (rt/native-payload response) :rpc/status 4)]
@@ -140,7 +140,7 @@
                     "|" live-count "|" (name state) "|" (name engine))))))
 
 (defn- validate! []
-  (let [response (rt/native-call! (coord-port) :rpc/validate wire/rpc-unit)]
+  (let [response (rt/native-call! (server-port) :rpc/validate wire/rpc-unit)]
     (rt/require-native-success! response)
     (let [[valid violations]
           (rt/rpc-record-fields! (rt/native-payload response)
@@ -158,7 +158,7 @@
   (when-not (= 3 (count arguments))
     (throw (ex-info "usage: fram scan SLOT0|_ SLOT1|_ SLOT2|_" {})))
   (let [slots (mapv #(when-not (= "_" %) (rt/parse-human-term! %)) arguments)
-        response (rt/native-call! (coord-port) :rpc/scan
+        response (rt/native-call! (server-port) :rpc/scan
                                   (apply wire/rpc-triple-pattern! slots))]
     (rt/require-native-success! response)
     (let [[values] (rt/rpc-record-fields! (rt/native-payload response)
@@ -167,7 +167,7 @@
         (println (pr-str (term-datum triple)))))))
 
 (defn- occurrences! []
-  (let [response (rt/native-call! (coord-port) :rpc/occurrences wire/rpc-unit)]
+  (let [response (rt/native-call! (server-port) :rpc/occurrences wire/rpc-unit)]
     (rt/require-native-success! response)
     (let [[values]
           (rt/rpc-record-fields! (rt/native-payload response)
@@ -219,12 +219,12 @@
                       {:type :unsupported-command})))))
 
 ;; fram.rt raises these :type values when no usable response arrived; north maps to exit 4 (bin/north:698).
-(def ^:private coordinator-unreachable-types
+(def ^:private server-unreachable-types
   #{:rpc-invalid-kind :rpc-request-id-mismatch :rpc-response-mismatch :rpc-truncated})
 
-(defn- coordinator-unreachable? [error]
+(defn- server-unreachable? [error]
   (or (instance? java.io.IOException error)
-      (contains? coordinator-unreachable-types (:type (ex-data error)))))
+      (contains? server-unreachable-types (:type (ex-data error)))))
 
 (when (= *file* (System/getProperty "babashka.file"))
   (try
@@ -232,4 +232,4 @@
     (catch Throwable error
       (binding [*out* *err*]
         (println (str "fram: " (or (.getMessage error) (class error)))))
-      (System/exit (if (coordinator-unreachable? error) 4 1)))))
+      (System/exit (if (server-unreachable? error) 4 1)))))

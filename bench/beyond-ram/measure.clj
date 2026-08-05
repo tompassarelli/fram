@@ -9,7 +9,7 @@
 ;; Reuses the VmHWM /proc reader idiom from tests/apparatus_r1/cells/perf_104k.clj.
 ;;   bb -cp out bench/beyond-ram/measure.clj <mode> <log>
 (require '[fram.store :as c] '[fram.schema :as s] '[clojure.string :as str])
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 
 (def mode (keyword (or (first *command-line-args*) "off")))
 (def LOG (or (second *command-line-args*) "/tmp/fram-beyond-ram.log"))

@@ -4,7 +4,7 @@
 ;; ============================================================================
 ;; The .bclj is a PURE FUNCTION of the fact log. This boots the reified store
 ;; over .fram/code.log (the SAME migrate-flat->co the daemon uses — IN-PROCESS,
-;; no socket; a pure render needs no coordinator), materializes refers_to over the
+;; no socket; a pure render needs no server), materializes refers_to over the
 ;; warm store (so references render via identity), projects the module's facts to
 ;; resolved EDN via resolve.clj extract-file!, and asks Beagle's public
 ;; `facts-roundtrip --render` CLI to regenerate the .bclj.
@@ -43,7 +43,7 @@
 (def ^:private resolve-clj   (or (System/getenv "FRAM_RESOLVE")
                                  (str fram-home "/out/resolve.clj")))
 
-;; NOTE: coord_daemon.clj + resolve.clj are load-file'd LAZILY in the COLD path only
+;; NOTE: server.clj + resolve.clj are load-file'd LAZILY in the COLD path only
 ;; (see below). The --port WARM path doesn't need them (the daemon does the projection),
 ;; so skipping the load keeps warm render light. bb/SCI resolves the forward refs at runtime.
 
@@ -59,11 +59,11 @@
 ;; WARM render path: ask the live daemon's :render op (it projects off the warm `co`
 ;; store — no cold migrate-flat->co boot, no whole-corpus resolve-warm-store!), then
 ;; Beagle facts-roundtrip --render the returned EDN. ~43% faster than the cold path, byte-identical.
-(defn- coord-rt [port log-path req]
-  (rt/coord-request-for-log port log-path req))
+(defn- server-rt [port log-path req]
+  (rt/server-request-for-log port log-path req))
 
 (defn- warm-render! [port log-path module out]
-  (let [resp (coord-rt port log-path {:op :render :module module})]
+  (let [resp (server-rt port log-path {:op :render :module module})]
     (when (:reject resp) (die "fram-render-code: warm :render log fence rejected —" (pr-str resp)))
     (when (:error resp) (die "fram-render-code: warm :render failed —" (pr-str resp)))
     (when-not (:edn resp) (die "fram-render-code: warm :render returned no :edn —" (pr-str resp)))
@@ -97,7 +97,7 @@
 ;; ===== COLD path (only reached when NOT --port) — load the heavy machinery now. =====
 (require '[fram.store :as c]
          '[fram.schema :as s])
-(load-file (str fram-home "/coord_daemon.clj"))   ; migrate-flat->co + the warm-store machinery
+(load-file (str fram-home "/server.clj"))   ; migrate-flat->database + the warm-store machinery
 (load-file resolve-clj)                       ; extract-file! / resolve-warm-store! / out-path
 
 (let [{:keys [module log out]} (parse-args *command-line-args*)
@@ -108,8 +108,8 @@
   (when-not (.exists (io/file log-path)) (die "no code log at" log-path "(run bin/fram-ingest-code first)"))
 
   ;; 1. boot the reified store over the code log (IN-PROCESS migrate-flat->co).
-  (let [coord (migrate-flat->co log-path)
-        st    (:store coord)
+  (let [database (migrate-flat->database log-path)
+        st    (:store database)
         ;; the module's source path from the @<mod>#root file fact (the @file analogue).
         root-id (s/resolve-name st (str "@" module "#root"))
         file-pred (c/value-id st "file")

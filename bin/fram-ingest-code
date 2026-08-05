@@ -39,7 +39,7 @@
   (.getCanonicalPath (.getParentFile (.getParentFile (io/file *file*)))))
 (cp/add-classpath
  (str fram-root java.io.File/pathSeparator (io/file fram-root "out")))
-(require '[coord :as coord]
+(require '[database :as database]
          '[fram.types :as t])
 
 (defn- die [& xs] (binding [*out* *err*] (apply println xs)) (System/exit 1))
@@ -196,15 +196,15 @@
                                 (java.util.UUID/randomUUID) ".framlog"))
           proposition-count (atom 0)]
       (try
-        (coord/create-triple-log! (.getPath sibling) space-id)
-        (let [co (coord/open-coordinator! (.getPath sibling) space-id)
+        (database/create-triple-log! (.getPath sibling) space-id)
+        (let [db (database/open-server! (.getPath sibling) space-id)
               total (count files)]
           ;; Report each module as it lands: a minutes-long fold with no output
           ;; is indistinguishable from a hang to any caller with a timeout.
           (doseq [[index path] (map-indexed vector files)]
             (let [propositions (module->propositions root-segs path)]
-              (coord/commit!
-               co {:actor "fram-ingest-code"
+              (database/commit!
+               db {:actor "fram-ingest-code"
                    :recorded-at (recorded-now)
                    :operations
                    (mapv (fn [proposition]

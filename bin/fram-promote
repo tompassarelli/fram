@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Promote the exact clean checkout commit into the long-running Fram daemon.
+# Promote the exact clean checkout commit into the long-running Fram server.
 # This is deliberately a project-local development action: Nix remains the
 # packaged release baseline, and no system generation is built or switched.
 set -euo pipefail

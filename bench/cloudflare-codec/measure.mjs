@@ -55,8 +55,8 @@ function timeBatches(operation, iterations, batches) {
 }
 
 function benchmarkCase({ name, rows, iterations, batches }) {
-  // These are the same logical coordinator reply. Keywords are EDN values but
-  // become unqualified strings in the coordinator's Cheshire JSON response.
+  // These are the same logical server reply. Keywords are EDN values but
+  // become unqualified strings in the server's Cheshire JSON response.
   const ednValue = { ok: rows, version: 1_000, engine: kw('index') };
   const jsonValue = { ok: rows, version: 1_000, engine: 'index' };
   const ednWire = ednEncode(ednValue);

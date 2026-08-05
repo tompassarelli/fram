@@ -5,7 +5,7 @@
 # sealed-control surface and is refused here.
 # Point a model's MCP client at this command.
 #
-#   FRAM_SPACE_ID selects the database identity. FRAM_PORT selects its daemon.
+#   FRAM_SPACE_ID selects the database identity. FRAM_SERVER_PORT selects its server.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ -z "${FRAM_SPACE_ID:-}" ]]; then
   echo "fram-mcp: FRAM_SPACE_ID is required" >&2

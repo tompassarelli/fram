@@ -39,13 +39,13 @@ bootstrap_graph() {
   start=$(ns)
   "$ROOT/bin/fram-ingest-code" "$WORK/graph-src" --root "$WORK/graph-src" --out "$WORK/code.log" >"$WORK/ingest.out" 2>&1
   port=$(free_port)
-  (cd "$ROOT" && bb -cp out coord_daemon.clj serve-flat "$port" "$WORK/code.log" >"$WORK/daemon.out" 2>&1 & echo $! >"$WORK/daemon.pid")
-  for _ in $(seq 1 80); do grep -q 'reified coordinator listening' "$WORK/daemon.out" && break; sleep 0.1; done
-  grep -q 'reified coordinator listening' "$WORK/daemon.out" || { cat "$WORK/daemon.out" >&2; return 1; }
+  (cd "$ROOT" && bb -cp out server.clj serve-flat "$port" "$WORK/code.log" >"$WORK/server.out" 2>&1 & echo $! >"$WORK/server.pid")
+  for _ in $(seq 1 80); do grep -q 'reified server listening' "$WORK/server.out" && break; sleep 0.1; done
+  grep -q 'reified server listening' "$WORK/server.out" || { cat "$WORK/server.out" >&2; return 1; }
   BOOT_MS=$(ms "$start" "$(ns)")
   PORT="$port"
 }
-stop_graph() { [[ -f "$WORK/daemon.pid" ]] && kill "$(cat "$WORK/daemon.pid")" 2>/dev/null || true; }
+stop_graph() { [[ -f "$WORK/server.pid" ]] && kill "$(cat "$WORK/server.pid")" 2>/dev/null || true; }
 graph_rename() {
   local old="$1" new="$2" t0 t1
   t0=$(ns)

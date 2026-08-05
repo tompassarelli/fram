@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build the FRAMRPC coordinator as a GraalVM native image. Domain semantics
+# Build the FRAMRPC server as a GraalVM native image. Domain semantics
 # remain the Beagle-emitted Clojure under ../out; the entry is a platform
-# adapter around coord-daemon/-main.
+# adapter around server/-main.
 # Run under GraalVM CE:
 #   nix shell nixpkgs#graalvmPackages.graalvm-ce -c ./build.sh
 # Container releases run `aot` and `image` in separate builder stages.
@@ -17,17 +17,17 @@ case "$phase" in
     ;;
 esac
 cd "$repo_dir"
-# The manifest paths are repository-relative because coord-daemon preserves
+# The manifest paths are repository-relative because server preserves
 # its file-based host boundary for the JVM development route.
 native_deps="$(<"$native_dir/deps.edn")"
 classpath_file="$native_dir/classpath.txt"
 
 if [[ "$phase" != "image" ]]; then
-  echo "== [1/2] AOT compile Fram coordinator =="
+  echo "== [1/2] AOT compile Fram server =="
   rm -rf "${native_dir:?}/classes"
   mkdir -p "$native_dir/classes"
   clojure -Sdeps "$native_deps" -M -e \
-    "(set! *warn-on-reflection* true) (binding [*compile-path* \"native/classes\"] (compile 'fram.graal-coordinator))"
+    "(set! *warn-on-reflection* true) (binding [*compile-path* \"native/classes\"] (compile 'fram.graal-server))"
   clojure -Sdeps "$native_deps" -Spath >"$classpath_file"
 fi
 
@@ -56,9 +56,9 @@ if [[ "$phase" != "aot" ]]; then
     --features=clj_easy.graal_build_time.InitClojureClasses \
     "-H:ConfigurationFileDirectories=$native_dir" \
     "--initialize-at-build-time=$default_init_classes" \
-    -o "$native_dir/fram-daemon-graal" \
-    fram.graal_coordinator
+    -o "$native_dir/fram-server-graal" \
+    fram.graal_server
 
-  echo "== done -> $native_dir/fram-daemon-graal =="
-  ls -lh "$native_dir/fram-daemon-graal"
+  echo "== done -> $native_dir/fram-server-graal =="
+  ls -lh "$native_dir/fram-server-graal"
 fi

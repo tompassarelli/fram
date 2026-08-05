@@ -1,7 +1,7 @@
 ;; ============================================================================
 ;; experiments/propagation/harness.clj — #44 / PROMPT 2
 ;; Propagation latency: time from agent A COMMITTING a code change to agent B's
-;; READ reflecting it. Graph (warm Fram daemon, corpus-from-store) vs text+git
+;; READ reflecting it. Graph (warm Fram server, corpus-from-store) vs text+git
 ;; (shared bare repo, PUSH-HOOK propagation — no poll loop). Same metric both arms.
 ;;   bb -cp out experiments/propagation/harness.clj   [PROP_N=1]
 ;;
@@ -9,7 +9,7 @@
 ;; (NOT a re-resolve); git baseline = post-receive hook drives B's fetch (NOT a poll
 ;; loop with an arbitrary interval). See experiments/propagation/PREREGISTER.md.
 ;;
-;; SAFE: isolated daemon on a /tmp COPY of .fram/code.log, non-7977 port; git arms in
+;; SAFE: isolated server on a /tmp COPY of .fram/code.log, non-7977 port; git arms in
 ;; /tmp. Never the canonical log, never 7977.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str]
@@ -19,7 +19,7 @@
 (defn nowns [] (System/nanoTime))
 (defn ms [a b] (/ (double (- b a)) 1e6))
 (defn p [& xs] (apply println xs))
-(binding [*command-line-args* []] (load-file "coord_daemon.clj"))  ; boot-flat!/serve/client
+(binding [*command-line-args* []] (load-file "server.clj"))  ; boot-flat!/serve/client
 
 ;; ---------------------------------------------------------------------------
 ;; GIT ARM — shared bare repo; A commits+pushes; a post-receive hook fetches into
@@ -65,8 +65,8 @@
        :commit->visible (ms t-commit t-vis) :total (ms t0 t-vis)})))
 
 ;; ---------------------------------------------------------------------------
-;; GRAPH ARM — warm daemon over a /tmp code.log copy. A commits an insert-form via
-;; the socket; B reads via a warm daemon query (corpus-from-store). t1 = B's read
+;; GRAPH ARM — warm server over a /tmp code.log copy. A commits an insert-form via
+;; the socket; B reads via a warm server query (corpus-from-store). t1 = B's read
 ;; reflects A's change. The store updates eagerly on commit, so propagation is ~the
 ;; read round-trip, flat in agent count.
 ;; ---------------------------------------------------------------------------

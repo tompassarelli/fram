@@ -336,7 +336,7 @@ if [[ -e "$artifact_dir" ]]; then
   ready=""
   [[ ! -f "$artifact_dir/READY" ]] || ready="$(<"$artifact_dir/READY")"
   [[ "$ready" == "fram-native-build/v1 $closure_hash" &&
-    -x "$artifact_dir/bin/fram-daemon-native" ]] ||
+    -x "$artifact_dir/bin/fram-server-native" ]] ||
     die "cache entry exists but is not READY: $artifact_dir"
   printf '%s\n' "$artifact_dir"
   exit 0
@@ -347,7 +347,7 @@ mkdir -p "$stage/bin"
 cp "$input_manifest" "$stage/input.manifest"
 if [[ -z "$host" ]]; then
   if ! "$beagle" native-exe \
-      --out "$stage/bin/fram-daemon-native" \
+      --out "$stage/bin/fram-server-native" \
       --entry "$entry" \
       --cc "$cc" \
       --artifacts "$stage" \
@@ -357,23 +357,23 @@ if [[ -z "$host" ]]; then
     die "beagle native-exe failed"
   fi
 else
-  native_daemon_entries=(
-    fram.native-daemon/serve-flat-generated-abi
-    fram.native-daemon/serve-flat-store-boot!
-    fram.native-daemon/serve-flat-store-dispatch!
-    fram.native-daemon/serve-flat-store-shutdown
-    fram.native-daemon/serve-flat-codec-read-request!
-    fram.native-daemon/serve-flat-codec-write-response!
-    fram.native-daemon/serve-flat-codec-release-request
-    fram.native-daemon/serve-flat-codec-release-response
+  native_server_entries=(
+    fram.native-server/serve-flat-generated-abi
+    fram.native-server/serve-flat-store-boot!
+    fram.native-server/serve-flat-store-dispatch!
+    fram.native-server/serve-flat-store-shutdown
+    fram.native-server/serve-flat-codec-read-request!
+    fram.native-server/serve-flat-codec-write-response!
+    fram.native-server/serve-flat-codec-release-request
+    fram.native-server/serve-flat-codec-release-response
   )
-  native_daemon_entry_args=()
-  for native_daemon_entry in "${native_daemon_entries[@]}"; do
-    native_daemon_entry_args+=(--entry "$native_daemon_entry")
+  native_server_entry_args=()
+  for native_server_entry in "${native_server_entries[@]}"; do
+    native_server_entry_args+=(--entry "$native_server_entry")
   done
   if ! "$beagle" native-module \
       --out "$stage" \
-      "${native_daemon_entry_args[@]}" \
+      "${native_server_entry_args[@]}" \
       -- \
       "${normalized_sources[@]}" \
       >"$stage/native-module.log" 2>&1; then
@@ -432,18 +432,18 @@ else
       "$stage/native_shim.c" \
       "$host_source" \
       "$adapter" \
-      -o "$stage/bin/fram-daemon-native" \
+      -o "$stage/bin/fram-server-native" \
       >"$stage/native-host.log" 2>&1; then
     sed -n '1,240p' "$stage/native-host.log" >&2
     die "serve-flat native host link failed"
   fi
   {
     printf 'native-host-c17 PASS compiler=%s output=%s\n' \
-      "$cc" "$stage/bin/fram-daemon-native"
+      "$cc" "$stage/bin/fram-server-native"
     printf 'native-host-abi PASS host=serve-flat exports=8\n'
   } >"$stage/native-host.report.txt"
 fi
-[[ -x "$stage/bin/fram-daemon-native" ]] || die "native executable is missing"
+[[ -x "$stage/bin/fram-server-native" ]] || die "native executable is missing"
 
 after_manifest="$stage/input.after"
 write_input_manifest "$after_manifest"

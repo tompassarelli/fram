@@ -92,7 +92,7 @@
         (.delete f)))))
 
 (defn boot! [extra-env]
-  (let [p (proc/process (into ["bin/fram-daemon" "serve-flat" (str port)
+  (let [p (proc/process (into ["bin/fram-server" "serve-flat" (str port)
                                (str home "/coordination.log")])
                         {:dir root :out :inherit :err :inherit
                          :extra-env (merge {"FRAM_TELEMETRY_LOG" (str home "/telemetry.log")}

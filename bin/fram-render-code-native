@@ -2,7 +2,7 @@
 ;; fram-render-code-native — render a module from a native CODE corpus.
 ;;
 ;; INVARIANT: this entry point loads the read closure ONLY (fram.code-reader ->
-;; fram.rt -> coord-daemon-wire/fold/kernel/rt-core/types/store). It must never
+;; fram.rt -> framrpc/fold/kernel/rt-core/types/store). It must never
 ;; require fram.schema or the resolve* family — it is the instrument the store
 ;; migration's later stages are measured with, so it cannot depend on what they
 ;; are repairing. `--require-graph` reports the observed closure.
@@ -14,9 +14,9 @@
 ;;
 ;;   <module>       module NAME as ingested (e.g. coord_read, fram.text_index)
 ;;   --space-id     SpaceId of the corpus (required; no default is safe)
-;;   --port         render off an ALREADY RUNNING coordinator (minimal closure)
+;;   --port         render off an ALREADY RUNNING server (minimal closure)
 ;;   --log          render off a corpus file by booting an EPHEMERAL read-only
-;;                  in-process coordinator on a free port; adds coord_daemon.clj
+;;                  in-process server on a free port; adds server.clj
 ;;                  to the loaded closure (reported by --require-graph)
 ;;   --modules      comma-separated names, all selected from ONE pinned corpus
 ;;                  drain (a per-module drain is O(corpus) per module)
@@ -37,9 +37,9 @@
 
 ;; fram.rt's 15s default socket read timeout is env-only and a cold scan page can
 ;; exceed it; raise it once and re-exec rather than fail a drain intermittently.
-(when (str/blank? (System/getenv "FRAM_COORD_READ_TIMEOUT_MS"))
+(when (str/blank? (System/getenv "FRAM_SERVER_READ_TIMEOUT_MS"))
   (let [r (apply proc/shell
-                 {:extra-env {"FRAM_COORD_READ_TIMEOUT_MS" "300000"} :continue true}
+                 {:extra-env {"FRAM_SERVER_READ_TIMEOUT_MS" "300000"} :continue true}
                  (str *file*) *command-line-args*)]
     (System/exit (:exit r))))
 
@@ -84,7 +84,8 @@
 
 ;; ---- the read closure. Nothing below this line loads the authoring stack. ----
 (require '[fram.code-reader :as code-reader]
-         '[fram.rt :as rt])
+         '[fram.rt :as rt]
+         '[framrpc])
 
 ;; namespaces this repo provides, so --require-graph can separate repo closure
 ;; from the babashka/clojure ambient. Derived from the classpath, never listed.
@@ -119,24 +120,24 @@
 (defn- free-port []
   (with-open [s (java.net.ServerSocket. 0)] (.getLocalPort s)))
 
-;; a cold coordinator replays every proposition before it listens, so the budget
+;; a cold server replays every proposition before it listens, so the budget
 ;; scales with corpus size, not with round-trip latency.
 (def ^:private boot-timeout-ms
   (let [v (System/getenv "FRAM_RENDER_BOOT_TIMEOUT_MS")]
     (if (str/blank? v) 600000 (Long/parseLong v))))
 
-(defn- await-coordinator! [port space server]
+(defn- await-server! [port space server]
   (let [deadline (+ (System/currentTimeMillis) boot-timeout-ms)]
     (loop []
       (let [ok (try (rt/native-call! port space :rpc/version
-                                     coord-daemon-wire/rpc-unit nil nil nil)
+                                     framrpc/rpc-unit nil nil nil)
                     (catch Throwable _ nil))]
         (cond
           ok ok
           (and server (realized? server))
-          (die "coordinator exited before serving:" (pr-str (try @server (catch Throwable e (ex-message e)))))
+          (die "server exited before serving:" (pr-str (try @server (catch Throwable e (ex-message e)))))
           (> (System/currentTimeMillis) deadline)
-          (die "coordinator on port" port "space" space "never answered :rpc/version within"
+          (die "server on port" port "space" space "never answered :rpc/version within"
                boot-timeout-ms "ms (raise FRAM_RENDER_BOOT_TIMEOUT_MS)")
           :else (do (Thread/sleep 50) (recur)))))))
 
@@ -201,7 +202,7 @@
   (when (and (not require-graph) (str/blank? space))
     (die "--space-id is required: a render must name the corpus it read"))
   (when (and (not require-graph) (nil? port) (nil? log))
-    (die "give exactly one of --port <P> (running coordinator) or --log <code.framlog>"))
+    (die "give exactly one of --port <P> (running server) or --log <code.framlog>"))
   (when (and port log)
     (die "--port and --log are mutually exclusive"))
   (when-not (.canExecute (io/file beagle-bin))
@@ -209,10 +210,10 @@
       (die "missing executable Beagle CLI at" beagle-bin "(set FRAM_BEAGLE / BEAGLE_HOME)")))
 
   ;; --port is a TOP-LEVEL early exit: the --log branch below references
-  ;; coord-daemon/serve!, which only exists after its load-file runs, and bb/SCI
+  ;; server/serve!, which only exists after its load-file runs, and bb/SCI
   ;; analyses a whole top-level form before running it.
   (when port
-    (await-coordinator! port space nil)
+    (await-server! port space nil)
     (when require-graph (print-require-graph!) (System/exit 0))
     (run! opts)
     (System/exit 0))
@@ -221,17 +222,17 @@
     (System/exit 0))
   (when-not (.exists (io/file log)) (die "no code corpus at" log)))
 
-;; --log: boot one ephemeral read-only coordinator over the corpus file.
-;; coord_daemon.clj self-dispatches -main on a nonempty *command-line-args*.
+;; --log: boot one ephemeral read-only server over the corpus file.
+;; server.clj self-dispatches -main on a nonempty *command-line-args*.
 (binding [*command-line-args* nil]
-  (load-file (str (io/file fram-home "coord_daemon.clj"))))
+  (load-file (str (io/file fram-home "server.clj"))))
 
 (let [{:keys [space log require-graph]} opts
       p (free-port)
-      ;; stdout is the rendered module; the coordinator's own chatter is stderr.
-      server (future (binding [*out* *err*] (coord-daemon/serve! p log space :active)))]
+      ;; stdout is the rendered module; the server's own chatter is stderr.
+      server (future (binding [*out* *err*] (server/serve! p log space :active)))]
   (try
-    (await-coordinator! p space server)
+    (await-server! p space server)
     (if require-graph
       (print-require-graph!)
       (run! (assoc opts :port p)))

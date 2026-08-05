@@ -1,6 +1,6 @@
 #!/usr/bin/env bb
-;; Launch-sealed adapter between Fram's coordinator proof protocol and Beagle's
-;; coherent-world checker. The coordinator owns invocation; callers never submit
+;; Launch-sealed adapter between Fram's server proof protocol and Beagle's
+;; coherent-world checker. The server owns invocation; callers never submit
 ;; receipts or choose a checker per request.
 ;;
 ;; Required launch environment:
@@ -476,7 +476,7 @@
         (->> (str/split-lines (str (or stderr "")))
              (remove str/blank?)
              ;; Keep a deterministic rejection comfortably inside the
-             ;; coordinator's closed-receipt envelope. Detailed diagnostics
+             ;; server's closed-receipt envelope. Detailed diagnostics
              ;; remain available on the verifier's bounded stderr channel.
              (map #(bounded % 320))
              (take 8)

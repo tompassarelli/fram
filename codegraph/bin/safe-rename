@@ -5,7 +5,7 @@
 #
 # HONEST SCOPE — read this before trusting the green:
 #   This DELEGATES type-safety to `beagle check`. The claim graph does NOT
-#   understand types; types are transported, not understood. The coordinator
+#   understand types; types are transported, not understood. The server
 #   *consults* a type oracle and refuses what the oracle DEFINITIVELY rejects.
 #   Its guarantee is therefore PARTIAL and exactly as strong as beagle check:
 #     - It refuses an edit that introduces a NEW diagnostic.

@@ -3,10 +3,10 @@
 ;; fram-code-author — WATCH AN AGENT WRITE A PROGRAM AS A GRAPH.
 ;; ============================================================================
 ;; The agent-authoring endgame. fram-replay-code streams pre-baked FACTS into a
-;; daemon with timing (a program MATERIALIZING); this streams authoring VERBS with
+;; server with timing (a program MATERIALIZING); this streams authoring VERBS with
 ;; timing (a program being WRITTEN). Each step is a rename / set-body / upsert-form
 ;; / insert-form / insert-comment that lands as a MINIMAL-OP :edit-min delta through
-;; the live daemon (via bin/fram-edit-code) — NO text file touched, NO whole-module
+;; the live server (via bin/fram-edit-code) — NO text file touched, NO whole-module
 ;; churn. A referenced-def rename is ~2 ops (one edge spelling), not a text rescan.
 ;; Point framescope at the port and the graph moves verb-by-verb.
 ;;
@@ -25,9 +25,9 @@
 ;;       {:op "reorder"        :module "greet" :name "shout" :after "greet"}  ; move in place (no :after = front)
 ;;     :module falls back to --module; :note is the narration line.
 ;;   --boot    ingest <seed.bclj> into a gate-passing $PWD/.fram/author-<mod>-code.log,
-;;             (re)boot bin/fram-daemon on --port, wait up. Self-contained demo: the
-;;             agent starts from the seed and authors the rest live. Stops any daemon
-;;             tracked at .fram/code-daemon-<port>.pid first.
+;;             (re)boot bin/fram-server on --port, wait up. Self-contained demo: the
+;;             agent starts from the seed and authors the rest live. Stops any server
+;;             tracked at .fram/code-server-<port>.pid first.
 ;;   --pace    seconds between verbs (default 1.5) so the graph moves legibly.
 ;;
 ;; SAFETY: the port must serve a *code.log (fram-edit-code's :edit-min gate asserts
@@ -62,7 +62,7 @@
       :else (recur (rest a) opts))))
 
 ;; A raw TCP probe is used only to detect port occupancy before launch. Every
-;; coordinator operation carries the expected physical code-log identity.
+;; server operation carries the expected physical code-log identity.
 (defn- port-open? [port]
   (try
     (with-open [s (Socket.)]
@@ -70,52 +70,52 @@
       true)
     (catch Exception _ false)))
 
-(defn- coord [port log-path req]
+(defn- server-request [port log-path req]
   (try
-    (rt/coord-request-for-log port log-path req)
+    (rt/server-request-for-log port log-path req)
     (catch Exception _ nil)))
 
 (defn- version-of [port log-path]
-  (:version (coord port log-path {:op :version})))
+  (:version (server-request port log-path {:op :version})))
 
-(defn- daemon-up? [port log-path]
+(defn- server-up? [port log-path]
   (integer? (version-of port log-path)))
 
-;; ---- self-contained boot (--boot): ingest seed -> gate-passing log -> daemon ----
+;; ---- self-contained boot (--boot): ingest seed -> gate-passing log -> server ----
 (defn- module-of-seed [seed] (str/replace (.getName (io/file seed)) #"\.bclj$" ""))
 
 (defn- boot! [seed port]
   (when-not (.exists (io/file seed)) (die "no seed .bclj:" seed))
   (let [mod (module-of-seed seed)
         glog (str cwd "/.fram/author-" mod "-code.log")          ; *code.log => passes the verb-path gate
-        pidf (str cwd "/.fram/code-daemon-" port ".pid")
-        dlog (str cwd "/.fram/code-daemon-" port ".log")]
-    ;; stop a daemon we previously tracked on this port (don't kill an untracked one blindly).
+        pidf (str cwd "/.fram/code-server-" port ".pid")
+        dlog (str cwd "/.fram/code-server-" port ".log")]
+    ;; Stop a server we previously tracked on this port (don't kill an untracked one blindly).
     (when (.exists (io/file pidf))
       (let [pid (str/trim (slurp pidf))]
         (try (proc/sh "kill" pid) (catch Exception _ nil))
         (.delete (io/file pidf))
-        (log! "fram-code-author: stopped tracked daemon on :" port " (pid " pid ")"))
+        (log! "fram-code-author: stopped tracked server on :" port " (pid " pid ")"))
       (Thread/sleep 600))
     (when (port-open? port)
-      (die "fram-code-author: a daemon is STILL up on :" port " and not ours to stop — pick a free --port"))
+      (die "fram-code-author: a server is STILL up on :" port " and not ours to stop — pick a free --port"))
     (log! "fram-code-author: ingesting" seed "-> " glog)
     (let [r (proc/sh {:err :string} (str bin-dir "/fram-ingest-code") seed "--out" glog)]
       (when-not (zero? (:exit r)) (die "ingest FAILED:\n" (:err r))))
-    (log! "fram-code-author: launching daemon on :" port " over " glog)
-    ;; detach: nohup so the daemon outlives this bb process (the script just drives verbs).
-    (let [daemon
-          (proc/process ["nohup" (str bin-dir "/fram-daemon") (str port) glog]
+    (log! "fram-code-author: launching server on :" port " over " glog)
+    ;; Detach so the server outlives this bb process while the script drives verbs.
+    (let [server
+          (proc/process ["nohup" (str bin-dir "/fram-server") (str port) glog]
                         {:out (io/file dlog) :err (io/file dlog)
                          :extra-env {"FRAM_REQUIRE_LOG_FENCE" "1"}
                          :shutdown nil})
-          pid (.pid ^Process (:proc daemon))]
+          pid (.pid ^Process (:proc server))]
       (spit pidf (str pid "\n"))
       (loop [i 0]
         (cond
-          (daemon-up? port glog) (log! "fram-code-author: :" port " up.")
+          (server-up? port glog) (log! "fram-code-author: :" port " up.")
           (> i 80) (do
-                     (try (proc/destroy-tree daemon) (catch Throwable _ nil))
+                     (try (proc/destroy-tree server) (catch Throwable _ nil))
                      (die "fram-code-author: :" port " TIMEOUT — see " dlog))
           :else (do (Thread/sleep 500) (recur (inc i))))))
     {:module mod :log glog}))
@@ -172,14 +172,14 @@
       (when-not (.exists (io/file log-path))
         (die "fram-code-author: no code log at" log-path
              "(pass --log <code.log> or use --boot <seed.bclj>)"))
-      (when-not (daemon-up? port log-path)
-        (die "fram-code-author: no compatible code daemon on :" port
+      (when-not (server-up? port log-path)
+        (die "fram-code-author: no compatible code server on :" port
              "for" (.getCanonicalPath (io/file log-path))
              "(use --boot <seed.bclj> to stand one up)"))
     ;; SAFETY pre-check: refuse anything but a *code.log (mirrors fram-edit-code's gate).
-    (let [status (coord port log-path {:op :status})
+    (let [status (server-request port log-path {:op :status})
           _ (when (:reject status)
-              (die "fram-code-author: coordinator log fence rejected —"
+              (die "fram-code-author: server log fence rejected —"
                    (pr-str status)))
           dlog (str (:log status))]
       (when-not (str/includes? dlog "code.log")
@@ -207,7 +207,7 @@
             steps))
           ok (count (filter :ok results))
           v0 (:v0 (first results)) v1 (:v1 (last (filter :ok results)))]
-      (log! (str "\n  └─ DONE — " ok "/" (count steps) " verbs landed; daemon v" v0 " → v" v1
+      (log! (str "\n  └─ DONE — " ok "/" (count steps) " verbs landed; server v" v0 " → v" v1
                  "  (the program was written as a graph; the log is canonical)"))
       (println (str "{:landed " ok " :of " (count steps) " :port " port " :v0 " v0 " :v1 " v1 "}"))
       (System/exit (if (= ok (count steps)) 0 2))))))

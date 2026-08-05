@@ -1,5 +1,5 @@
 {
-  description = "fram — fact-engine CLIs and native-first coordinator launcher";
+  description = "fram — fact-engine CLIs and native-first server launcher";
 
   inputs = {
     # Pinned to the same nixpkgs rev the host system tracks.
@@ -27,12 +27,13 @@
 
       mkFram = pkgs: cljpkgs:
         let
-          daemonDeps = cljpkgs.mk-deps-cache {
+          serverDeps = cljpkgs.mk-deps-cache {
             lockfile = ./deps-lock.json;
           };
 
           # The bin/ scripts resolve HERE = $(dirname $0)/.. and load out/ (compiled
-          # Clojure), coord*.clj, resolve.clj, codegraph/, tests/, and src/
+          # Clojure), database.clj, server.clj, writer_authority.clj, resolve.clj,
+          # codegraph/, tests/, and src/
           # from there. The CLI + MCP run on babashka against committed out/. The
           # JVM oracle's exact classpath is resolved once during the build from the
           # pure cache above. Native remains the launcher's default route.
@@ -55,7 +56,7 @@
           # `north deployed`, `coord-ready` and `north-coord-runtime status`
           # all displayed a version that described nothing, two packages built
           # months apart were indistinguishable by name, and on 2026-07-29 that
-          # led to a confident, wrong claim that the coordinator had been
+          # led to a confident, wrong claim that the server had been
           # running month-old code. A version that cannot be wrong is a version
           # nobody can read.
           #
@@ -88,7 +89,7 @@
             runHook preInstall
 
             mkdir -p $out/libexec/fram/tests $out/libexec/fram/codegraph $out/bin
-            cp -r out bin src coord.clj coord_daemon.clj coord_writer_authority.clj fri.clj \
+            cp -r out bin src database.clj server.clj writer_authority.clj fri.clj \
               rotations.clj deps.edn \
               $out/libexec/fram/
             cp tests/fram_mcp.clj $out/libexec/fram/tests/
@@ -111,15 +112,15 @@
             mkdir -p "$TMPDIR/fram-clj-cache"
             (
               cd "$out/libexec/fram"
-              export HOME="${daemonDeps}"
+              export HOME="${serverDeps}"
               export CLJ_CONFIG="$HOME/.clojure"
               export CLJ_CACHE="$TMPDIR/fram-clj-cache"
               export GITLIBS="$HOME/.gitlibs"
-              export JAVA_TOOL_OPTIONS="-Duser.home=${daemonDeps}"
+              export JAVA_TOOL_OPTIONS="-Duser.home=${serverDeps}"
 
               rawClasspath="$(${pkgs.clojure}/bin/clojure -Srepro -Spath)"
               [ -n "$rawClasspath" ] || {
-                echo "fram: clojure -Spath returned an empty daemon classpath" >&2
+              echo "fram: clojure -Spath returned an empty server classpath" >&2
                 exit 1
               }
 
@@ -130,7 +131,7 @@
                 case "$canonical" in
                   "$out"/*|/nix/store/*) ;;
                   *)
-                    echo "fram: non-store daemon classpath entry: $canonical" >&2
+                    echo "fram: non-store server classpath entry: $canonical" >&2
                     exit 1
                     ;;
                 esac
@@ -142,11 +143,11 @@
               done < <(printf '%s\n' "$rawClasspath" | tr ':' '\n')
 
               [ -n "$canonicalClasspath" ] || {
-                echo "fram: failed to canonicalize daemon classpath" >&2
+                echo "fram: failed to canonicalize server classpath" >&2
                 exit 1
               }
-              printf '%s\n' "$canonicalClasspath" > daemon.classpath
-              chmod 0444 daemon.classpath
+              printf '%s\n' "$canonicalClasspath" > server.classpath
+              chmod 0444 server.classpath
               # tools.deps writes a project-local basis despite CLJ_CACHE. It is
               # build metadata containing the whole cache path, not runtime data.
               rm -rf .cpcache
@@ -163,7 +164,7 @@
               # but require an external Beagle toolchain and are not advertised
               # as self-contained package commands.
               case "$name" in
-                fram|fram-cutover|fram-daemon|fram-mcp|fram-primer) ;;
+                fram|fram-cutover|fram-server|fram-mcp|fram-primer) ;;
                 *) continue ;;
               esac
               chmod +x "$s"
@@ -177,7 +178,7 @@
                 --set FRAM_RESOLVE "$out/libexec/fram/out/resolve.clj" \
                 --set FRAM_PACKAGED "1" \
                 --set FRAM_JAVA "${pkgs.jdk}/bin/java" \
-                --set FRAM_DAEMON_CLASSPATH_FILE "$out/libexec/fram/daemon.classpath"
+                --set FRAM_SERVER_CLASSPATH_FILE "$out/libexec/fram/server.classpath"
             done
 
             runHook postInstall
@@ -193,15 +194,15 @@
             FRAM_SMOKE_READLINK="${pkgs.coreutils}/bin/readlink" \
             FRAM_SMOKE_TR="${pkgs.coreutils}/bin/tr" \
             FRAM_SMOKE_REQUIRE_PROC="${if pkgs.stdenv.hostPlatform.isLinux then "1" else "0"}" \
-              ${pkgs.bash}/bin/bash ${./tests/package_daemon_smoke.sh} "$out"
+              ${pkgs.bash}/bin/bash ${./tests/package_server_smoke.sh} "$out"
 
             runHook postInstallCheck
           '';
 
           meta = with pkgs.lib; {
-            description = "Fram fact-engine CLI, MCP server, primer, and native-first coordinator launcher";
+            description = "Fram fact-engine CLI, MCP server, primer, and native-first server launcher";
             longDescription = ''
-              Self-contained CLI, MCP server, primer, and native-first coordinator
+              Self-contained CLI, MCP server, primer, and native-first server
               launcher with an explicitly selected packaged JVM oracle.
               Beagle graph-authoring helpers are retained under libexec and require
               an external BEAGLE_HOME toolchain; they are not public package commands.
@@ -219,7 +220,7 @@
           };
         });
 
-      # Authority packaging only. The coordinator authentication, descriptor,
+      # Authority packaging only. The server authentication, descriptor,
       # receipts, and projection lifecycle live in later slices. This output
       # closes the executable/toolchain boundary and refuses to serve until
       # North supplies the future lease and independently computed closure seal.
@@ -274,8 +275,8 @@
             executables = {
               babashka = "${pkgs.babashka}/bin/bb";
               beagle = "${sealedBeaglePkg}/bin/beagle";
-              coordinatorJava = "${pkgs.jdk}/bin/java";
-              coordinatorSource = "${framRoot}/coord_daemon.clj";
+              serverJava = "${pkgs.jdk}/bin/java";
+              serverSource = "${framRoot}/server.clj";
               editVerifier = "${framRoot}/bin/fram-edit-verifier";
               entrypointRelative = "bin/fram-graph-edit-runtime";
               mcpSource = "${framRoot}/out/fram/graph_control_mcp.clj";
@@ -443,7 +444,7 @@
           fram = self.packages.${system}.default;
           graphEditRuntime = self.packages.${system}.fram-graph-edit-runtime;
         in {
-          packaged-daemon = fram;
+          packaged-server = fram;
           graph-edit-runtime = graphEditRuntime;
           package-contract = pkgs.runCommand "fram-package-contract" {} ''
             test "${fram.runtimeRoot}" = "${fram}/libexec/fram"
@@ -473,7 +474,7 @@
         {
           default = mkApp "fram";
           fram = mkApp "fram";
-          fram-daemon = mkApp "fram-daemon";
+          fram-server = mkApp "fram-server";
           fram-mcp = mkApp "fram-mcp";
           fram-primer = mkApp "fram-primer";
           fram-graph-edit-runtime = {

@@ -5,8 +5,8 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const standalone = b.addWriteFiles();
     const daemon = standalone.addCopyFile(
-        b.path("src/zig/daemon.zig"),
-        "daemon.zig",
+        b.path("src/zig/server.zig"),
+        "server.zig",
     );
     _ = standalone.addCopyFile(b.path("src/zig/log.zig"), "log.zig");
     _ = standalone.addCopyFile(b.path("src/zig/rpc.zig"), "rpc.zig");
@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
     );
 
     const executable = b.addExecutable(.{
-        .name = "fram-daemon-zig",
+        .name = "fram-server-zig",
         .root_module = b.createModule(.{
             .root_source_file = daemon,
             .target = target,

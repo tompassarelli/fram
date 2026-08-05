@@ -48,10 +48,10 @@
    :storage-bytes :started-utc :revision :kernel :nproc :cpu-model
    :mem-total-kb :load-start :load-end :java-version :babashka-version]
   :scenarios
-  [{:id :coordinator-aggregate-scan
-    :query-class :coordinator-aggregate-scan
+  [{:id :server-aggregate-scan
+    :query-class :server-aggregate-scan
     :corpus-sizes :default
-    :decision-section "Workload derivation / Coordinator aggregate/projection scans"
+    :decision-section "Workload derivation / Server aggregate/projection scans"
     :definition "Bound-predicate title projection; returning K rows remains O(K)."}
    {:id :staffing-projection
     :query-class :staffing-projection

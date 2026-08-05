@@ -1,11 +1,11 @@
 #!/usr/bin/env bb
 ;; ============================================================================
 ;; fram-commit-code — THE FLIP, stage 3: COMMIT the AST fact delta to the log
-;;                    THROUGH the coordinator (then the .bclj is re-rendered).
+;;                    THROUGH the server (then the .bclj is re-rendered).
 ;; ============================================================================
 ;; This is the HEART of the flip. Today fram_mcp.clj route-edit ends by io/copy-
 ;; OVERWRITING the .bclj and commits NOTHING. This commits the AST fact DELTA of
-;; an edited module into the canonical CODE log via the coordinator's single-
+;; an edited module into the canonical CODE log via the server's single-
 ;; (te,p,r) :assert/:retract wire — so the log is the source and the .bclj is
 ;; downstream.
 ;;
@@ -13,10 +13,10 @@
 ;; and the module name. We:
 ;;   1. emit-edn the NEW .bclj, re-key file-local ids to @<mod>#n (the SAME mapping
 ;;      bin/fram-ingest-code uses) -> POST fact-triple set.
-;;   2. render the module's CURRENT AST off the coordinator, then run it through
+;;   2. render the module's CURRENT AST off the server, then run it through
 ;;      the same render -> emit round-trip used by ingest -> PRE fact-triple set.
 ;;   3. delta = (adds = POST\PRE) ++ (removes = PRE\POST).
-;;   4. commit through the coordinator at base version, retrying on :conflict
+;;   4. commit through the server at base version, retrying on :conflict
 ;;      (mirrors fram_mcp.clj route-write): retract removes FIRST (supersede old
 ;;      body fN edges — multi-valued asserts append, so the old edge MUST be
 ;;      explicitly retracted), then assert adds (new subtree leaves before the
@@ -24,18 +24,18 @@
 ;;
 ;; AST asserts are MULTI-valued (kind/v/fN not in fram.kernel/single-valued), so an
 ;; identical re-assert idempotently no-ops and ordering of independent asserts is
-;; commutative. The retract-then-assert pair is the coordinator analogue of
+;; commutative. The retract-then-assert pair is the server analogue of
 ;; resolve.clj retire-fact! + mint/wire. (See DESIGN.md §4.)
 ;;
 ;; USAGE:
 ;;   bin/fram-commit-code <module> <new.bclj> --port <P> --log <code.log> [--dry-run]
-;;     --port    REQUIRED — the coordinator port serving the CODE log.
+;;     --port    REQUIRED — the server port serving the CODE log.
 ;;     --log     REQUIRED — canonical code-log identity fenced on every request.
 ;;     --dry-run print the delta (#adds / #removes) and commit NOTHING.
 ;;
-;; SAFETY: the caller MUST point --port at a coordinator booted on the CODE log
+;; SAFETY: the caller MUST point --port at a server booted on the CODE log
 ;; (.fram/code.log) — NEVER the live north coordinator. This script asserts the
-;; coordinator's :status :log basename is a code log before committing.
+;; server's :status :log basename is a code log before committing.
 ;;
 ;; Env: BEAGLE_HOME, FRAM_BEAGLE.
 ;; ============================================================================
@@ -86,25 +86,25 @@
     (into #{[(str "@" module "#root") "file" path]}
           (emitted-lines->triples module (str/split-lines (:out r))))))
 
-(defn- coord-rt [port log-path req]
-  (fram.rt/coord-request-for-log port log-path req))
+(defn- server-rt [port log-path req]
+  (fram.rt/server-request-for-log port log-path req))
 
-(defn- coord-status [port log-path]
-  (coord-rt port log-path {:op :status}))
-(defn- coord-version [port log-path]
-  (:version (coord-rt port log-path {:op :version})))
+(defn- server-status [port log-path]
+  (server-rt port log-path {:op :status}))
+(defn- server-version [port log-path]
+  (:version (server-rt port log-path {:op :version})))
 
 ;; Pull one module through the daemon's existing module-scoped :render surface.
 ;; Re-render and emit it so file-local ids use the same deterministic traversal
 ;; mapping as POST. This avoids the former whole-corpus Datalog scan, whose server
 ;; query budget was exhausted on the canonical code log.
 (defn- pre-triples [port log-path module]
-  (let [resp (coord-rt port log-path {:op :render :module module})]
+  (let [resp (server-rt port log-path {:op :render :module module})]
     (when (:reject resp)
-      (die "coord :render log fence rejected:" (pr-str resp)))
-    (when (:error resp) (die "coord :render failed:" (pr-str (:error resp))))
+      (die "server :render log fence rejected:" (pr-str resp)))
+    (when (:error resp) (die "server :render failed:" (pr-str (:error resp))))
     (when-not (string? (:edn resp))
-      (die "coord :render returned no module EDN:" (pr-str resp)))
+      (die "server :render returned no module EDN:" (pr-str resp)))
     (let [tmp-dir (io/file (System/getProperty "java.io.tmpdir")
                            (str "fram-commit-pre-" (System/nanoTime)))
           edn-path (io/file tmp-dir (str module ".edn"))
@@ -142,34 +142,34 @@
 ;; op is a KEYWORD — the daemon's handle dispatches on (:op req) as a keyword.
 (defn- commit-op! [port log-path op te p r]
   (loop [tries 5]
-    (let [v (coord-version port log-path)
+    (let [v (server-version port log-path)
           _ (when-not (integer? v)
-              (die "coordinator version request failed under log fence"))
-          resp (coord-rt port log-path
+              (die "server version request failed under log fence"))
+          resp (server-rt port log-path
                          {:op op :te te :p p :r r :base v
                           :frame "flip-commit"})]
       (cond
         (:ok resp) :ok
         (and (= (:reject resp) :conflict) (pos? tries)) (recur (dec tries))
-        :else (die "coordinator REJECTED" op te p r "->" (pr-str resp))))))
+        :else (die "server REJECTED" op te p r "->" (pr-str resp))))))
 
 (let [{:keys [module bclj port log dry]} (parse-args *command-line-args*)]
   (when (or (str/blank? module) (str/blank? bclj))
     (die "usage: bin/fram-commit-code <module> <new.bclj> --port <P> --log <code.log> [--dry-run]"))
-  (when (nil? port) (die "--port <P> is REQUIRED (the coordinator serving the CODE log)"))
-  (when (str/blank? log) (die "--log <code.log> is REQUIRED (the expected coordinator corpus identity)"))
+  (when (nil? port) (die "--port <P> is REQUIRED (the server serving the CODE log)"))
+  (when (str/blank? log) (die "--log <code.log> is REQUIRED (the expected server corpus identity)"))
   (when-not (.exists (io/file bclj)) (die "no such .bclj:" bclj))
 
-  ;; SAFETY GATE: refuse to commit unless the coordinator is serving a CODE log.
-  (let [st (coord-status port log)
+  ;; SAFETY GATE: refuse to commit unless the server is serving a CODE log.
+  (let [st (server-status port log)
         _ (when (:reject st)
-            (die "SAFETY: coordinator log fence rejected —" (pr-str st)))
+            (die "SAFETY: server log fence rejected —" (pr-str st)))
         logp (str (:log st))]
-    (when (str/blank? logp) (die "coordinator on" port "reports no :log — refusing to commit"))
+    (when (str/blank? logp) (die "server on" port "reports no :log — refusing to commit"))
     (when-not (str/includes? logp "code.log")
-      (die "SAFETY: coordinator on" port "serves" logp
+      (die "SAFETY: server on" port "serves" logp
            "— NOT a *code.log; refusing (never commit code to a thread/north log)"))
-    (log! "fram-commit-code: target coordinator" (str "127.0.0.1:" port) "log=" logp))
+    (log! "fram-commit-code: target server" (str "127.0.0.1:" port) "log=" logp))
 
   (let [post (bclj->triples module bclj)
         pre  (pre-triples port log module)

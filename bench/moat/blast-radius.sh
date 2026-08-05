@@ -4,7 +4,7 @@ source "$(dirname "$0")/common.sh"
 make_chain_fixture
 bootstrap_graph
 t0=$(ns)
-GRAPH_REPLY=$(cd "$ROOT" && bb -cp out -e "(load-file \"coord_daemon.clj\") (prn (client $PORT {:op :blast :module \"fixture\" :name \"target\"}))")
+GRAPH_REPLY=$(cd "$ROOT" && bb -cp out -e "(load-file \"server.clj\") (prn (client $PORT {:op :blast :module \"fixture\" :name \"target\"}))")
 GRAPH_MS=$(ms "$t0" "$(ns)")
 GRAPH_COUNT=$(sed -n 's/.*:count \([0-9][0-9]*\).*/\1/p' <<<"$GRAPH_REPLY")
 t0=$(ns)

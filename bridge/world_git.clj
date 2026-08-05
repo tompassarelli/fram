@@ -1,7 +1,7 @@
 (ns bridge.world-git
   "Bidirectional projection between durable Fram worlds and Git objects.
 
-  This adapter deliberately depends only on coord.clj's public world verbs and
+  This adapter deliberately depends only on database.clj's public world verbs and
   Git plumbing. It does not materialize a checkout."
   (:require [babashka.process :as proc]
             [clojure.java.io :as io]
@@ -38,13 +38,13 @@
     (catch Throwable _
       (reject! (merge {:reject :git-path-not-utf8} context)))))
 
-(defn- coord-var [name]
-  (or (ns-resolve 'coord (symbol name))
+(defn- database-var [name]
+  (or (ns-resolve 'database (symbol name))
       (ns-resolve 'user (symbol name))
       (reject! {:reject :world-api-unavailable :verb name})))
 
 (defn- call-world [name & args]
-  (apply (coord-var name) args))
+  (apply (database-var name) args))
 
 (defn- process!
   [opts & command]

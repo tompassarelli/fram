@@ -88,23 +88,23 @@ echo "  [1/3] ingesting ${#COPIES[@]} module(s) -> $CODE_LOG"
     bin/fram-ingest-code "${COPIES[@]}" \
       --root "$SCRATCH_SRC" --out "$CODE_LOG" --space-id "$SPACE_ID" )
 
-echo "  [2/3] booting scratch coordinator on :$PORT"
+echo "  [2/3] booting scratch server on :$PORT"
 ( cd "$HERE" && exec env -u FRAM_TELEMETRY_LOG BEAGLE_HOME="$BEAGLE_HOME" \
-    bin/fram-daemon serve "$PORT" "$CODE_LOG" "$SPACE_ID" \
-    >"$SCRATCH_ROOT/coord-$PORT.log" 2>&1 ) &
+    bin/fram-server serve "$PORT" "$CODE_LOG" "$SPACE_ID" \
+    >"$SCRATCH_ROOT/server-$PORT.log" 2>&1 ) &
 DAEMON_PID=$!
 for _ in $(seq 1 480); do
-  grep -q "listening on" "$SCRATCH_ROOT/coord-$PORT.log" 2>/dev/null && break
+  grep -q "listening on" "$SCRATCH_ROOT/server-$PORT.log" 2>/dev/null && break
   kill -0 "$DAEMON_PID" 2>/dev/null || {
-    echo "reingest: coordinator exited" >&2
-    tail -n 20 "$SCRATCH_ROOT/coord-$PORT.log" >&2 || true
+    echo "reingest: server exited" >&2
+    tail -n 20 "$SCRATCH_ROOT/server-$PORT.log" >&2 || true
     exit 1
   }
   sleep 0.5
 done
-grep -q "listening on" "$SCRATCH_ROOT/coord-$PORT.log" || {
-  echo "reingest: coordinator never listened" >&2
-  tail -n 20 "$SCRATCH_ROOT/coord-$PORT.log" >&2 || true
+grep -q "listening on" "$SCRATCH_ROOT/server-$PORT.log" || {
+  echo "reingest: server never listened" >&2
+  tail -n 20 "$SCRATCH_ROOT/server-$PORT.log" >&2 || true
   exit 1
 }
 

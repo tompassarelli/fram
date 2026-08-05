@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   publish:
-    name: Build and smoke the tagged Graal coordinator before publishing
+    name: Build and smoke the tagged Graal server before publishing
     runs-on: ubuntu-latest
     steps:
       - name: Check out the requested release tag
@@ -47,19 +47,19 @@ jobs:
           }
           echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
 
-      - name: Build the static Graal coordinator from that commit
+      - name: Build the static Graal server from that commit
         env:
           RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
         run: |
           set -euo pipefail
           docker build --pull \
-            --tag "fram-coordinator:$RELEASE_COMMIT" \
+            --tag "fram-server:$RELEASE_COMMIT" \
             --file deploy/cloudflare/Dockerfile .
 
       - name: Smoke a mutation across a Graal container restart
         env:
           RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
-        run: bash tests/graal_release_smoke.sh "fram-coordinator:$RELEASE_COMMIT"
+        run: bash tests/graal_release_smoke.sh "fram-server:$RELEASE_COMMIT"
 
       - name: Publish the GitHub release
         env:

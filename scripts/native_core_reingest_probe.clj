@@ -5,7 +5,7 @@
 ;; version-pinned across the set.
 (require '[clojure.java.io :as io]
          '[clojure.string :as str]
-         '[coord-daemon-wire :as wire]
+         '[framrpc :as wire]
          '[fram.code-reader :as code-reader]
          '[fram.rt :as rt]
          '[fram.types :as t])

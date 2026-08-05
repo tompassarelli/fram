@@ -9,7 +9,7 @@
 ;; is ~0.02s/module. So the lever is a persistent process: pay the ~5s compiler
 ;; load ONCE at boot, then serve def-level checks warm (target <1s, measured ~0.1s).
 ;;
-;; It consumes the coordinator's `:render` EDN directly via the datum-IR path
+;; It consumes the server's `:render` EDN directly via the datum-IR path
 ;; (edn-triples->syntax, the same front-end as `beagle-build-all --build-edn`),
 ;; skipping BOTH the text-render spawn and the re-parse. Cross-module types
 ;; resolve because sibling modules live as .bclj files in a primed `gwdir`
@@ -44,7 +44,7 @@
          beagle/private/check               ; type-check-with-locs!
          beagle/private/check-all)          ; diagnostic->json
 
-;; --- EDN triples (coordinator :render output) -> top-level syntax forms ------
+;; --- EDN triples (server :render output) -> top-level syntax forms ------
 ;; Mirrors build-one-edn: build the (beagle-file form ...) datum the reader would
 ;; have produced, drop the wrapper head, hand the forms to parse-program. src-path
 ;; is the sibling-resolution base (gwdir/<module>.bclj) — its DIRECTORY must hold

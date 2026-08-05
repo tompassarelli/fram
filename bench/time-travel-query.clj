@@ -1,10 +1,11 @@
 ;; Paired cache-cold FRAMRPC query latency at head 3001 versus as-of 3000.
-;;   FRAM_DAEMON_QUIET=1 env -u FRAM_TELEMETRY_LOG bb -cp out bench/time-travel-query.clj
+;;   FRAM_SERVER_QUIET=1 env -u FRAM_TELEMETRY_LOG bb -cp out bench/time-travel-query.clj
 (require '[clojure.java.io :as io]
-         '[coord-daemon-wire :as wire]
+         '[database]
+         '[framrpc :as wire]
          '[fram.types :as t])
 
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 (load-file "tests/native_rpc_client.clj")
 
 (def space "time-travel-bench")
@@ -45,11 +46,11 @@
   (nth (vec (sort samples)) (dec (int (Math/ceil (* 0.95 (count samples)))))))
 
 (defn drop-result-cache! []
-  (reset! coord-daemon/query-result-cache
-          ((var-get #'coord-daemon/empty-query-result-cache)
-           @coord-daemon/daemon-generation)))
+  (reset! server/query-result-cache
+          ((var-get #'server/empty-query-result-cache)
+           @server/server-generation)))
 
-(coord/create-triple-log! log-path space)
+(database/create-triple-log! log-path space)
 (let [marker (t/triple "marker" :bench/value "stable")
       filler (t/triple "unrelated" :bench/value "toggle")
       frames
@@ -60,9 +61,9 @@
                  :action (if (or (= sequence 1) (even? sequence)) 1 2)
                  :triple (if (= sequence 1) marker filler)}]})
             (range 1 3002))]
-  ((var-get #'coord/append-frame-cohort-durable!) log-path frames false)
+  ((var-get #'database/append-frame-cohort-durable!) log-path frames false)
   (let [port (free-port)
-        server (future (coord-daemon/serve! port log-path space :active))
+        server (future (server/serve! port log-path space :active))
         plan (query-plan marker)
         head-payload (wire/rpc-query-request! plan wire/query-current)
         as-of-payload
@@ -72,11 +73,11 @@
         (when-not (try (request! port head-payload) true
                        (catch Throwable _ false))
           (when (>= attempt 200)
-            (throw (ex-info "time-travel bench daemon did not start" {})))
+            (throw (ex-info "time-travel bench server did not start" {})))
           (Thread/sleep 25)
           (recur (inc attempt))))
       ;; Build and validate the exact 3000 prefix checkpoint before paired trials.
-      (#'coord-daemon/drop-query-caches!)
+      (#'server/drop-query-caches!)
       (let [[cold-root-ms _] (elapsed-ms #(request! port as-of-payload))]
       (let [head-samples (atom [])
             as-of-samples (atom [])]
@@ -106,7 +107,7 @@
           (when (> ratio 2.0)
             (System/exit 1)))))
       (finally
-        (coord-daemon/shutdown!)
+        (server/shutdown!)
         (deref server 3000 nil)))))
 
 (shutdown-agents)

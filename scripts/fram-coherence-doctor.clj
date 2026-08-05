@@ -1,6 +1,6 @@
 #!/usr/bin/env bb
 ;; Pure, cold coherence report for the main read view.  This deliberately folds
-;; the log rather than starting a coordinator: diagnosis must not make the view
+;; the log rather than starting a server: diagnosis must not make the view
 ;; more coherent, nor change a byte of the corpus it describes.
 (require '[clojure.edn :as edn]
          '[clojure.string :as str]

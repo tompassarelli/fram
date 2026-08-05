@@ -1,5 +1,5 @@
 ;; Native FRAMRPC probes for bin/fram-selfcheck.
-(require '[coord-daemon-wire :as wire]
+(require '[framrpc :as wire]
          '[fram.kernel :as kernel]
          '[fram.rt :as rt]
          '[fram.types :as terms])

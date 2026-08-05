@@ -8,4 +8,4 @@ fi
 
 HERE="${BASH_SOURCE[0]%/*}/.."
 cd "$HERE"
-exec clojure -M "$HERE/coord_daemon.clj" migrate-triple-log "$1" "$2" "$3"
+exec clojure -M "$HERE/server.clj" migrate-triple-log "$1" "$2" "$3"

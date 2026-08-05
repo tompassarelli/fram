@@ -12,7 +12,7 @@
 ;;
 ;; FENCES: graph read = cheap :status (corpus-from-store, no re-resolve, no racket);
 ;; git baseline = real shared bare repo + fetch/merge/push retry (NOT a poll loop).
-;; SAFE: /tmp only, daemon on non-7977 port, never the canonical log.
+;; SAFE: /tmp only, server on non-7977 port, never the canonical log.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str]
          '[babashka.process :as proc] '[fram.store :as c] '[fram.schema :as s])
@@ -27,7 +27,7 @@
 (defn nowns [] (System/nanoTime))
 (defn ms [a b] (/ (double (- b a)) 1e6))
 (defn p [& xs] (apply println xs) (flush))
-(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "server.clj"))
 (defn mean [xs] (/ (reduce + xs) (double (count xs))))
 
 ;; ---- GIT arm: K concurrent writers to a shared bare repo, each push-with-retry ----
@@ -65,13 +65,13 @@
         t-landed (nowns)]
     {:landed landed :write (ms t0 t-write) :prop (ms t-write t-landed)}))
 
-(declare graph-module)  ; resolved after the daemon boots (needs :index); used by graph-writer
+(declare graph-module)  ; resolved after the server boots (needs :index); used by graph-writer
 ;; ---- module resolution: use the corpus's EXACT module name, not a bare suffix ----
 ;; upsert-form scope-matches "kernel" against "src.fram.kernel" via the trailing-segment
 ;; rule, so the FIRST upsert lands — but the write keys the new form's wrapper by the bare
 ;; scope literal, minting a SECOND src named "kernel". Every subsequent upsert then sees 2
 ;; kernel-matching srcs and is REJECTED (ambiguous scope). Targeting the EXACT module the
-;; daemon reports (via :index) keeps the writers on one src, so K disjoint writers all land.
+;; server reports (via :index) keeps the writers on one src, so K disjoint writers all land.
 ;; Override with GRAPH_MODULE if the corpus layout differs.
 (defn resolve-graph-module [port]
   (let [req (fn [m] (if PROP-IN-PROCESS? (handle m) (client port m)))
@@ -81,7 +81,7 @@
         (first (filter #(str/ends-with? % ".kernel") mods))
         (first mods))))
 
-;; ---- GRAPH arm: K concurrent writers to one warm daemon (distinct defs) ----
+;; ---- GRAPH arm: K concurrent writers to one warm server (distinct defs) ----
 (defn graph-writer [port i base]
   (let [nm (str base i)
         request (fn [m] (if PROP-IN-PROCESS? (handle m) (client port m)))

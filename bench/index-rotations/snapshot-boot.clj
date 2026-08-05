@@ -32,7 +32,7 @@
     [(/ (- (System/nanoTime) t0) 1e6) v]))
 
 (defn boot! [extra-env]
-  (proc/process (into ["bin/fram-daemon" "serve-flat" (str port) log])
+  (proc/process (into ["bin/fram-server" "serve-flat" (str port) log])
                 {:dir root :out :inherit :err :inherit
                  :extra-env (merge {"FRAM_TELEMETRY_LOG" telemetry} extra-env)}))
 

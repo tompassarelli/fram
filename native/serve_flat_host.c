@@ -34,13 +34,13 @@ typedef enum daemon_bind {
   DAEMON_BIND_ANY
 } daemon_bind;
 
-typedef struct daemon_config {
+typedef struct server_config {
   uint16_t port;
   const char *log_path;
   const char *space_id;
   daemon_bind bind;
   const char *bind_text;
-} daemon_config;
+} server_config;
 
 typedef struct writer_authority {
   int fd;
@@ -70,7 +70,7 @@ struct server_context {
 static volatile sig_atomic_t stop_requested = 0;
 
 static void print_usage(void) {
-  fputs("usage: fram-daemon-native [serve] [port] [log] [space-id]\n",
+  fputs("usage: fram-server-native [serve] [port] [log] [space-id]\n",
         stderr);
 }
 
@@ -85,14 +85,14 @@ static int parse_port(const char *text, uint16_t *port_out) {
   errno = 0;
   value = strtol(text, &end, 10);
   if (errno != 0 || end == text || *end != '\0' || value < 1 || value > 65535) {
-    fprintf(stderr, "fram-daemon-native: invalid port: %s\n", text);
+    fprintf(stderr, "fram-server-native: invalid port: %s\n", text);
     return -1;
   }
   *port_out = (uint16_t)value;
   return 0;
 }
 
-static int parse_bind(daemon_config *config) {
+static int parse_bind(server_config *config) {
   const char *bind = getenv("FRAM_BIND");
 
   if (!nonempty(bind) || strcmp(bind, "loopback") == 0) {
@@ -111,13 +111,13 @@ static int parse_bind(daemon_config *config) {
     return 0;
   }
   fprintf(stderr,
-          "fram-daemon-native: FRAM_BIND=%s is unsupported; expected "
+          "fram-server-native: FRAM_BIND=%s is unsupported; expected "
           "loopback, 127.0.0.1, or 0.0.0.0\n",
           bind);
   return -1;
 }
 
-static int load_config(int argc, char **argv, daemon_config *config) {
+static int load_config(int argc, char **argv, server_config *config) {
   int index = 1;
   const char *port_text;
   const char *log_path;
@@ -133,7 +133,7 @@ static int load_config(int argc, char **argv, daemon_config *config) {
 
   port_text = index < argc && nonempty(argv[index])
                   ? argv[index]
-                  : getenv("FRAM_PORT");
+                  : getenv("FRAM_SERVER_PORT");
   if (!nonempty(port_text)) {
     config->port = DEFAULT_PORT;
   } else {
@@ -158,14 +158,14 @@ static int reject_unsupported_environment(void) {
   static const char *const tls_variables[] = {
       "FRAM_TLS_KEYSTORE", "FRAM_TLS_TRUSTSTORE", "FRAM_TLS_PASS",
       "FRAM_TLS_PASS_FILE"};
-  const char *role = getenv("FRAM_COORD_ROLE");
+  const char *role = getenv("FRAM_SERVER_ROLE");
   size_t index;
 
   for (index = 0; index < sizeof(tls_variables) / sizeof(tls_variables[0]);
        index += 1) {
     if (nonempty(getenv(tls_variables[index]))) {
       fprintf(stderr,
-              "fram-daemon-native: %s is unsupported by the deployed native "
+              "fram-server-native: %s is unsupported by the deployed native "
               "host; refusing plaintext fallback\n",
               tls_variables[index]);
       return -1;
@@ -173,7 +173,7 @@ static int reject_unsupported_environment(void) {
   }
   if (nonempty(role) && strcmp(role, "active") != 0) {
     fprintf(stderr,
-            "fram-daemon-native: FRAM_COORD_ROLE=%s is unsupported; this host "
+            "fram-server-native: FRAM_SERVER_ROLE=%s is unsupported; this host "
             "requires active writer authority\n",
             role);
     return -1;
@@ -194,7 +194,7 @@ static int install_signal_handlers(void) {
   if (sigemptyset(&action.sa_mask) != 0 ||
       sigaction(SIGINT, &action, NULL) != 0 ||
       sigaction(SIGTERM, &action, NULL) != 0 || signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
-    fprintf(stderr, "fram-daemon-native: cannot install signal handlers: %s\n",
+    fprintf(stderr, "fram-server-native: cannot install signal handlers: %s\n",
             strerror(errno));
     return -1;
   }
@@ -217,17 +217,17 @@ static int ensure_regular_log(const char *path) {
   int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0666);
 
   if (fd < 0) {
-    fprintf(stderr, "fram-daemon-native: cannot open log %s: %s\n", path,
+    fprintf(stderr, "fram-server-native: cannot open log %s: %s\n", path,
             strerror(errno));
     return -1;
   }
   if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode)) {
-    fprintf(stderr, "fram-daemon-native: log is not a regular file: %s\n", path);
+    fprintf(stderr, "fram-server-native: log is not a regular file: %s\n", path);
     (void)close(fd);
     return -1;
   }
   if (close(fd) != 0) {
-    fprintf(stderr, "fram-daemon-native: cannot close log %s: %s\n", path,
+    fprintf(stderr, "fram-server-native: cannot close log %s: %s\n", path,
             strerror(errno));
     return -1;
   }
@@ -246,7 +246,7 @@ static int acquire_writer_authority(const char *log_path,
   }
   authority->canonical_log_path = realpath(log_path, NULL);
   if (authority->canonical_log_path == NULL) {
-    fprintf(stderr, "fram-daemon-native: cannot canonicalize log %s: %s\n",
+    fprintf(stderr, "fram-server-native: cannot canonicalize log %s: %s\n",
             log_path, strerror(errno));
     return -1;
   }
@@ -255,7 +255,7 @@ static int acquire_writer_authority(const char *log_path,
                    sizeof(".writer-authority.lock");
   authority->lock_path = malloc(lock_path_size);
   if (authority->lock_path == NULL) {
-    fputs("fram-daemon-native: cannot allocate writer lock path\n", stderr);
+    fputs("fram-server-native: cannot allocate writer lock path\n", stderr);
     return -1;
   }
   (void)snprintf(authority->lock_path, lock_path_size, "%s.writer-authority.lock",
@@ -264,12 +264,12 @@ static int acquire_writer_authority(const char *log_path,
   if (lstat(authority->lock_path, &status) == 0) {
     if (S_ISLNK(status.st_mode)) {
       fprintf(stderr,
-              "fram-daemon-native: writer authority path is a symlink: %s\n",
+              "fram-server-native: writer authority path is a symlink: %s\n",
               authority->lock_path);
       return -1;
     }
   } else if (errno != ENOENT) {
-    fprintf(stderr, "fram-daemon-native: cannot inspect writer lock %s: %s\n",
+    fprintf(stderr, "fram-server-native: cannot inspect writer lock %s: %s\n",
             authority->lock_path, strerror(errno));
     return -1;
   }
@@ -277,12 +277,12 @@ static int acquire_writer_authority(const char *log_path,
   lock_fd = open(authority->lock_path,
                  O_WRONLY | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0666);
   if (lock_fd < 0) {
-    fprintf(stderr, "fram-daemon-native: cannot open writer lock %s: %s\n",
+    fprintf(stderr, "fram-server-native: cannot open writer lock %s: %s\n",
             authority->lock_path, strerror(errno));
     return -1;
   }
   if (fstat(lock_fd, &status) != 0 || !S_ISREG(status.st_mode)) {
-    fprintf(stderr, "fram-daemon-native: writer lock is not a regular file: %s\n",
+    fprintf(stderr, "fram-server-native: writer lock is not a regular file: %s\n",
             authority->lock_path);
     (void)close(lock_fd);
     return -1;
@@ -295,11 +295,11 @@ static int acquire_writer_authority(const char *log_path,
   if (fcntl(lock_fd, F_SETLK, &lock) != 0) {
     if (errno == EACCES || errno == EAGAIN) {
       fprintf(stderr,
-              "fram-daemon-native: another coordinator holds writer authority "
+              "fram-server-native: another server holds writer authority "
               "for %s\n",
               authority->canonical_log_path);
     } else {
-      fprintf(stderr, "fram-daemon-native: cannot lock %s: %s\n",
+      fprintf(stderr, "fram-server-native: cannot lock %s: %s\n",
               authority->lock_path, strerror(errno));
     }
     (void)close(lock_fd);
@@ -330,7 +330,7 @@ static int parse_inherited_fd(void) {
   value = strtol(text, &end, 10);
   if (errno != 0 || end == text || *end != '\0' || value != INHERITED_LISTEN_FD) {
     fprintf(stderr,
-            "fram-daemon-native: FRAM_LISTEN_FD must be exactly %d, got %s\n",
+            "fram-server-native: FRAM_LISTEN_FD must be exactly %d, got %s\n",
             INHERITED_LISTEN_FD, text);
     return -2;
   }
@@ -371,7 +371,7 @@ static int inherited_socket_port(int fd, daemon_bind bind_mode,
   return -1;
 }
 
-static int validate_inherited_socket(int fd, const daemon_config *config) {
+static int validate_inherited_socket(int fd, const server_config *config) {
   int socket_type = 0;
   int accepting = 0;
   socklen_t option_length = sizeof(socket_type);
@@ -381,7 +381,7 @@ static int validate_inherited_socket(int fd, const daemon_config *config) {
       getsockopt(fd, SOL_SOCKET, SO_TYPE, &socket_type, &option_length) != 0 ||
       socket_type != SOCK_STREAM) {
     fprintf(stderr,
-            "fram-daemon-native: FRAM_LISTEN_FD=%d is not an open stream socket\n",
+            "fram-server-native: FRAM_LISTEN_FD=%d is not an open stream socket\n",
             fd);
     return -1;
   }
@@ -389,27 +389,27 @@ static int validate_inherited_socket(int fd, const daemon_config *config) {
   if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &accepting, &option_length) != 0 ||
       accepting == 0) {
     fprintf(stderr,
-            "fram-daemon-native: FRAM_LISTEN_FD=%d is not a listening socket\n",
+            "fram-server-native: FRAM_LISTEN_FD=%d is not a listening socket\n",
             fd);
     return -1;
   }
   if (inherited_socket_port(fd, config->bind, &actual_port) != 0) {
     fprintf(stderr,
-            "fram-daemon-native: inherited listener does not match "
+            "fram-server-native: inherited listener does not match "
             "FRAM_BIND=%s: %s\n",
             config->bind_text, strerror(errno));
     return -1;
   }
   if (actual_port != config->port) {
     fprintf(stderr,
-            "fram-daemon-native: inherited listener port %u does not match "
-            "FRAM_PORT %u\n",
+            "fram-server-native: inherited listener port %u does not match "
+            "FRAM_SERVER_PORT %u\n",
             (unsigned int)actual_port, (unsigned int)config->port);
     return -1;
   }
   if (set_close_on_exec(fd) != 0) {
     fprintf(stderr,
-            "fram-daemon-native: cannot set close-on-exec on inherited listener: "
+            "fram-server-native: cannot set close-on-exec on inherited listener: "
             "%s\n",
             strerror(errno));
     return -1;
@@ -417,19 +417,19 @@ static int validate_inherited_socket(int fd, const daemon_config *config) {
   return 0;
 }
 
-static int create_listener(const daemon_config *config) {
+static int create_listener(const server_config *config) {
   struct sockaddr_in address;
   int reuse = 1;
   int fd = socket(AF_INET, SOCK_STREAM, 0);
 
   if (fd < 0) {
-    fprintf(stderr, "fram-daemon-native: cannot create listener: %s\n",
+    fprintf(stderr, "fram-server-native: cannot create listener: %s\n",
             strerror(errno));
     return -1;
   }
   if (set_close_on_exec(fd) != 0 ||
       setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) != 0) {
-    fprintf(stderr, "fram-daemon-native: cannot configure listener: %s\n",
+    fprintf(stderr, "fram-server-native: cannot configure listener: %s\n",
             strerror(errno));
     (void)close(fd);
     return -1;
@@ -443,7 +443,7 @@ static int create_listener(const daemon_config *config) {
   address.sin_port = htons(config->port);
   if (bind(fd, (const struct sockaddr *)&address, sizeof(address)) != 0 ||
       listen(fd, LISTEN_BACKLOG) != 0) {
-    fprintf(stderr, "fram-daemon-native: cannot listen on %s:%u: %s\n",
+    fprintf(stderr, "fram-server-native: cannot listen on %s:%u: %s\n",
             config->bind_text, (unsigned int)config->port, strerror(errno));
     (void)close(fd);
     return -1;
@@ -451,7 +451,7 @@ static int create_listener(const daemon_config *config) {
   return fd;
 }
 
-static int open_listener(const daemon_config *config) {
+static int open_listener(const server_config *config) {
   int inherited_fd = parse_inherited_fd();
 
   if (inherited_fd == -2) {
@@ -482,7 +482,7 @@ static int serialized_dispatch(
   int hook_status;
 
   if (thread_status != 0) {
-    fprintf(stderr, "fram-daemon-native: cannot lock dispatch: %s\n",
+    fprintf(stderr, "fram-server-native: cannot lock dispatch: %s\n",
             strerror(thread_status));
     return FRAM_SERVE_FLAT_FATAL;
   }
@@ -490,7 +490,7 @@ static int serialized_dispatch(
       server->store, request, response, error, error_capacity);
   thread_status = pthread_mutex_unlock(&server->dispatch_mutex);
   if (thread_status != 0) {
-    fprintf(stderr, "fram-daemon-native: cannot unlock dispatch: %s\n",
+    fprintf(stderr, "fram-server-native: cannot unlock dispatch: %s\n",
             strerror(thread_status));
     return FRAM_SERVE_FLAT_FATAL;
   }
@@ -503,7 +503,7 @@ static int serialized_release_response(
 
   if (thread_status != 0) {
     fprintf(stderr,
-            "fram-daemon-native: cannot lock response release: %s\n",
+            "fram-server-native: cannot lock response release: %s\n",
             strerror(thread_status));
     return -1;
   }
@@ -511,7 +511,7 @@ static int serialized_release_response(
   thread_status = pthread_mutex_unlock(&server->dispatch_mutex);
   if (thread_status != 0) {
     fprintf(stderr,
-            "fram-daemon-native: cannot unlock response release: %s\n",
+            "fram-server-native: cannot unlock response release: %s\n",
             strerror(thread_status));
     return -1;
   }
@@ -534,7 +534,7 @@ static int serve_client(int client_fd, server_context *server) {
   }
   if (status == FRAM_SERVE_FLAT_CLIENT_ERROR) {
     fprintf(stderr,
-            "fram-daemon-native: fram_serve_flat_codec_read_request failed "
+            "fram-server-native: fram_serve_flat_codec_read_request failed "
             "(%d): %s\n",
             status, hook_detail(error));
     if (request != NULL) {
@@ -544,7 +544,7 @@ static int serve_client(int client_fd, server_context *server) {
   }
   if (status != FRAM_SERVE_FLAT_OK || request == NULL) {
     fprintf(stderr,
-            "fram-daemon-native: fram_serve_flat_codec_read_request failed "
+            "fram-server-native: fram_serve_flat_codec_read_request failed "
             "(%d): %s\n",
             status, hook_detail(error));
     if (request != NULL) {
@@ -560,7 +560,7 @@ static int serve_client(int client_fd, server_context *server) {
   fram_serve_flat_codec_release_request(request);
   if (status != FRAM_SERVE_FLAT_OK || response == NULL) {
     fprintf(stderr,
-            "fram-daemon-native: fram_serve_flat_store_dispatch failed (%d): "
+            "fram-server-native: fram_serve_flat_store_dispatch failed (%d): "
             "%s\n",
             status, hook_detail(error));
     if (response != NULL) {
@@ -584,14 +584,14 @@ static int serve_client(int client_fd, server_context *server) {
   }
   if (status == FRAM_SERVE_FLAT_CLIENT_ERROR) {
     fprintf(stderr,
-            "fram-daemon-native: fram_serve_flat_codec_write_response failed "
+            "fram-server-native: fram_serve_flat_codec_write_response failed "
             "(%d): %s\n",
             status, hook_detail(error));
     return 0;
   }
   if (status != FRAM_SERVE_FLAT_OK) {
     fprintf(stderr,
-            "fram-daemon-native: fram_serve_flat_codec_write_response failed "
+            "fram-server-native: fram_serve_flat_codec_write_response failed "
             "(%d): %s\n",
             status, hook_detail(error));
     return -1;
@@ -607,13 +607,13 @@ static int initialize_server_context(server_context *server,
   server->store = store;
   status = pthread_mutex_init(&server->dispatch_mutex, NULL);
   if (status != 0) {
-    fprintf(stderr, "fram-daemon-native: cannot initialize dispatch lock: %s\n",
+    fprintf(stderr, "fram-server-native: cannot initialize dispatch lock: %s\n",
             strerror(status));
     return -1;
   }
   status = pthread_mutex_init(&server->clients_mutex, NULL);
   if (status != 0) {
-    fprintf(stderr, "fram-daemon-native: cannot initialize client lock: %s\n",
+    fprintf(stderr, "fram-server-native: cannot initialize client lock: %s\n",
             strerror(status));
     (void)pthread_mutex_destroy(&server->dispatch_mutex);
     return -1;
@@ -621,7 +621,7 @@ static int initialize_server_context(server_context *server,
   status = pthread_cond_init(&server->clients_idle, NULL);
   if (status != 0) {
     fprintf(stderr,
-            "fram-daemon-native: cannot initialize client condition: %s\n",
+            "fram-server-native: cannot initialize client condition: %s\n",
             strerror(status));
     (void)pthread_mutex_destroy(&server->clients_mutex);
     (void)pthread_mutex_destroy(&server->dispatch_mutex);
@@ -630,7 +630,7 @@ static int initialize_server_context(server_context *server,
   status = pthread_attr_init(&server->worker_attributes);
   if (status != 0) {
     fprintf(stderr,
-            "fram-daemon-native: cannot initialize worker attributes: %s\n",
+            "fram-server-native: cannot initialize worker attributes: %s\n",
             strerror(status));
     (void)pthread_cond_destroy(&server->clients_idle);
     (void)pthread_mutex_destroy(&server->clients_mutex);
@@ -641,7 +641,7 @@ static int initialize_server_context(server_context *server,
                                        PTHREAD_CREATE_DETACHED);
   if (status != 0) {
     fprintf(stderr,
-            "fram-daemon-native: cannot configure worker attributes: %s\n",
+            "fram-server-native: cannot configure worker attributes: %s\n",
             strerror(status));
     (void)pthread_attr_destroy(&server->worker_attributes);
     (void)pthread_cond_destroy(&server->clients_idle);
@@ -687,7 +687,7 @@ static void *serve_client_worker(void *argument) {
 
   (void)pthread_mutex_lock(&server->clients_mutex);
   if (close(job->fd) != 0) {
-    fprintf(stderr, "fram-daemon-native: cannot close client: %s\n",
+    fprintf(stderr, "fram-server-native: cannot close client: %s\n",
             strerror(errno));
   }
   job->fd = -1;
@@ -741,7 +741,7 @@ static int accept_loop(int listener_fd, fram_serve_flat_store *store) {
       if (errno == EINTR) {
         continue;
       }
-      fprintf(stderr, "fram-daemon-native: listener poll failed: %s\n",
+      fprintf(stderr, "fram-server-native: listener poll failed: %s\n",
               strerror(errno));
       failed = true;
       break;
@@ -750,7 +750,7 @@ static int accept_loop(int listener_fd, fram_serve_flat_store *store) {
       continue;
     }
     if ((listener_poll.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-      fputs("fram-daemon-native: listener became unavailable\n", stderr);
+      fputs("fram-server-native: listener became unavailable\n", stderr);
       failed = true;
       break;
     }
@@ -766,7 +766,7 @@ static int accept_loop(int listener_fd, fram_serve_flat_store *store) {
       if (errno == ECONNABORTED) {
         continue;
       }
-      fprintf(stderr, "fram-daemon-native: accept failed: %s\n",
+      fprintf(stderr, "fram-server-native: accept failed: %s\n",
               strerror(errno));
       failed = true;
       break;
@@ -777,7 +777,7 @@ static int accept_loop(int listener_fd, fram_serve_flat_store *store) {
     }
     if (set_close_on_exec(client_fd) != 0) {
       fprintf(stderr,
-              "fram-daemon-native: cannot set close-on-exec on client: %s\n",
+              "fram-server-native: cannot set close-on-exec on client: %s\n",
               strerror(errno));
       (void)close(client_fd);
       continue;
@@ -785,7 +785,7 @@ static int accept_loop(int listener_fd, fram_serve_flat_store *store) {
 
     job = malloc(sizeof(*job));
     if (job == NULL) {
-      fputs("fram-daemon-native: cannot allocate client worker\n", stderr);
+      fputs("fram-server-native: cannot allocate client worker\n", stderr);
       (void)close(client_fd);
       failed = true;
       break;
@@ -795,7 +795,7 @@ static int accept_loop(int listener_fd, fram_serve_flat_store *store) {
     (void)pthread_mutex_lock(&server.clients_mutex);
     if (server.client_count >= (size_t)MAX_ACTIVE_CLIENTS) {
       (void)pthread_mutex_unlock(&server.clients_mutex);
-      fputs("fram-daemon-native: active client limit reached\n", stderr);
+      fputs("fram-server-native: active client limit reached\n", stderr);
       (void)close(client_fd);
       free(job);
       continue;
@@ -808,7 +808,7 @@ static int accept_loop(int listener_fd, fram_serve_flat_store *store) {
     if (status != 0) {
       remove_client_locked(&server, job);
       (void)pthread_mutex_unlock(&server.clients_mutex);
-      fprintf(stderr, "fram-daemon-native: cannot create client worker: %s\n",
+      fprintf(stderr, "fram-server-native: cannot create client worker: %s\n",
               strerror(status));
       (void)close(client_fd);
       free(job);
@@ -825,7 +825,7 @@ static int accept_loop(int listener_fd, fram_serve_flat_store *store) {
 }
 
 int main(int argc, char **argv) {
-  daemon_config config;
+  server_config config;
   writer_authority authority = {.fd = -1,
                                 .canonical_log_path = NULL,
                                 .lock_path = NULL};
@@ -838,7 +838,7 @@ int main(int argc, char **argv) {
 
   if (generated_abi != FRAM_SERVE_FLAT_GENERATED_ABI) {
     fprintf(stderr,
-            "fram-daemon-native: generated host ABI mismatch; expected %u, "
+            "fram-server-native: generated host ABI mismatch; expected %u, "
             "got %u\n",
             (unsigned int)FRAM_SERVE_FLAT_GENERATED_ABI,
             (unsigned int)generated_abi);
@@ -860,7 +860,7 @@ int main(int argc, char **argv) {
   terminate_hook_error(error);
   if (status != FRAM_SERVE_FLAT_OK || store == NULL) {
     fprintf(stderr,
-            "fram-daemon-native: fram_serve_flat_store_boot failed (%d): %s\n",
+            "fram-server-native: fram_serve_flat_store_boot failed (%d): %s\n",
             status, hook_detail(error));
     goto cleanup;
   }
@@ -870,7 +870,7 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
   fprintf(stderr,
-          "fram-daemon-native: listening on %s:%u, log=%s\n",
+          "fram-server-native: listening on %s:%u, log=%s\n",
           config.bind_text, (unsigned int)config.port,
           authority.canonical_log_path);
   result = accept_loop(listener_fd, store) == 0 ? 0 : 1;
@@ -885,7 +885,7 @@ cleanup:
     terminate_hook_error(error);
     if (status != FRAM_SERVE_FLAT_OK) {
       fprintf(stderr,
-              "fram-daemon-native: fram_serve_flat_store_shutdown failed (%d): "
+              "fram-server-native: fram_serve_flat_store_shutdown failed (%d): "
               "%s\n",
               status, hook_detail(error));
       result = 1;

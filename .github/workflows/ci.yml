@@ -13,7 +13,7 @@ jobs:
     env:
       BEAGLE_HOME: ${{ github.workspace }}/.beagle
       FRAM_BEAGLE: ${{ github.workspace }}/.beagle/bin/beagle
-      FRAM_DAEMON_RUNTIME: jvm-dev
+      FRAM_SERVER_RUNTIME: jvm-dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,7 +57,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
 
       # CI selects the checkout-only JVM development route until the complete
-      # native daemon artifact is linkable. The mTLS test also needs the JDK.
+      # native server artifact is linkable. The mTLS test also needs the JDK.
       - name: Install Clojure CLI
         run: |
           curl -L -O https://github.com/clojure/brew-install/releases/latest/download/linux-install.sh
@@ -65,7 +65,7 @@ jobs:
           sudo ./linux-install.sh
           clojure --version
 
-      - name: Warm JVM deps (cheshire) so the daemon boots fast
+      - name: Warm JVM deps (cheshire) so the server boots fast
         run: clojure -P
 
       - name: Occurrence-native component and boundary suites

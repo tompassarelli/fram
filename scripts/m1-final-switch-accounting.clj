@@ -285,7 +285,7 @@
 (defn dynamic-inventory
   [defs parsed-files]
   (let [dynamic (->> defs (filter :dynamic) (map :name) set)
-        binder-files (filter #(or (= "coord_daemon.clj" (:file %))
+        binder-files (filter #(or (= "server.clj" (:file %))
                                   (and (str/starts-with? (:file %) "tests/")
                                        (str/ends-with? (:file %) ".clj")))
                              parsed-files)]
@@ -369,7 +369,7 @@
     :consumer-rule
     "qualified resolve/<name> or a require alias such as rsv/<name>; resolve.clj internal refs are syntactic symbol refs"
     :binder-scope
-    ["coord_daemon.clj" "tests/**/*.clj"]}
+    ["server.clj" "tests/**/*.clj"]}
    :baseline
    {:revision link-9-revision
     :lines (:lines baseline)

@@ -8,7 +8,7 @@
 ;;
 ;; DataScript is an in-process embedded library, not a server -- there is no
 ;; daemon/socket boundary to cross, so this script drives it directly in the
-;; SAME jvm process (no bin/fram-daemon involved on this side). The corpus is
+;; SAME jvm process (no bin/fram-server involved on this side). The corpus is
 ;; folded to its final live-fact set with fram's OWN fold code
 ;; (fram.rt/read-log + fram.fold/fold -- the exact function the daemon calls
 ;; at boot) so both systems see byte-identical input facts; only the storage

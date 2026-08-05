@@ -3,7 +3,7 @@
 ;; one caller-selected loopback port >=8400.
 (require '[clojure.java.io :as io]
          '[clojure.string :as str])
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 
 (defn env-longs [name fallback]
   (mapv #(Long/parseLong %)
@@ -43,7 +43,7 @@
     (let [r (try (request {:op :status}) (catch Throwable _ nil))]
       (cond r r
             (< attempt 200) (do (Thread/sleep 10) (recur (inc attempt)))
-            :else (throw (ex-info "scratch coordinator did not become ready"
+            :else (throw (ex-info "scratch server did not become ready"
                                   {:port port}))))))
 (defn ensure-server! []
   (when-not (or in-process? @server)

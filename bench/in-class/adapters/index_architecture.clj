@@ -233,7 +233,7 @@
       (contains? (set (:default-corpus-sizes contract)) corpus-size)
       (contains? (set sizes) corpus-size))))
 
-(defn coordinator-aggregate-scan [engine _scenario]
+(defn server-aggregate-scan [engine _scenario]
   {:result-count (count (probe-triples engine [nil "title" nil]))
    :expected-count-fn #(quot % 3)})
 
@@ -275,7 +275,7 @@
 
 ;; Scenario handlers are added one coherent scenario at a time.
 (def scenario-handlers
-  {:coordinator-aggregate-scan coordinator-aggregate-scan
+  {:server-aggregate-scan server-aggregate-scan
    :staffing-projection staffing-projection
    :point-lookup point-lookup
    :compound-datalog-join compound-datalog-join

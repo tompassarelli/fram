@@ -7,10 +7,10 @@
 # vendored copies (gjoa: gitignored engine/ mirrors src/) must not ingest those.
 # Does the whole incantation in one shot:
 #   1. ingest <dir> -> .fram/code.log (native FRAMLOG)
-#   2. boot the native coordinator on that log
+#   2. boot the native server on that log
 #   3. wire the public Fram data MCP to that SpaceId
 # Graph-control authoring is a separate sealed service and is not enabled here.
-# Turn OFF: fram-code-off <dir>  (kills the coordinator; remove .mcp.json).
+# Turn OFF: fram-code-off <dir>  (stops the server; remove .mcp.json).
 # ============================================================================
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"          # fram repo root
@@ -43,11 +43,11 @@ mkdir -p "$DIR/.fram"
 echo "fram-code-on: $DIR (space $SPACE_ID; port $PORT; src $SRC)"
 
 native_status_line() {
-  FRAM_PORT="$PORT" FRAM_SPACE_ID="$SPACE_ID" FRAM_LOG="$CODE_LOG" \
+  FRAM_SERVER_PORT="$PORT" FRAM_SPACE_ID="$SPACE_ID" FRAM_LOG="$CODE_LOG" \
     timeout 5 "$HERE/bin/fram" status 2>/dev/null
 }
 
-verify_native_coordinator() {
+verify_native_server() {
   local status
   status="$(native_status_line || true)"
   if [[ ! "$status" =~ ^up\|[0-9]+\|[0-9]+\|ready\|jvm$ ]]; then
@@ -64,8 +64,8 @@ verify_native_coordinator() {
 #
 #    EXCLUDE docs/private/, vendored copies, tests, and fuzz repros: none are
 #    members of the authoring corpus.
-if pgrep -f "coord_daemon.clj serve [0-9]+ $CODE_LOG( |$)" >/dev/null 2>&1; then
-  echo "fram-code-on: a coordinator already owns $CODE_LOG; run fram-code-off first" >&2
+if pgrep -f "server.clj serve [0-9]+ $CODE_LOG( |$)" >/dev/null 2>&1; then
+  echo "fram-code-on: a server already owns $CODE_LOG; run fram-code-off first" >&2
   exit 1
 fi
 if ss -ltn 2>/dev/null | grep -q ":$PORT "; then
@@ -88,32 +88,32 @@ echo "  [1b]  resolving -> reference graph (for who-calls/blast-radius) …"
   && echo "        corpus: $(wc -l <"$CORPUS" 2>/dev/null) reference rows -> $CORPUS" \
   || echo "        (reference corpus skipped — native AST corpus is still available)"
 
-# 2. boot the native coordinator (detached — survives this shell)
-echo "  [2/3] booting native coordinator on :$PORT …"
+# 2. boot the native server (detached — survives this shell)
+echo "  [2/3] booting native server on :$PORT …"
 ( cd "$HERE" && exec env -u FRAM_TELEMETRY_LOG \
   BEAGLE_HOME="$BEAGLE_HOME" \
-  setsid nohup bin/fram-daemon serve "$PORT" "$CODE_LOG" "$SPACE_ID" \
-    >"$DIR/.fram/coord-$PORT.log" 2>&1 ) &
-DAEMON_PID=$!
+  setsid nohup bin/fram-server serve "$PORT" "$CODE_LOG" "$SPACE_ID" \
+    >"$DIR/.fram/server-$PORT.log" 2>&1 ) &
+SERVER_PID=$!
 for _ in $(seq 1 2400); do
   sleep 0.5
-  grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null && break
-  if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
-    echo "        FAILED to boot — coordinator exited; see $DIR/.fram/coord-$PORT.log" >&2
-    tail -n 8 "$DIR/.fram/coord-$PORT.log" >&2 || true
+  grep -q "listening on" "$DIR/.fram/server-$PORT.log" 2>/dev/null && break
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "        FAILED to boot — server exited; see $DIR/.fram/server-$PORT.log" >&2
+    tail -n 8 "$DIR/.fram/server-$PORT.log" >&2 || true
     exit 1
   fi
 done
-if grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null; then
-  if NATIVE_STATUS="$(verify_native_coordinator)"; then
-    echo "        coordinator up ($NATIVE_STATUS)"
+if grep -q "listening on" "$DIR/.fram/server-$PORT.log" 2>/dev/null; then
+  if NATIVE_STATUS="$(verify_native_server)"; then
+    echo "        server up ($NATIVE_STATUS)"
   else
-    kill "$DAEMON_PID" 2>/dev/null || true
+    kill "$SERVER_PID" 2>/dev/null || true
     exit 1
   fi
 else
-  echo "        FAILED to boot — see $DIR/.fram/coord-$PORT.log"
-  kill "$DAEMON_PID" 2>/dev/null || true
+  echo "        FAILED to boot — see $DIR/.fram/server-$PORT.log"
+  kill "$SERVER_PID" 2>/dev/null || true
   exit 1
 fi
 
@@ -127,8 +127,8 @@ FRAM_SERVER_JSON=$(cat <<JSON
   "args": [],
   "env": {
     "FRAM_SPACE_ID": "$SPACE_ID",
-    "FRAM_PORT": "$PORT",
-    "FRAM_COORD_READ_TIMEOUT_MS": "180000",
+    "FRAM_SERVER_PORT": "$PORT",
+    "FRAM_SERVER_READ_TIMEOUT_MS": "180000",
     "FRAM_LOG": "$CODE_LOG"
   }
 }
@@ -136,12 +136,12 @@ JSON
 )
 "$HERE/bin/fram-code-wire" on "$DIR" "$FRAM_SERVER_JSON"
 
-# The transport wiring and coordinator boot are separate steps. Prove the
+# The transport wiring and server boot are separate steps. Prove the
 # user-visible native stack is complete before reporting success. Level 3 stays
 # reserved for the separate graph-control plane.
 STACK_STATUS="$("$HERE/bin/fram-code-status" "$DIR")"
 if [[ ! "$STACK_STATUS" =~ ^level=2\  ]] || \
-   [[ "$STACK_STATUS" != *"mcp=present space=$SPACE_ID port=$PORT coord=alive"* ]] || \
+   [[ "$STACK_STATUS" != *"mcp=present space=$SPACE_ID port=$PORT server=alive"* ]] || \
    ! grep -q '^\[mcp_servers\.fram\]$' "$DIR/.codex/config.toml"; then
   echo "fram-code-on: FAILED final native stack postcondition: $STACK_STATUS" >&2
   exit 1
@@ -150,7 +150,7 @@ fi
 cat <<EOF
 
 === NATIVE CODE CORPUS ON ===
-FRAMLOG + coordinator: $NATIVE_STATUS
+FRAMLOG + server: $NATIVE_STATUS
 The public Fram data MCP is wired to SpaceId $SPACE_ID.
 Graph-control authoring is not enabled here; that is the separate N2.6b seam.
 Reason over the code graph (blast-radius / who-calls), any time:

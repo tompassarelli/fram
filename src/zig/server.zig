@@ -277,7 +277,7 @@ fn laterPosition(left: TripleRow, right: TripleRow) bool {
         (left.tx_seq == right.tx_seq and left.ordinal > right.ordinal);
 }
 
-const DaemonState = struct {
+const ServerState = struct {
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
     events: std.ArrayList(TripleRow),
@@ -293,8 +293,8 @@ const DaemonState = struct {
         allocator: Allocator,
         environ: *const std.process.Environ.Map,
         space_id: []const u8,
-    ) !DaemonState {
-        var state: DaemonState = .{
+    ) !ServerState {
+        var state: ServerState = .{
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
             .events = .empty,
@@ -323,7 +323,7 @@ const DaemonState = struct {
         return state;
     }
 
-    fn deinit(state: *DaemonState) void {
+    fn deinit(state: *ServerState) void {
         state.subjects.deinit();
         state.latest.deinit();
         state.configured_single.deinit();
@@ -334,7 +334,7 @@ const DaemonState = struct {
     }
 
     fn copyEvent(
-        state: *DaemonState,
+        state: *ServerState,
         tx_seq: i64,
         ordinal: u32,
         operation: EventOperation,
@@ -349,7 +349,7 @@ const DaemonState = struct {
         };
     }
 
-    fn rebuildDerived(state: *DaemonState) !void {
+    fn rebuildDerived(state: *ServerState) !void {
         state.cardinality.clearRetainingCapacity();
         state.latest.clearRetainingCapacity();
         state.subjects.clearRetainingCapacity();
@@ -401,7 +401,7 @@ const DaemonState = struct {
     }
 
     fn applyEvent(
-        state: *DaemonState,
+        state: *ServerState,
         index: usize,
         event: TripleRow,
     ) !void {
@@ -419,7 +419,7 @@ const DaemonState = struct {
     }
 
     fn appendCommitted(
-        state: *DaemonState,
+        state: *ServerState,
         event: TripleRow,
     ) !void {
         try state.events.append(state.allocator, event);
@@ -436,7 +436,7 @@ const DaemonState = struct {
     }
 
     fn appendCommittedBatch(
-        state: *DaemonState,
+        state: *ServerState,
         events: []const TripleRow,
     ) !void {
         try state.events.ensureUnusedCapacity(state.allocator, events.len);
@@ -459,7 +459,7 @@ const DaemonState = struct {
         }
     }
 
-    fn isSingle(state: *const DaemonState, predicate: []const u8) bool {
+    fn isSingle(state: *const ServerState, predicate: []const u8) bool {
         if (state.cardinality.get(predicate)) |single| return single;
         return state.configured_single.contains(predicate) or
             std.mem.startsWith(u8, predicate, "emoji_");
@@ -467,16 +467,16 @@ const DaemonState = struct {
 
     /// Declared cardinality only — the fallback/emoji conventions of `isSingle`
     /// are not a schema fact and must never stand in for one.
-    fn schemaSingle(state: *const DaemonState, predicate: []const u8) bool {
+    fn schemaSingle(state: *const ServerState, predicate: []const u8) bool {
         return state.cardinality.get(predicate) orelse false;
     }
 
-    fn eventKey(state: *DaemonState, event: TripleRow) ![]const u8 {
+    fn eventKey(state: *ServerState, event: TripleRow) ![]const u8 {
         return state.eventKeyAlloc(state.arena.allocator(), event.triple);
     }
 
     fn eventKeyAlloc(
-        state: *const DaemonState,
+        state: *const ServerState,
         allocator: Allocator,
         triple: flat_log.Triple,
     ) ![]const u8 {
@@ -489,7 +489,7 @@ const DaemonState = struct {
     }
 
     fn liveGroup(
-        state: *DaemonState,
+        state: *ServerState,
         scratch: Allocator,
         l: []const u8,
         p: []const u8,
@@ -516,7 +516,7 @@ const DaemonState = struct {
     }
 
     fn allLivePredicateValuesRef(
-        state: *DaemonState,
+        state: *ServerState,
         predicate: []const u8,
     ) bool {
         var latest = state.latest.iterator();
@@ -536,7 +536,7 @@ const DaemonState = struct {
     }
 
     fn currentLease(
-        state: *DaemonState,
+        state: *ServerState,
         scratch: Allocator,
         resource: []const u8,
     ) !?Lease {
@@ -583,7 +583,7 @@ pub fn main(init: std.process.Init) void {
         switch (err) {
             error.InvalidArguments => {
                 std.debug.print(
-                    "usage: fram-daemon-zig serve-log PORT LOG\n",
+                    "usage: fram-server-zig serve-log PORT LOG\n",
                     .{},
                 );
                 std.process.exit(2);
@@ -605,7 +605,7 @@ pub fn main(init: std.process.Init) void {
             },
             error.WriterAuthorityHeld => {
                 std.debug.print(
-                    "fram: another coordinator generation holds writer authority\n",
+                    "fram: another server generation holds writer authority\n",
                     .{},
                 );
                 std.process.exit(1);
@@ -613,7 +613,7 @@ pub fn main(init: std.process.Init) void {
             error.CorruptLog => std.process.exit(1),
             else => {
                 std.debug.print(
-                    "fram zig daemon: {s}\n",
+                    "fram zig server: {s}\n",
                     .{@errorName(err)},
                 );
                 std.process.exit(1);
@@ -624,7 +624,7 @@ pub fn main(init: std.process.Init) void {
 
 fn run(init: std.process.Init) !void {
     if (builtin.os.tag != .linux)
-        @compileError("the bootstrap daemon currently targets Fram's Linux deployment boundary");
+        @compileError("the bootstrap server currently targets Fram's Linux deployment boundary");
 
     var args = try std.process.Args.Iterator.initAllocator(
         init.minimal.args,
@@ -719,7 +719,7 @@ fn replayState(
     environ: *const std.process.Environ.Map,
     canonical_log: []const u8,
     expected_space_id: []const u8,
-) !DaemonState {
+) !ServerState {
     var outcome = try flat_log.replayFileForSpace(
         allocator,
         io,
@@ -738,7 +738,7 @@ fn replayState(
         },
         .replay => |*replay| {
             defer replay.deinit();
-            var state = try DaemonState.init(
+            var state = try ServerState.init(
                 allocator,
                 environ,
                 replay.space_id,
@@ -849,7 +849,7 @@ fn serve(
     port: u16,
     canonical_log: []const u8,
     authority_path: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
 ) !void {
     var address: std.Io.net.IpAddress = .{
         .ip4 = std.Io.net.Ip4Address.loopback(port),
@@ -858,7 +858,7 @@ fn serve(
     defer server.deinit(io);
 
     std.debug.print(
-        "fram zig coordinator: FRAMRPC/1.0 version={d}, space={s}, listening=127.0.0.1:{d}\n",
+        "fram zig server: FRAMRPC/1.0 version={d}, space={s}, listening=127.0.0.1:{d}\n",
         .{ state.version, state.space_id, port },
     );
 
@@ -925,7 +925,7 @@ fn handleConnection(
     stream: std.Io.net.Stream,
     canonical_log: []const u8,
     authority_path: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
 ) !void {
     defer stream.close(io);
     var read_buffer: [8192]u8 = undefined;
@@ -957,7 +957,7 @@ fn handleConnection(
             arena,
             "rpc/space-mismatch",
             false,
-            "request space does not match this daemon",
+            "request space does not match this server",
             try record(
                 arena,
                 "rpc/space-mismatch",
@@ -1000,7 +1000,7 @@ fn dispatchRequest(
     io: Io,
     canonical_log: []const u8,
     authority_path: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
     request: rpc.Request,
 ) !DispatchResult {
     const operation = Operation.parse(request.op);
@@ -1167,7 +1167,7 @@ fn validTtl(ttl: i64, now: i64) bool {
 fn fenceCurrent(
     allocator: Allocator,
     io: Io,
-    state: *DaemonState,
+    state: *ServerState,
     fence: Fence,
 ) !bool {
     const lease = try state.currentLease(allocator, fence.resource) orelse
@@ -1203,7 +1203,7 @@ fn occurrenceCoordinate(
 
 fn occurrenceTerm(
     allocator: Allocator,
-    state: *const DaemonState,
+    state: *const ServerState,
     event: TripleRow,
 ) !flat_log.Term {
     return tripleTerm(
@@ -1241,7 +1241,7 @@ fn commitTransaction(
     allocator: Allocator,
     io: Io,
     canonical_log: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
     pending: []const PendingOperation,
 ) !i64 {
     if (pending.len == 0) return error.EmptyTransaction;
@@ -1326,7 +1326,7 @@ fn appendLeaseEvent(
     allocator: Allocator,
     io: Io,
     canonical_log: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
     operation: EventOperation,
     resource: []const u8,
     value: []const u8,
@@ -1362,7 +1362,7 @@ fn appendLeaseEvent(
 }
 
 fn currentEvent(
-    state: *DaemonState,
+    state: *ServerState,
     scratch: Allocator,
     event: TripleRow,
 ) !bool {
@@ -1374,7 +1374,7 @@ fn currentEvent(
         live.operation == .assert;
 }
 
-fn liveCount(allocator: Allocator, state: *DaemonState) !i64 {
+fn liveCount(allocator: Allocator, state: *ServerState) !i64 {
     var count: i64 = 0;
     for (state.events.items) |event| {
         if (event.operation == .assert and
@@ -1387,7 +1387,7 @@ fn statusRequest(
     arena: Allocator,
     payload: flat_log.Term,
     authority_path: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
 ) !DispatchResult {
     _ = authority_path;
     if (!isKeyword(payload, "rpc/unit")) return failure(
@@ -1411,7 +1411,7 @@ fn statusRequest(
 fn validateRequest(
     arena: Allocator,
     scratch: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     payload: flat_log.Term,
 ) !DispatchResult {
     if (!isKeyword(payload, "rpc/unit")) return failure(
@@ -1519,7 +1519,7 @@ fn patternMatches(pattern: [3]OptionTerm, triple: flat_log.Triple) bool {
 fn scanRequest(
     arena: Allocator,
     scratch: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     request: rpc.Request,
 ) !DispatchResult {
     const pattern = parsePattern(arena, request.payload) catch return failure(
@@ -1591,7 +1591,7 @@ fn scanRequest(
 fn occurrencesRequest(
     arena: Allocator,
     scratch: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     request: rpc.Request,
 ) !DispatchResult {
     if (!isKeyword(request.payload, "rpc/unit")) return failure(
@@ -1704,7 +1704,7 @@ fn leaseAcquireRequest(
     scratch: Allocator,
     io: Io,
     canonical_log: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
     payload: flat_log.Term,
 ) !DispatchResult {
     const fields = recordFields(arena, payload, "lease/acquire", 3) catch
@@ -1746,7 +1746,7 @@ fn leaseRenewRequest(
     scratch: Allocator,
     io: Io,
     canonical_log: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
     payload: flat_log.Term,
 ) !DispatchResult {
     const fields = recordFields(arena, payload, "lease/renew", 2) catch
@@ -1783,7 +1783,7 @@ fn leaseReleaseRequest(
     scratch: Allocator,
     io: Io,
     canonical_log: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
     payload: flat_log.Term,
 ) !DispatchResult {
     const fence = parseFence(arena, payload) catch
@@ -1814,7 +1814,7 @@ fn leaseCheckRequest(
     arena: Allocator,
     scratch: Allocator,
     io: Io,
-    state: *DaemonState,
+    state: *ServerState,
     payload: flat_log.Term,
 ) !DispatchResult {
     const fence = parseFence(arena, payload) catch
@@ -2247,7 +2247,7 @@ fn encodeRowKey(
 
 fn buildBaseRows(
     arena: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     snapshot: i64,
 ) ![]const QueryRow {
     var latest = std.StringHashMap(usize).init(arena);
@@ -2508,7 +2508,7 @@ fn groundHead(
 
 fn evaluateQuery(
     arena: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     query: ParsedQuery,
 ) ![]const QueryRow {
     const base = try buildBaseRows(arena, state, query.snapshot);
@@ -2714,7 +2714,7 @@ fn parseQueryCursor(
 fn queryRequest(
     arena: Allocator,
     scratch: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     request: rpc.Request,
 ) !DispatchResult {
     const query = parseQueryRequest(
@@ -2939,7 +2939,7 @@ fn parseBatchAction(arena: Allocator, value: flat_log.Term) !WriteAction {
 
 fn sameEffectiveKey(
     allocator: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     left: flat_log.Triple,
     right: flat_log.Triple,
 ) !bool {
@@ -2952,7 +2952,7 @@ fn sameEffectiveKey(
 
 fn effectiveEvent(
     allocator: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     pending: []const PendingOperation,
     triple: flat_log.Triple,
 ) !?EffectiveEvent {
@@ -2979,7 +2979,7 @@ fn effectiveEvent(
 
 fn subjectExists(
     allocator: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     pending: []const PendingOperation,
     subject: flat_log.Term,
 ) !bool {
@@ -3005,7 +3005,7 @@ fn cardinalityDeclaration(triple: flat_log.Triple) ?[]const u8 {
 fn projectedCardinalityCollapse(
     arena: Allocator,
     scratch: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     pending: []const PendingOperation,
     predicate: []const u8,
 ) !bool {
@@ -3046,7 +3046,7 @@ fn projectedCardinalityCollapse(
 fn prepareAction(
     arena: Allocator,
     scratch: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     pending: *std.ArrayList(PendingOperation),
     action: WriteAction,
 ) !PreparedAction {
@@ -3101,7 +3101,7 @@ fn prepareAction(
 
 fn actionOccurrences(
     arena: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     tx_seq: i64,
     pending_index: usize,
     pending_count: usize,
@@ -3131,7 +3131,7 @@ fn actionOccurrences(
 
 fn mutationResult(
     arena: Allocator,
-    state: *DaemonState,
+    state: *ServerState,
     prepared: []const PreparedAction,
     pending_count: usize,
     tx_seq: ?i64,
@@ -3170,7 +3170,7 @@ fn executeActions(
     scratch: Allocator,
     io: Io,
     canonical_log: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
     actions: []const WriteAction,
     fence: ?Fence,
 ) !DispatchResult {
@@ -3306,7 +3306,7 @@ fn writeRequest(
     scratch: Allocator,
     io: Io,
     canonical_log: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
     payload: flat_log.Term,
     operation: EventOperation,
 ) !DispatchResult {
@@ -3350,7 +3350,7 @@ fn batchRequest(
     scratch: Allocator,
     io: Io,
     canonical_log: []const u8,
-    state: *DaemonState,
+    state: *ServerState,
     payload: flat_log.Term,
 ) !DispatchResult {
     const fields = recordFields(arena, payload, "rpc/batch", 2) catch
@@ -3460,7 +3460,7 @@ test "closed list option and record shapes round trip" {
 test "occurrence is a direct coordinate operation proposition triple" {
     var environ = std.process.Environ.Map.init(std.testing.allocator);
     defer environ.deinit();
-    var state = try DaemonState.init(
+    var state = try ServerState.init(
         std.testing.allocator,
         &environ,
         "test-space",
