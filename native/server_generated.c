@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
@@ -109,11 +110,15 @@ struct fram_server_store {
   generated_store_generation *current;
   char *canonical_log_path;
   char *space_id;
-  int log_fd;
+  fram_server_host_v1 host;
   bool poisoned;
   size_t compaction_base_bytes;
   size_t compaction_base_generations;
 };
+
+typedef struct posix_storage {
+  int fd;
+} posix_storage;
 
 struct fram_server_request {
   generated_owner *owner;
@@ -317,9 +322,12 @@ static int generated_status(int64_t status, char *error,
   return FRAM_SERVER_FATAL;
 }
 
-static int realtime_milliseconds(int64_t *milliseconds_out, char *error,
-                                 size_t error_capacity) {
+static int posix_realtime_milliseconds(void *context,
+                                       int64_t *milliseconds_out, char *error,
+                                       size_t error_capacity) {
   struct timespec now;
+
+  (void)context;
 
   if (clock_gettime(CLOCK_REALTIME, &now) != 0 || now.tv_sec < (time_t)0 ||
       now.tv_nsec < 0 || now.tv_nsec >= 1000000000L ||
@@ -331,6 +339,15 @@ static int realtime_milliseconds(int64_t *milliseconds_out, char *error,
   *milliseconds_out =
       (int64_t)now.tv_sec * INT64_C(1000) + (int64_t)(now.tv_nsec / 1000000L);
   return FRAM_SERVER_OK;
+}
+
+static bool valid_host(const fram_server_host_v1 *host) {
+  return host != NULL && host->abi_version == FRAM_SERVER_HOST_ABI &&
+         host->struct_size >= (uint32_t)sizeof(*host) &&
+         host->clock_milliseconds != NULL && host->storage_size != NULL &&
+         host->storage_read != NULL && host->storage_truncate != NULL &&
+         host->storage_append != NULL && host->storage_sync != NULL &&
+         host->storage_close != NULL;
 }
 
 static int read_exact(int fd, uint8_t *destination, size_t length,
@@ -363,28 +380,149 @@ static int read_exact(int fd, uint8_t *destination, size_t length,
   return FRAM_SERVER_OK;
 }
 
-static int open_log(const char *path, int *fd_out, size_t *length_out,
-                    char *error, size_t error_capacity) {
+static int posix_storage_open(const char *path, posix_storage **storage_out,
+                              char *error, size_t error_capacity) {
   struct stat status;
-  int fd = open(path, O_RDWR | O_CLOEXEC);
-  size_t length;
+  posix_storage *storage = malloc(sizeof(*storage));
 
-  if (fd < 0) {
-    copy_error(error, error_capacity, "cannot open the canonical FRAMLOG");
-    return FRAM_SERVER_FATAL;
+  if (storage == NULL) {
+    copy_error(error, error_capacity,
+               "cannot allocate the POSIX FRAMLOG owner");
+    return FRAM_SERVER_OUT_OF_MEMORY;
   }
-  if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode) ||
-      status.st_size < 0 || (uintmax_t)status.st_size > (uintmax_t)SIZE_MAX ||
-      (uintmax_t)status.st_size > (uintmax_t)INT64_MAX) {
+  storage->fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+
+  if (storage->fd < 0) {
+    free(storage);
+    copy_error(error, error_capacity, "cannot open the canonical FRAMLOG");
+    return FRAM_SERVER_HOST_ERROR;
+  }
+  if (fstat(storage->fd, &status) != 0 || !S_ISREG(status.st_mode) ||
+      status.st_size < 0) {
     copy_error(error, error_capacity,
                "canonical FRAMLOG is not a readable regular file");
-    (void)close(fd);
-    return FRAM_SERVER_FATAL;
+    (void)close(storage->fd);
+    free(storage);
+    return FRAM_SERVER_HOST_ERROR;
   }
-  length = (size_t)status.st_size;
-  *fd_out = fd;
-  *length_out = length;
+  if (flock(storage->fd, LOCK_EX | LOCK_NB) != 0) {
+    copy_error(error, error_capacity,
+               "canonical FRAMLOG writer authority is unavailable");
+    (void)close(storage->fd);
+    free(storage);
+    return FRAM_SERVER_HOST_ERROR;
+  }
+  *storage_out = storage;
   return FRAM_SERVER_OK;
+}
+
+static int posix_storage_size(void *context, uint64_t *size_out, char *error,
+                              size_t error_capacity) {
+  posix_storage *storage = context;
+  struct stat status;
+
+  if (fstat(storage->fd, &status) != 0 || !S_ISREG(status.st_mode) ||
+      status.st_size < 0) {
+    copy_error(error, error_capacity,
+               "cannot inspect the canonical FRAMLOG");
+    return FRAM_SERVER_HOST_ERROR;
+  }
+  *size_out = (uint64_t)status.st_size;
+  return FRAM_SERVER_OK;
+}
+
+static int posix_storage_read(void *context, uint64_t offset,
+                              uint8_t *destination, size_t length, char *error,
+                              size_t error_capacity) {
+  posix_storage *storage = context;
+  size_t position = 0u;
+
+  if (offset > (uint64_t)INT64_MAX ||
+      length > (size_t)(INT64_MAX - (int64_t)offset)) {
+    copy_error(error, error_capacity,
+               "canonical FRAMLOG read exceeds the POSIX range");
+    return FRAM_SERVER_HOST_ERROR;
+  }
+  while (position < length) {
+    ssize_t count = pread(storage->fd, destination + position,
+                          length - position,
+                          (off_t)(offset + (uint64_t)position));
+
+    if (count > 0) {
+      position += (size_t)count;
+    } else if (count < 0 && errno == EINTR) {
+      continue;
+    } else {
+      copy_error(error, error_capacity,
+                 count == 0 ? "canonical FRAMLOG ended while reading"
+                            : "cannot read the canonical FRAMLOG");
+      return FRAM_SERVER_HOST_ERROR;
+    }
+  }
+  return FRAM_SERVER_OK;
+}
+
+static int posix_storage_truncate(void *context, uint64_t length, char *error,
+                                  size_t error_capacity) {
+  posix_storage *storage = context;
+  off_t offset = (off_t)length;
+
+  if ((uint64_t)offset != length || ftruncate(storage->fd, offset) != 0) {
+    copy_error(error, error_capacity,
+               "cannot repair the canonical FRAMLOG tail");
+    return FRAM_SERVER_HOST_ERROR;
+  }
+  return FRAM_SERVER_OK;
+}
+
+static int posix_storage_append(void *context, const uint8_t *bytes,
+                                size_t length, char *error,
+                                size_t error_capacity) {
+  posix_storage *storage = context;
+  size_t position = 0u;
+
+  if (lseek(storage->fd, (off_t)0, SEEK_END) < (off_t)0) {
+    copy_error(error, error_capacity, "cannot seek the canonical FRAMLOG");
+    return FRAM_SERVER_HOST_ERROR;
+  }
+  while (position < length) {
+    ssize_t count = write(storage->fd, bytes + position, length - position);
+
+    if (count > 0) {
+      position += (size_t)count;
+    } else if (count < 0 && errno == EINTR) {
+      continue;
+    } else {
+      copy_error(error, error_capacity,
+                 "cannot append the canonical FRAMLOG");
+      return FRAM_SERVER_HOST_ERROR;
+    }
+  }
+  return FRAM_SERVER_OK;
+}
+
+static int posix_storage_sync(void *context, char *error,
+                              size_t error_capacity) {
+  posix_storage *storage = context;
+
+  if (fsync(storage->fd) != 0) {
+    copy_error(error, error_capacity, "cannot sync the canonical FRAMLOG");
+    return FRAM_SERVER_HOST_ERROR;
+  }
+  return FRAM_SERVER_OK;
+}
+
+static int posix_storage_close(void *context, char *error,
+                               size_t error_capacity) {
+  posix_storage *storage = context;
+  int status = FRAM_SERVER_OK;
+
+  if (close(storage->fd) != 0) {
+    copy_error(error, error_capacity, "cannot close the canonical FRAMLOG");
+    status = FRAM_SERVER_HOST_ERROR;
+  }
+  free(storage);
+  return status;
 }
 
 static int vector_length(const native_vec *vector, size_t minimum,
@@ -407,25 +545,44 @@ static int vector_length(const native_vec *vector, size_t minimum,
   return FRAM_SERVER_OK;
 }
 
-static int write_vector(int fd, const native_vec *vector, size_t minimum,
-                        size_t maximum, bool peer_close_is_status,
-                        int write_failure_status,
-                        size_t *length_out, char *error,
-                        size_t error_capacity, const char *invalid_detail,
-                        const char *write_detail) {
+static int write_bytes(int fd, const uint8_t *bytes, size_t length,
+                       char *error, size_t error_capacity) {
+  size_t position = 0u;
+
+  while (position < length) {
+    ssize_t count = write(fd, bytes + position, length - position);
+
+    if (count > 0) {
+      position += (size_t)count;
+    } else if (count < 0 && errno == EINTR) {
+      continue;
+    } else if (count < 0 && (errno == EPIPE || errno == ECONNRESET)) {
+      return FRAM_SERVER_PEER_CLOSED;
+    } else {
+      copy_error(error, error_capacity,
+                 "cannot write the generated response frame");
+      return FRAM_SERVER_CLIENT_ERROR;
+    }
+  }
+  return FRAM_SERVER_OK;
+}
+
+static int append_log_vector(fram_server_store *store,
+                             const native_vec *vector, bool sync_after_write,
+                             char *error, size_t error_capacity) {
   uint8_t chunk[FRAM_SERVER_IO_CHUNK_BYTES];
   size_t length;
   size_t offset = 0u;
-  int status = vector_length(vector, minimum, maximum, &length, error,
-                             error_capacity, invalid_detail);
+  int status = vector_length(vector, 0u, SIZE_MAX, &length, error,
+                             error_capacity,
+                             "generated FRAMLOG append is not byte-valued");
 
-  if (status != FRAM_SERVER_OK) {
+  if (status != FRAM_SERVER_OK || length == 0u) {
     return status;
   }
   while (offset < length) {
     size_t count = length - offset;
     size_t index;
-    size_t written = 0u;
 
     if (count > sizeof(chunk)) {
       count = sizeof(chunk);
@@ -435,61 +592,25 @@ static int write_vector(int fd, const native_vec *vector, size_t minimum,
           vector, (int64_t)(offset + index), INT64_C(8));
 
       if (*value < INT64_C(0) || *value > INT64_C(255)) {
-        copy_error(error, error_capacity, invalid_detail);
+        copy_error(error, error_capacity,
+                   "generated FRAMLOG append is not byte-valued");
         return FRAM_SERVER_FATAL;
       }
       chunk[index] = (uint8_t)*value;
     }
-    while (written < count) {
-      ssize_t result = write(fd, chunk + written, count - written);
-
-      if (result > 0) {
-        written += (size_t)result;
-        continue;
-      }
-      if (result < 0 && errno == EINTR) {
-        continue;
-      }
-      if (peer_close_is_status && result < 0 &&
-          (errno == EPIPE || errno == ECONNRESET)) {
-        return FRAM_SERVER_PEER_CLOSED;
-      }
-      copy_error(error, error_capacity, write_detail);
-      return write_failure_status;
+    status = store->host.storage_append(store->host.context, chunk, count,
+                                        error, error_capacity);
+    if (status != FRAM_SERVER_OK) {
+      return status;
     }
     offset += count;
   }
-  if (length_out != NULL) {
-    *length_out = length;
-  }
-  return FRAM_SERVER_OK;
-}
-
-static int append_log_vector(fram_server_store *store,
-                             const native_vec *vector, bool sync_after_write,
-                             char *error, size_t error_capacity) {
-  size_t length;
-  int status = vector_length(vector, 0u, SIZE_MAX, &length, error,
-                             error_capacity,
-                             "generated FRAMLOG append is not byte-valued");
-
-  if (status != FRAM_SERVER_OK || length == 0u) {
-    return status;
-  }
-  if (lseek(store->log_fd, (off_t)0, SEEK_END) < (off_t)0) {
-    copy_error(error, error_capacity, "cannot seek the canonical FRAMLOG");
-    return FRAM_SERVER_FATAL;
-  }
-  status = write_vector(store->log_fd, vector, 0u, SIZE_MAX, false,
-                        FRAM_SERVER_FATAL, NULL, error, error_capacity,
-                        "generated FRAMLOG append is not byte-valued",
-                        "cannot append the canonical FRAMLOG");
-  if (status != FRAM_SERVER_OK) {
-    return status;
-  }
-  if (sync_after_write && fsync(store->log_fd) != 0) {
-    copy_error(error, error_capacity, "cannot sync the canonical FRAMLOG");
-    return FRAM_SERVER_FATAL;
+  if (sync_after_write) {
+    status = store->host.storage_sync(store->host.context, error,
+                                      error_capacity);
+    if (status != FRAM_SERVER_OK) {
+      return status;
+    }
   }
   return FRAM_SERVER_OK;
 }
@@ -497,8 +618,6 @@ static int append_log_vector(fram_server_store *store,
 static int repair_log_tail(fram_server_store *store,
                            size_t original_length, int64_t valid_length,
                            char *error, size_t error_capacity) {
-  off_t valid_offset;
-
   if (valid_length < INT64_C(0) ||
       (uint64_t)valid_length > (uint64_t)original_length) {
     copy_error(error, error_capacity,
@@ -508,14 +627,8 @@ static int repair_log_tail(fram_server_store *store,
   if ((size_t)valid_length == original_length) {
     return FRAM_SERVER_OK;
   }
-  valid_offset = (off_t)valid_length;
-  if ((int64_t)valid_offset != valid_length ||
-      ftruncate(store->log_fd, valid_offset) != 0) {
-    copy_error(error, error_capacity,
-               "cannot repair the canonical FRAMLOG tail");
-    return FRAM_SERVER_FATAL;
-  }
-  return FRAM_SERVER_OK;
+  return store->host.storage_truncate(
+      store->host.context, (uint64_t)valid_length, error, error_capacity);
 }
 
 static uint32_t frame_body_length(const uint8_t *header) {
@@ -572,14 +685,15 @@ static int read_frame(int fd, uint8_t **frame_out, size_t *length_out,
 }
 
 static int boot_generation_from_log(
-    int log_fd, const char *canonical_log_path, const char *space_id,
+    fram_server_store *store, const char *canonical_log_path,
+    const char *space_id,
     generated_store_generation **generation_out, size_t *log_length_out,
     char *error, size_t error_capacity) {
-  struct stat file_status;
   generated_owner *owner = NULL;
   generated_store_generation *generation = NULL;
   uint8_t *log_bytes = NULL;
   borrowed_byte_vector borrowed;
+  uint64_t host_log_length;
   size_t log_length;
   fram_server_store_boot_arg_0 generated_log_path;
   fram_server_store_boot_arg_1 generated_space_id;
@@ -588,19 +702,21 @@ static int boot_generation_from_log(
 
   *generation_out = NULL;
   memset(&borrowed, 0, sizeof(borrowed));
-  if (fstat(log_fd, &file_status) != 0 || !S_ISREG(file_status.st_mode) ||
-      file_status.st_size < 0 ||
-      (uintmax_t)file_status.st_size > (uintmax_t)SIZE_MAX ||
-      (uintmax_t)file_status.st_size > (uintmax_t)INT64_MAX ||
-      lseek(log_fd, (off_t)0, SEEK_SET) != (off_t)0) {
+  status = store->host.storage_size(store->host.context, &host_log_length,
+                                    error, error_capacity);
+  if (status != FRAM_SERVER_OK) {
+    return status;
+  }
+  if (host_log_length > (uint64_t)SIZE_MAX ||
+      host_log_length > (uint64_t)INT64_MAX) {
     copy_error(error, error_capacity,
-               "cannot inspect the canonical FRAMLOG for generated boot");
+               "canonical FRAMLOG exceeds the native address range");
     return FRAM_SERVER_FATAL;
   }
-  log_length = (size_t)file_status.st_size;
+  log_length = (size_t)host_log_length;
   owner = owner_create(error, error_capacity);
   if (owner == NULL) {
-    return FRAM_SERVER_FATAL;
+    return FRAM_SERVER_OUT_OF_MEMORY;
   }
   if (log_length != 0u) {
     log_bytes = malloc(log_length);
@@ -608,13 +724,12 @@ static int boot_generation_from_log(
   if (log_length != 0u && log_bytes == NULL) {
     copy_error(error, error_capacity,
                "cannot allocate the canonical FRAMLOG input");
+    status = FRAM_SERVER_OUT_OF_MEMORY;
     goto cleanup;
   }
-  status = read_exact(log_fd, log_bytes, log_length, false,
-                      FRAM_SERVER_FATAL,
-                      "canonical FRAMLOG ended while reading",
-                      "cannot read the canonical FRAMLOG", error,
-                      error_capacity);
+  status = store->host.storage_read(store->host.context, UINT64_C(0),
+                                    log_bytes, log_length, error,
+                                    error_capacity);
   if (status != FRAM_SERVER_OK) {
     goto cleanup;
   }
@@ -648,7 +763,7 @@ cleanup:
     if (generation != NULL) {
       generation_release(generation);
     }
-    return FRAM_SERVER_FATAL;
+    return status;
   }
   *generation_out = generation;
   *log_length_out = log_length;
@@ -671,7 +786,7 @@ static int compact_store(fram_server_store *store, char *error,
   size_t log_length;
   size_t append_length;
   int status = boot_generation_from_log(
-      store->log_fd, store->canonical_log_path, store->space_id, &replacement,
+      store, store->canonical_log_path, store->space_id, &replacement,
       &log_length, error, error_capacity);
 
   if (status != FRAM_SERVER_OK) {
@@ -713,35 +828,29 @@ uint32_t fram_server_generated_abi(void) {
   return (uint32_t)result;
 }
 
-int fram_server_store_boot(const char *canonical_log_path,
-                               const char *space_id,
-                               fram_server_store **store_out, char *error,
-                               size_t error_capacity) {
+int fram_server_store_boot_with_host(const char *canonical_log_path,
+                                     const char *space_id,
+                                     const fram_server_host_v1 *host,
+                                     fram_server_store **store_out,
+                                     char *error, size_t error_capacity) {
   fram_server_store *store = NULL;
   generated_store_generation *generation = NULL;
   size_t log_length;
-  int log_fd;
   size_t append_length;
   int status;
 
   clear_error(error, error_capacity);
-  if (store_out == NULL || canonical_log_path == NULL) {
+  if (store_out == NULL || canonical_log_path == NULL || !valid_host(host)) {
     copy_error(error, error_capacity,
-               "generated store boot requires a log path and output owner");
+               "generated store boot requires a log label, host, and output owner");
     return FRAM_SERVER_FATAL;
   }
   *store_out = NULL;
-  status = open_log(canonical_log_path, &log_fd, &log_length, error,
-                    error_capacity);
-  if (status != FRAM_SERVER_OK) {
-    return status;
-  }
   store = malloc(sizeof(*store));
   if (store == NULL) {
     copy_error(error, error_capacity,
                "cannot allocate the generated store wrapper");
-    (void)close(log_fd);
-    return FRAM_SERVER_FATAL;
+    return FRAM_SERVER_OUT_OF_MEMORY;
   }
   memset(store, 0, sizeof(*store));
   store->canonical_log_path =
@@ -749,13 +858,13 @@ int fram_server_store_boot(const char *canonical_log_path,
   store->space_id = duplicate_string(space_id != NULL ? space_id : "", error,
                                      error_capacity);
   if (store->canonical_log_path == NULL || store->space_id == NULL) {
-    status = FRAM_SERVER_FATAL;
+    status = FRAM_SERVER_OUT_OF_MEMORY;
     goto boot_failed;
   }
-  store->log_fd = log_fd;
+  store->host = *host;
   store->poisoned = false;
   status = boot_generation_from_log(
-      log_fd, store->canonical_log_path, store->space_id, &generation,
+      store, store->canonical_log_path, store->space_id, &generation,
       &log_length, error, error_capacity);
   if (status == FRAM_SERVER_OK) {
     store->current = generation;
@@ -772,9 +881,9 @@ int fram_server_store_boot(const char *canonical_log_path,
     status = append_log_vector(store, generation->result.field_4, false,
                                error, error_capacity);
   }
-  if (status == FRAM_SERVER_OK && fsync(store->log_fd) != 0) {
-    copy_error(error, error_capacity, "cannot sync the canonical FRAMLOG");
-    status = FRAM_SERVER_FATAL;
+  if (status == FRAM_SERVER_OK) {
+    status = store->host.storage_sync(store->host.context, error,
+                                      error_capacity);
   }
   if (status != FRAM_SERVER_OK) {
     goto boot_failed;
@@ -791,8 +900,48 @@ boot_failed:
   free(store->space_id);
   free(store->canonical_log_path);
   free(store);
-  (void)close(log_fd);
-  return FRAM_SERVER_FATAL;
+  return status;
+}
+
+int fram_server_store_boot(const char *canonical_log_path,
+                           const char *space_id,
+                           fram_server_store **store_out, char *error,
+                           size_t error_capacity) {
+  posix_storage *storage = NULL;
+  fram_server_host_v1 host;
+  char close_error[FRAM_SERVER_ERROR_CAPACITY];
+  int status;
+
+  clear_error(error, error_capacity);
+  if (store_out == NULL || canonical_log_path == NULL) {
+    copy_error(error, error_capacity,
+               "generated store boot requires a log path and output owner");
+    return FRAM_SERVER_FATAL;
+  }
+  *store_out = NULL;
+  status = posix_storage_open(canonical_log_path, &storage, error,
+                              error_capacity);
+  if (status != FRAM_SERVER_OK) {
+    return status;
+  }
+  host = (fram_server_host_v1){
+      .abi_version = FRAM_SERVER_HOST_ABI,
+      .struct_size = (uint32_t)sizeof(host),
+      .context = storage,
+      .clock_milliseconds = posix_realtime_milliseconds,
+      .storage_size = posix_storage_size,
+      .storage_read = posix_storage_read,
+      .storage_truncate = posix_storage_truncate,
+      .storage_append = posix_storage_append,
+      .storage_sync = posix_storage_sync,
+      .storage_close = posix_storage_close,
+  };
+  status = fram_server_store_boot_with_host(
+      canonical_log_path, space_id, &host, store_out, error, error_capacity);
+  if (status != FRAM_SERVER_OK) {
+    (void)posix_storage_close(storage, close_error, sizeof(close_error));
+  }
+  return status;
 }
 
 int fram_server_store_dispatch(fram_server_store *store,
@@ -825,7 +974,8 @@ int fram_server_store_dispatch(fram_server_store *store,
       return status;
     }
   }
-  status = realtime_milliseconds(&clock_milliseconds, error, error_capacity);
+  status = store->host.clock_milliseconds(
+      store->host.context, &clock_milliseconds, error, error_capacity);
   if (status != FRAM_SERVER_OK) {
     return status;
   }
@@ -835,7 +985,7 @@ int fram_server_store_dispatch(fram_server_store *store,
   if (response == NULL) {
     copy_error(error, error_capacity,
                "cannot allocate the generated response wrapper");
-    return FRAM_SERVER_FATAL;
+    return FRAM_SERVER_OUT_OF_MEMORY;
   }
   base_generation = store->current;
   owner_retain(request->owner);
@@ -890,15 +1040,16 @@ int fram_server_store_dispatch(fram_server_store *store,
     generation_release(response->base_generation);
     owner_release(response->scratch_owner);
     free(response);
-    return FRAM_SERVER_FATAL;
+    return status;
   }
   *response_out = response;
   return FRAM_SERVER_OK;
 }
 
 int fram_server_store_shutdown(fram_server_store *store, char *error,
-                                   size_t error_capacity) {
+                               size_t error_capacity) {
   fram_server_store_shutdown_return generated_result;
+  int close_status;
   int status;
 
   clear_error(error, error_capacity);
@@ -918,13 +1069,15 @@ int fram_server_store_shutdown(fram_server_store *store, char *error,
                "canonical FRAMLOG is poisoned after a durability failure");
     status = FRAM_SERVER_FATAL;
   }
-  if (fsync(store->log_fd) != 0) {
-    copy_error(error, error_capacity, "cannot sync the canonical FRAMLOG");
-    status = FRAM_SERVER_FATAL;
+  close_status = store->host.storage_sync(store->host.context, error,
+                                          error_capacity);
+  if (close_status != FRAM_SERVER_OK) {
+    status = close_status;
   }
-  if (close(store->log_fd) != 0) {
-    copy_error(error, error_capacity, "cannot close the canonical FRAMLOG");
-    status = FRAM_SERVER_FATAL;
+  close_status = store->host.storage_close(store->host.context, error,
+                                           error_capacity);
+  if (close_status != FRAM_SERVER_OK) {
+    status = close_status;
   }
   generation_release(store->current);
   free(store->space_id);
@@ -933,50 +1086,58 @@ int fram_server_store_shutdown(fram_server_store *store, char *error,
   return status;
 }
 
-int fram_server_codec_read_request(int client_fd,
-                                       fram_server_request **request_out,
-                                       char *error, size_t error_capacity) {
+int fram_server_codec_decode_request(const uint8_t *bytes, size_t length,
+                                     fram_server_request **request_out,
+                                     char *error, size_t error_capacity) {
   fram_server_request *request;
   generated_owner *owner;
-  uint8_t *frame;
-  size_t frame_length;
   borrowed_byte_vector borrowed;
+  uint32_t body_length;
   int status;
 
   clear_error(error, error_capacity);
-  if (request_out == NULL) {
+  if (request_out == NULL || (bytes == NULL && length != 0u)) {
     copy_error(error, error_capacity,
-               "generated request read requires an output owner");
+               "generated request decode requires bytes and an output owner");
     return FRAM_SERVER_FATAL;
   }
   *request_out = NULL;
-  status = read_frame(client_fd, &frame, &frame_length, error,
-                      error_capacity);
-  if (status != FRAM_SERVER_OK) {
-    return status;
+  if (length < FRAM_SERVER_FRAME_HEADER_BYTES) {
+    copy_error(error, error_capacity,
+               "generated request frame ended inside its header");
+    return FRAM_SERVER_CLIENT_ERROR;
+  }
+  body_length = frame_body_length(bytes);
+  if (body_length > FRAM_SERVER_FRAME_MAX_BODY_BYTES) {
+    copy_error(error, error_capacity,
+               "generated request frame exceeds the body limit");
+    return FRAM_SERVER_CLIENT_ERROR;
+  }
+  if (length != FRAM_SERVER_FRAME_HEADER_BYTES + (size_t)body_length) {
+    copy_error(error, error_capacity,
+               length < FRAM_SERVER_FRAME_HEADER_BYTES + (size_t)body_length
+                   ? "generated request frame ended inside its body"
+                   : "generated request frame has trailing bytes");
+    return FRAM_SERVER_CLIENT_ERROR;
   }
   owner = owner_create(error, error_capacity);
   if (owner == NULL) {
-    free(frame);
-    return FRAM_SERVER_FATAL;
+    return FRAM_SERVER_OUT_OF_MEMORY;
   }
   request = malloc(sizeof(*request));
   if (request == NULL) {
     copy_error(error, error_capacity,
                "cannot allocate the generated request wrapper");
-    free(frame);
     owner_release(owner);
-    return FRAM_SERVER_FATAL;
+    return FRAM_SERVER_OUT_OF_MEMORY;
   }
   request->owner = owner;
-  if (!borrowed_byte_vector_init(&borrowed, frame, frame_length, error,
+  if (!borrowed_byte_vector_init(&borrowed, bytes, length, error,
                                  error_capacity)) {
-    free(frame);
     owner_release(owner);
     free(request);
-    return FRAM_SERVER_FATAL;
+    return FRAM_SERVER_OUT_OF_MEMORY;
   }
-  free(frame);
   request->result = FRAM_SERVER_CALL_CODEC_READ_REQUEST(
       &owner->arena, &owner->capability, &borrowed.vector);
   borrowed_byte_vector_destroy(&borrowed);
@@ -994,22 +1155,28 @@ int fram_server_codec_read_request(int client_fd,
   return FRAM_SERVER_OK;
 }
 
-int fram_server_codec_write_response(
-    int client_fd, const fram_server_response *response, char *error,
-    size_t error_capacity) {
+int fram_server_codec_encode_response(const fram_server_response *response,
+                                      uint8_t **bytes_out,
+                                      size_t *length_out, char *error,
+                                      size_t error_capacity) {
   generated_owner *owner;
   fram_server_codec_write_response_return generated_result;
+  uint8_t *bytes;
+  size_t length;
+  size_t index;
   int status;
 
   clear_error(error, error_capacity);
-  if (response == NULL) {
+  if (response == NULL || bytes_out == NULL || length_out == NULL) {
     copy_error(error, error_capacity,
-               "generated response write requires an owned response");
+               "generated response encode requires owned input and output values");
     return FRAM_SERVER_FATAL;
   }
+  *bytes_out = NULL;
+  *length_out = 0u;
   owner = owner_create(error, error_capacity);
   if (owner == NULL) {
-    return FRAM_SERVER_FATAL;
+    return FRAM_SERVER_OUT_OF_MEMORY;
   }
   generated_result = FRAM_SERVER_CALL_CODEC_WRITE_RESPONSE(
       &owner->arena, &owner->capability, response->result);
@@ -1017,15 +1184,81 @@ int fram_server_codec_write_response(
                             error_capacity,
                             "generated response encode failed");
   if (status == FRAM_SERVER_OK) {
-    status = write_vector(
-        client_fd, generated_result.field_1,
-        FRAM_SERVER_FRAME_HEADER_BYTES,
-        FRAM_SERVER_FRAME_MAX_BYTES, true,
-        FRAM_SERVER_CLIENT_ERROR, NULL, error, error_capacity,
-        "generated response frame has an invalid byte representation",
-        "cannot write the generated response frame");
+    status = vector_length(
+        generated_result.field_1, FRAM_SERVER_FRAME_HEADER_BYTES,
+        FRAM_SERVER_FRAME_MAX_BYTES, &length, error, error_capacity,
+        "generated response frame has an invalid byte representation");
+  }
+  bytes = NULL;
+  if (status == FRAM_SERVER_OK) {
+    bytes = malloc(length);
+    if (bytes == NULL) {
+      copy_error(error, error_capacity,
+                 "cannot allocate the encoded response frame");
+      status = FRAM_SERVER_OUT_OF_MEMORY;
+    }
+  }
+  for (index = 0u; status == FRAM_SERVER_OK && index < length; index += 1u) {
+    const int64_t *value = native_vec_at(generated_result.field_1,
+                                         (int64_t)index, INT64_C(8));
+
+    if (*value < INT64_C(0) || *value > INT64_C(255)) {
+      copy_error(error, error_capacity,
+                 "generated response frame has an invalid byte representation");
+      status = FRAM_SERVER_FATAL;
+    } else {
+      bytes[index] = (uint8_t)*value;
+    }
   }
   owner_release(owner);
+  if (status != FRAM_SERVER_OK) {
+    free(bytes);
+    return status;
+  }
+  *bytes_out = bytes;
+  *length_out = length;
+  return FRAM_SERVER_OK;
+}
+
+void fram_server_codec_release_bytes(uint8_t *bytes) { free(bytes); }
+
+int fram_server_codec_read_request(int client_fd,
+                                   fram_server_request **request_out,
+                                   char *error, size_t error_capacity) {
+  uint8_t *frame;
+  size_t frame_length;
+  int status;
+
+  clear_error(error, error_capacity);
+  if (request_out == NULL) {
+    copy_error(error, error_capacity,
+               "generated request read requires an output owner");
+    return FRAM_SERVER_FATAL;
+  }
+  *request_out = NULL;
+  status = read_frame(client_fd, &frame, &frame_length, error,
+                      error_capacity);
+  if (status != FRAM_SERVER_OK) {
+    return status;
+  }
+  status = fram_server_codec_decode_request(
+      frame, frame_length, request_out, error, error_capacity);
+  free(frame);
+  return status;
+}
+
+int fram_server_codec_write_response(
+    int client_fd, const fram_server_response *response, char *error,
+    size_t error_capacity) {
+  uint8_t *bytes = NULL;
+  size_t length = 0u;
+  int status = fram_server_codec_encode_response(
+      response, &bytes, &length, error, error_capacity);
+
+  if (status == FRAM_SERVER_OK) {
+    status = write_bytes(client_fd, bytes, length, error, error_capacity);
+  }
+  fram_server_codec_release_bytes(bytes);
   return status;
 }
 

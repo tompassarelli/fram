@@ -11,30 +11,23 @@ die() {
 usage() {
   cat <<'USAGE'
 Usage:
-  fram-native-build --entry NS/NAME SOURCE.bgl...
   fram-native-build --host server [--adapter FILE] SOURCE.bgl...
+  fram-native-build --host embed [--adapter FILE] SOURCE.bgl...
 
 Prints the absolute immutable artifact directory on success.
-Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, and FRAM_NATIVE_CC as needed.
+Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, FRAM_NATIVE_CC, and
+FRAM_NATIVE_AR as needed.
 
-The server host defaults to native/server_generated.c beside this script.
-
-Consumer:
-  FRAM_NATIVE_ARTIFACT_DIR="$(fram-native-build --entry NS/NAME SOURCE.bgl...)"
+Native hosts default to native/server_generated.c beside this script. The
+embed host emits include/fram.h, lib/libfram.a, and lib/libfram.so.
 USAGE
 }
 
-entry=""
 host=""
 adapter=""
 sources=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --entry)
-      [[ $# -ge 2 && -z "$entry" ]] || die "--entry needs one NS/NAME"
-      entry="$2"
-      shift 2
-      ;;
     --host)
       [[ $# -ge 2 && -z "$host" ]] || die "--host needs one host name"
       host="$2"
@@ -58,16 +51,9 @@ while [[ $# -gt 0 ]]; do
     *) sources+=("$1"); shift ;;
   esac
 done
-entry="${entry:-${FRAM_NATIVE_ENTRY:-}}"
 case "$host" in
-  "")
-    [[ -z "$adapter" ]] || die "--adapter requires --host server"
-    [[ "$entry" == */* && "$entry" != */ && "$entry" != /* ]] ||
-      die "--entry must be a qualified NS/NAME"
-    ;;
-  server)
-    [[ -z "$entry" ]] || die "--entry and --host are mutually exclusive"
-    ;;
+  server|embed) ;;
+  "") die "--host must be server or embed" ;;
   *) die "unsupported host: $host" ;;
 esac
 [[ ${#sources[@]} -gt 0 ]] || die "provide the dependency-first source closure"
@@ -86,15 +72,25 @@ beagle="$(realpath "$beagle")"
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 host_source=""
 host_header=""
-if [[ "$host" == "server" ]]; then
-  host_source="$repo/native/server_host.c"
-  host_header="$repo/native/server_host.h"
+adapter_header=""
+if [[ "$host" == "server" || "$host" == "embed" ]]; then
+  if [[ "$host" == "server" ]]; then
+    host_source="$repo/native/server_host.c"
+    host_header="$repo/native/server_host.h"
+  else
+    host_source="$repo/native/fram_embed.c"
+    host_header="$repo/native/fram.h"
+    adapter_header="$repo/native/server_host.h"
+  fi
   adapter="${adapter:-$repo/native/server_generated.c}"
-  [[ -f "$host_source" ]] || die "server host source is unavailable: $host_source"
-  [[ -f "$host_header" ]] || die "server host header is unavailable: $host_header"
+  [[ -f "$host_source" ]] || die "$host host source is unavailable: $host_source"
+  [[ -f "$host_header" ]] || die "$host host header is unavailable: $host_header"
+  [[ -z "$adapter_header" || -f "$adapter_header" ]] ||
+    die "embed adapter header is unavailable: $adapter_header"
   [[ -f "$adapter" ]] || die "server generated adapter is unavailable: $adapter"
   host_source="$(realpath "$host_source")"
   host_header="$(realpath "$host_header")"
+  [[ -z "$adapter_header" ]] || adapter_header="$(realpath "$adapter_header")"
   adapter="$(realpath "$adapter")"
 fi
 
@@ -102,6 +98,13 @@ cc_candidate="${FRAM_NATIVE_CC:-${CC:-cc}}"
 cc="$(command -v "$cc_candidate" 2>/dev/null || true)"
 [[ -n "$cc" && -x "$cc" ]] || die "C17 compiler is not executable: $cc_candidate"
 cc="$(realpath "$cc")"
+ar=""
+if [[ "$host" == "embed" ]]; then
+  ar_candidate="${FRAM_NATIVE_AR:-ar}"
+  ar="$(command -v "$ar_candidate" 2>/dev/null || true)"
+  [[ -n "$ar" && -x "$ar" ]] || die "archive tool is not executable: $ar_candidate"
+  ar="$(realpath "$ar")"
+fi
 
 cache_root="${FRAM_NATIVE_CACHE:-${XDG_CACHE_HOME:-${home:+$home/.cache}}}"
 [[ -n "$cache_root" ]] || die "set FRAM_NATIVE_CACHE, XDG_CACHE_HOME, or HOME"
@@ -130,13 +133,11 @@ if [[ -n "$beagle_root" ]]; then
 else
   beagle_identity="file:$(sha256sum "$beagle" | sed 's/ .*//')"
 fi
-if [[ -x "$(dirname "$beagle")/beagle-native-exe" ]]; then
-  beagle_identity+=":native-exe-$(sha256sum "$(dirname "$beagle")/beagle-native-exe" | sed 's/ .*//')"
-fi
 if [[ -x "$(dirname "$beagle")/beagle-build-core" ]]; then
   beagle_identity+=":build-core-$(sha256sum "$(dirname "$beagle")/beagle-build-core" | sed 's/ .*//')"
 fi
 cc_identity="$cc:$($cc --version 2>&1 | sed -n '1p')"
+[[ -z "$ar" ]] || cc_identity+=":ar=$ar:$($ar --version 2>&1 | sed -n '1p')"
 builder_identity="$(sha256sum "${BASH_SOURCE[0]}" | sed 's/ .*//')"
 
 input_manifest=""
@@ -152,13 +153,17 @@ trap 'exit 143' TERM
 write_input_manifest() {
   local destination="$1" index source
   {
-    printf 'fram-native-build-input/v1\n%s\nhost=%s\nentry=%s\n%s\n%s\n' \
-      "$builder_identity" "$host" "$entry" "$beagle_identity" "$cc_identity"
+    printf 'fram-native-build-input/v1\n%s\nhost=%s\n%s\n%s\n' \
+      "$builder_identity" "$host" "$beagle_identity" "$cc_identity"
     if [[ -n "$host_source" ]]; then
       printf 'host-source %q %s\n' "$host_source" \
         "$(sha256sum "$host_source" | sed 's/ .*//')"
       printf 'host-header %q %s\n' "$host_header" \
         "$(sha256sum "$host_header" | sed 's/ .*//')"
+      if [[ -n "$adapter_header" ]]; then
+        printf 'adapter-header %q %s\n' "$adapter_header" \
+          "$(sha256sum "$adapter_header" | sed 's/ .*//')"
+      fi
       printf 'adapter %q %s\n' "$adapter" \
         "$(sha256sum "$adapter" | sed 's/ .*//')"
     fi
@@ -342,88 +347,83 @@ flock "$lock_fd"
 if [[ -e "$artifact_dir" ]]; then
   ready=""
   [[ ! -f "$artifact_dir/READY" ]] || ready="$(<"$artifact_dir/READY")"
-  [[ "$ready" == "fram-native-build/v1 $closure_hash" &&
-    -x "$artifact_dir/bin/fram-server-native" ]] ||
+  [[ "$ready" == "fram-native-build/v1 $closure_hash" ]] ||
     die "cache entry exists but is not READY: $artifact_dir"
+  if [[ "$host" == "embed" ]]; then
+    [[ -f "$artifact_dir/include/fram.h" &&
+      -f "$artifact_dir/lib/libfram.a" &&
+      -f "$artifact_dir/lib/libfram.so" ]] ||
+      die "embed cache entry omitted its public libraries: $artifact_dir"
+  else
+    [[ -x "$artifact_dir/bin/fram-server-native" ]] ||
+      die "native cache entry omitted its executable: $artifact_dir"
+  fi
   printf '%s\n' "$artifact_dir"
   exit 0
 fi
 
 stage="$(mktemp -d "$cache_root/.tmp/$closure_hash.XXXXXX")"
-mkdir -p "$stage/bin"
+mkdir -p "$stage/bin" "$stage/include" "$stage/lib"
 cp "$input_manifest" "$stage/input.manifest"
-if [[ -z "$host" ]]; then
-  if ! "$beagle" native-exe \
-      --out "$stage/bin/fram-server-native" \
-      --entry "$entry" \
-      --cc "$cc" \
-      --artifacts "$stage" \
-      "${normalized_sources[@]}" \
-      >"$stage/native-exe.log" 2>&1; then
-    sed -n '1,240p' "$stage/native-exe.log" >&2
-    die "beagle native-exe failed"
-  fi
-else
-  native_server_entries=(
-    fram.native-server/server-generated-abi
-    fram.native-server/server-store-boot!
-    fram.native-server/server-store-dispatch!
-    fram.native-server/server-store-shutdown
-    fram.native-server/server-codec-read-request!
-    fram.native-server/server-codec-write-response!
-    fram.native-server/server-codec-release-request
-    fram.native-server/server-codec-release-response
-  )
-  native_server_entry_args=()
-  for native_server_entry in "${native_server_entries[@]}"; do
-    native_server_entry_args+=(--entry "$native_server_entry")
-  done
-  c17_projection="$stage/materialize-c17"
-  qbe_projection="$stage/materialize-qbe"
-  mkdir -p "$c17_projection" "$qbe_projection"
-  if ! "$beagle" build --materializer c17 \
-      --out "$c17_projection" \
-      "${native_server_entry_args[@]}" \
-      -- \
-      "${normalized_sources[@]}" \
-      >"$stage/materialize-c17.log" 2>&1; then
-    sed -n '1,240p' "$stage/materialize-c17.log" >&2
-    die "beagle C17 materialization failed"
-  fi
-  if ! "$beagle" build --materializer qbe \
-      --out "$qbe_projection" \
-      "${native_server_entry_args[@]}" \
-      -- \
-      "${normalized_sources[@]}" \
-      >"$stage/materialize-qbe.log" 2>&1; then
-    sed -n '1,240p' "$stage/materialize-qbe.log" >&2
-    die "beagle QBE materialization failed"
-  fi
-  for projection in "$c17_projection" "$qbe_projection"; do
-    [[ -f "$projection/module.native-world" &&
-       -f "$projection/module.native-world.sha256" ]] ||
-      die "materializer omitted its sealed Native World: $projection"
-  done
-  cmp -s "$c17_projection/module.native-world.sha256" \
-    "$qbe_projection/module.native-world.sha256" ||
-    die "C17 and QBE materializers sealed different Native Worlds"
-  cmp -s "$c17_projection/module.native-world" \
-    "$qbe_projection/module.native-world" ||
-    die "C17 and QBE materializers emitted different sealed Native Worlds"
-  for artifact in source.facts module.native-world module.native-world.sha256 \
-      module_0.h module_0.c native_shim.h native_shim.c \
-      native_unicode15_data.h UNICODE-LICENSE.txt; do
-    [[ -f "$c17_projection/$artifact" ]] ||
-      die "C17 materializer omitted $artifact"
-    cp "$c17_projection/$artifact" "$stage/$artifact"
-  done
-  [[ -f "$qbe_projection/module_0.ssa" ]] ||
-    die "QBE materializer omitted module_0.ssa"
-  cp "$c17_projection/report.txt" "$stage/report.txt"
-  cp "$qbe_projection/report.txt" "$stage/report.qbe.txt"
-  cp "$qbe_projection/module_0.ssa" "$stage/module_0.ssa"
-  rm -rf "${c17_projection:?}" "${qbe_projection:?}"
+native_server_entries=(
+  fram.native-server/server-generated-abi
+  fram.native-server/server-store-boot!
+  fram.native-server/server-store-dispatch!
+  fram.native-server/server-store-shutdown
+  fram.native-server/server-codec-read-request!
+  fram.native-server/server-codec-write-response!
+  fram.native-server/server-codec-release-request
+  fram.native-server/server-codec-release-response
+)
+native_server_entry_args=()
+for native_server_entry in "${native_server_entries[@]}"; do
+  native_server_entry_args+=(--entry "$native_server_entry")
+done
+c17_projection="$stage/materialize-c17"
+qbe_projection="$stage/materialize-qbe"
+mkdir -p "$c17_projection" "$qbe_projection"
+if ! "$beagle" build --materializer c17 \
+    --out "$c17_projection" \
+    "${native_server_entry_args[@]}" \
+    -- \
+    "${normalized_sources[@]}" \
+    >"$stage/materialize-c17.log" 2>&1; then
+  sed -n '1,240p' "$stage/materialize-c17.log" >&2
+  die "beagle C17 materialization failed"
 fi
+if ! "$beagle" build --materializer qbe \
+    --out "$qbe_projection" \
+    "${native_server_entry_args[@]}" \
+    -- \
+    "${normalized_sources[@]}" \
+    >"$stage/materialize-qbe.log" 2>&1; then
+  sed -n '1,240p' "$stage/materialize-qbe.log" >&2
+  die "beagle QBE materialization failed"
+fi
+for projection in "$c17_projection" "$qbe_projection"; do
+  [[ -f "$projection/module.native-world" &&
+     -f "$projection/module.native-world.sha256" ]] ||
+    die "materializer omitted its sealed Native World: $projection"
+done
+cmp -s "$c17_projection/module.native-world.sha256" \
+  "$qbe_projection/module.native-world.sha256" ||
+  die "C17 and QBE materializers sealed different Native Worlds"
+cmp -s "$c17_projection/module.native-world" \
+  "$qbe_projection/module.native-world" ||
+  die "C17 and QBE materializers emitted different sealed Native Worlds"
+for artifact in source.facts module.native-world module.native-world.sha256 \
+    module_0.h module_0.c native_shim.h native_shim.c \
+    native_unicode15_data.h UNICODE-LICENSE.txt; do
+  [[ -f "$c17_projection/$artifact" ]] ||
+    die "C17 materializer omitted $artifact"
+  cp "$c17_projection/$artifact" "$stage/$artifact"
+done
+[[ -f "$qbe_projection/module_0.ssa" ]] ||
+  die "QBE materializer omitted module_0.ssa"
+cp "$c17_projection/report.txt" "$stage/report.txt"
+cp "$qbe_projection/report.txt" "$stage/report.qbe.txt"
+cp "$qbe_projection/module_0.ssa" "$stage/module_0.ssa"
+rm -rf "${c17_projection:?}" "${qbe_projection:?}"
 
 report="$stage/report.txt"
 validate_native_report() {
@@ -459,27 +459,17 @@ validate_native_report() {
     die "native report contains pending lowering work"
 }
 validate_native_report "$report" c17
-if [[ -n "$host" ]]; then
-  validate_native_report "$stage/report.qbe.txt" qbe
-fi
+validate_native_report "$stage/report.qbe.txt" qbe
 
-if [[ -z "$host" ]]; then
-  exe_report="$stage/native-exe.report.txt"
-  [[ -f "$exe_report" && "$(wc -l <"$exe_report")" == "2" ]] ||
-    die "native build omitted the two-line executable receipt"
-  [[ "$(grep -Fc "native-exe-entry PASS name=$entry " "$exe_report" || true)" == "1" ]] ||
-    die "native executable entry receipt does not match $entry"
-  [[ "$(grep -Fc "native-exe-c17 PASS compiler=$cc output=" "$exe_report" || true)" == "1" ]] ||
-    die "native executable C17 link receipt is invalid"
-else
-  [[ -f "$stage/native_shim.c" && -f "$stage/native_shim.h" ]] ||
-    die "C17 materializer omitted the native shim"
-  write_server_symbols "$report" "$stage/module_0.h" \
-    "$stage/server_symbols.h"
-  shopt -s nullglob
-  module_sources=("$stage"/module_*.c)
-  shopt -u nullglob
-  [[ ${#module_sources[@]} -gt 0 ]] || die "C17 materializer omitted module_*.c"
+[[ -f "$stage/native_shim.c" && -f "$stage/native_shim.h" ]] ||
+  die "C17 materializer omitted the native shim"
+write_server_symbols "$report" "$stage/module_0.h" \
+  "$stage/server_symbols.h"
+shopt -s nullglob
+module_sources=("$stage"/module_*.c)
+shopt -u nullglob
+[[ ${#module_sources[@]} -gt 0 ]] || die "C17 materializer omitted module_*.c"
+if [[ "$host" == "server" ]]; then
   if ! "$cc" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
       -I"$stage" -I"$(dirname "$host_header")" \
       "${module_sources[@]}" \
@@ -496,8 +486,54 @@ else
       "$cc" "$stage/bin/fram-server-native"
     printf 'native-host-abi PASS host=server exports=8\n'
   } >"$stage/native-host.report.txt"
+else
+  mkdir -p "$stage/objects"
+  embed_sources=("${module_sources[@]}" "$stage/native_shim.c" \
+    "$adapter" "$host_source")
+  embed_objects=()
+  for index in "${!embed_sources[@]}"; do
+    object="$stage/objects/$index.o"
+    if ! "$cc" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
+        -fPIC -fvisibility=hidden -DFRAM_BUILDING_SHARED \
+        -I"$stage" -I"$repo/native" -c "${embed_sources[$index]}" \
+        -o "$object" >>"$stage/native-host.log" 2>&1; then
+      sed -n '1,240p' "$stage/native-host.log" >&2
+      die "embed native object compilation failed"
+    fi
+    embed_objects+=("$object")
+  done
+  if ! "$ar" rcs "$stage/lib/libfram.a" "${embed_objects[@]}" \
+      >>"$stage/native-host.log" 2>&1 ||
+     ! "$cc" -shared -pthread "${embed_objects[@]}" \
+      -o "$stage/lib/libfram.so" >>"$stage/native-host.log" 2>&1; then
+    sed -n '1,240p' "$stage/native-host.log" >&2
+    die "embed native library link failed"
+  fi
+  cp "$host_header" "$stage/include/fram.h"
+  if command -v nm >/dev/null 2>&1; then
+    nm -D --defined-only "$stage/lib/libfram.so" \
+      | awk '{print $3}' | sed -n '/^fram_/p' | sort \
+      >"$stage/embed.exports"
+    printf '%s\n' fram_abi_version fram_buffer_release fram_close fram_open \
+      fram_query fram_snapshot fram_transact | sort >"$stage/embed.expected"
+    cmp -s "$stage/embed.expected" "$stage/embed.exports" ||
+      die "embed shared library exports do not match the public ABI"
+    rm -f "$stage/embed.expected"
+  fi
+  {
+    printf 'native-host-c17 PASS compiler=%s output=%s\n' \
+      "$cc" "$stage/lib/libfram.so"
+    printf 'native-host-static PASS archiver=%s output=%s\n' \
+      "$ar" "$stage/lib/libfram.a"
+    printf 'native-host-abi PASS host=embed exports=7 version=1\n'
+  } >"$stage/native-host.report.txt"
 fi
-[[ -x "$stage/bin/fram-server-native" ]] || die "native executable is missing"
+if [[ "$host" == "embed" ]]; then
+  [[ -f "$stage/include/fram.h" && -f "$stage/lib/libfram.a" &&
+    -f "$stage/lib/libfram.so" ]] || die "native embed libraries are missing"
+else
+  [[ -x "$stage/bin/fram-server-native" ]] || die "native executable is missing"
+fi
 
 after_manifest="$stage/input.after"
 write_input_manifest "$after_manifest"

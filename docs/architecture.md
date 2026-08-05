@@ -61,6 +61,42 @@ Graph-authoring and deployment controls are separate sealed services. The pinned
 v0.3 blue/green control protocol remains in [v0.3 writer handoff](v0.3-writer-handoff.md);
 it does not enlarge FRAMRPC.
 
+## Native embedding
+
+The Native World closure has two host shapes over the same eight generated
+engine hooks. The server host owns sockets and serves FRAMRPC. The embedding
+host publishes ABI v1 as `fram.h`, `libfram.a`, and `libfram.so`:
+
+```text
+fram_open -> opaque database handle
+fram_transact | fram_query | fram_snapshot
+          -> one canonical FRAMRPC v1 request slice
+          <- one canonical FRAMRPC v1 response buffer
+fram_close
+```
+
+The three call names express host intent; they all enter the same typed native
+dispatcher, which remains authoritative for operation validity. Protocol-level
+errors are therefore ordinary FRAMRPC responses. C-level errors cover invalid
+ownership, malformed frames, engine failures, host failures, and allocation
+failure. The caller releases every returned buffer with
+`fram_buffer_release`; fixed caller-owned `fram_error` storage never crosses an
+allocator boundary.
+
+`fram_open` either selects the built-in POSIX path or accepts a versioned host
+table. The table supplies allocation, a millisecond clock, exact storage reads,
+truncate, append, durability sync, and close. This keeps FRAMLOG recovery and
+commit semantics inside Fram while making the I/O capabilities replaceable by
+an embedding host. The built-in POSIX storage acquires writer authority on the
+FRAMLOG; a custom storage context must already be exclusive through its close.
+The ABI has no Graal isolate or managed-runtime lifecycle.
+
+Wasm does not require a second database API. A future component adapter can
+implement the same clock, storage, sync, and allocation capabilities as Wasm
+imports and map linear-memory slices onto ABI v1. Component bindings and a
+durable Worker/Durable Object storage adapter are separate materializer work;
+they are not part of the Linux library artifact.
+
 The engine has no tenant authorization. Loopback/private FRAMRPC, process, SpaceId, and log form a trust domain; authenticated TLS belongs at a gateway or sidecar. Bind, wire, deployment, and probe details are consolidated in [isolation and deployment](isolation-and-deployment.md).
 
 ## Executable contracts
@@ -68,6 +104,10 @@ The engine has no tenant authorization. Loopback/private FRAMRPC, process, Space
 - [`../database.clj`](../database.clj), [`../server.clj`](../server.clj), and [`../writer_authority.clj`](../writer_authority.clj): database lifetime, server entry, and writer authority.
 - `fram:src/fram/types.bgl`, `fram:src/fram/store.bgl`, `fram:src/commit_plan.bgl`, and `fram:src/snapshot_read.bgl`: recursive values, transactions, liveness, commit planning, and snapshot reads.
 - [`../src/framrpc.bclj`](../src/framrpc.bclj): FRAMRPC records and codec.
+- [`../native/fram.h`](../native/fram.h),
+  [`../native/fram_embed.c`](../native/fram_embed.c), and
+  [`../native/server_generated.c`](../native/server_generated.c): public native
+  embedding ABI, host capabilities, and the shared generated-engine adapter.
 - [`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj), [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj), and [`../tests/triple_log_migration_test.clj`](../tests/triple_log_migration_test.clj): kernel, boundary, and migration gates.
 
 Historical Worlds, claims, Codegraph, pull, rationale, and positioning documents in [`archive/`](archive/README.md) add no current primitives or operations.

@@ -12,7 +12,7 @@ fail() {
 }
 
 mkdir -p "$scratch/tool/bin" "$scratch/cache" "$scratch/sources"
-calls="$scratch/native-exe.calls"
+calls="$scratch/materializer.calls"
 : >"$calls"
 
 cat >"$scratch/tool/bin/beagle" <<'FAKE_BEAGLE'
@@ -222,64 +222,7 @@ C
   } >"$out/report.txt"
   exit 0
 fi
-[[ "$command" == "native-exe" ]] || exit 97
-out=""
-entry=""
-cc=""
-artifacts=""
-sources=()
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --out) out="$2"; shift 2 ;;
-    --entry) entry="$2"; shift 2 ;;
-    --cc) cc="$2"; shift 2 ;;
-    --artifacts) artifacts="$2"; shift 2 ;;
-    --) shift; sources+=("$@"); break ;;
-    *) sources+=("$1"); shift ;;
-  esac
-done
-printf '%s\n' "$entry" >>"$FAKE_NATIVE_CALLS"
-mkdir -p "$artifacts" "$(dirname "$out")"
-printf '%s\n' '/* fake module */' >"$artifacts/module_0.h"
-printf '%s\n' '/* fake module */' >"$artifacts/module_0.c"
-printf '%s\n' '/* fake shim */' >"$artifacts/native_shim.c"
-printf '%s\n' '/* fake shim */' >"$artifacts/native_shim.h"
-printf '%s\n' '/* fake entry */' >"$artifacts/native_entry.c"
-cat >"$artifacts/probe.c" <<'C'
-int main(void) { return 0; }
-C
-"$cc" -std=c17 -pedantic -Wall -Wextra -Werror \
-  "$artifacts/probe.c" -o "$out"
-
-bad=0
-slow=0
-for source in "${sources[@]}"; do
-  grep -Fq BAD_OBLIGATION "$source" && bad=1
-  grep -Fq SLOW_BUILD "$source" && slow=1
-done
-[[ "$slow" == 0 ]] || sleep 0.2
-{
-  printf '%s\n' \
-    'stage source-seal ACCEPTED' \
-    'stage source-to-typed ACCEPTED' \
-    'stage typed-to-native COMPLETE' \
-    'native-lowering-result NativeLoweringCompleteV0' \
-    'materialize-c17 OK module_0.h module_0.c'
-  printf 'obligation-projection %s valid-ssa\n' "$([[ "$bad" == 0 ]] && echo PASS || echo FAIL)"
-  printf '%s\n' \
-    'obligation-projection PASS exhaustive-matches' \
-    'obligation-projection PASS closed-layouts' \
-    'obligation-projection PASS checked-arithmetic' \
-    'obligation-projection PASS legal-abi' \
-    'obligation-projection PASS discharged-tokens' \
-    'obligation-projection PASS bounded-effects' \
-    'result PASS'
-} >"$artifacts/report.txt"
-{
-  printf 'native-exe-entry PASS name=%s symbol=native_m0_fn_0 return=Nil abi=pure\n' "$entry"
-  printf 'native-exe-c17 PASS compiler=%s output=%s\n' "$cc" "$out"
-} >"$artifacts/native-exe.report.txt"
-cat "$artifacts/native-exe.report.txt"
+exit 97
 FAKE_BEAGLE
 chmod +x "$scratch/tool/bin/beagle"
 
@@ -293,49 +236,12 @@ build_env=(
   FAKE_NATIVE_CALLS="$calls"
 )
 
-artifact="$("${build_env[@]}" "$builder" --entry demo.main/start \
-  "$scratch/sources/good.bgl")" || fail "initial build failed"
-[[ "$artifact" == "$scratch/cache/"* ]] || fail "builder did not print its cache artifact"
-[[ -f "$artifact/READY" && -x "$artifact/bin/fram-server-native" ]] ||
-  fail "promoted artifact is not ready and executable"
-"$artifact/bin/fram-server-native" || fail "linked native executable did not run"
-
-hit="$("${build_env[@]}" "$builder" --entry demo.main/start \
-  "$scratch/sources/good.bgl")" || fail "cache hit failed"
-[[ "$hit" == "$artifact" ]] || fail "identical closure missed the cache"
-[[ "$(wc -l <"$calls")" == "1" ]] || fail "cache hit rebuilt the artifact"
-
-printf '%s\n' '#lang beagle' '(ns demo.slow)' ';; SLOW_BUILD' \
-  '(defn start [] -> Nil nil)' >"$scratch/sources/slow.bgl"
-"${build_env[@]}" "$builder" --entry demo.slow/start \
-  "$scratch/sources/slow.bgl" >"$scratch/slow-a.out" &
-first_pid=$!
-"${build_env[@]}" "$builder" --entry demo.slow/start \
-  "$scratch/sources/slow.bgl" >"$scratch/slow-b.out" &
-second_pid=$!
-wait "$first_pid" || fail "first concurrent build failed"
-wait "$second_pid" || fail "second concurrent build failed"
-cmp -s "$scratch/slow-a.out" "$scratch/slow-b.out" ||
-  fail "concurrent builders observed different artifacts"
-[[ "$(wc -l <"$calls")" == "2" ]] || fail "per-closure lock allowed a duplicate build"
-
-printf '%s\n' '#lang beagle' '(ns demo.bad)' ';; BAD_OBLIGATION' \
-  '(defn start [] -> Nil nil)' >"$scratch/sources/bad.bgl"
-if "${build_env[@]}" "$builder" --entry demo.bad/start \
-    "$scratch/sources/bad.bgl" >"$scratch/bad.out" 2>"$scratch/bad.err"; then
-  fail "failed native obligation was promoted"
-fi
-grep -Fq 'obligation-projection PASS valid-ssa' "$scratch/bad.err" ||
-  fail "failed obligation did not name the exact missing gate"
-[[ "$(find "$scratch/cache" -mindepth 2 -maxdepth 2 -name READY | wc -l)" == "2" ]] ||
-  fail "a failed build exposed a READY artifact"
-[[ -z "$(find "$scratch/cache/.tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
-  fail "temporary artifacts survived the build"
-
 adapter="$scratch/sources/server_generated.c"
 cat >"$adapter" <<'C'
 #include "server_host.h"
 #include "server_symbols.h"
+
+#include <stdlib.h>
 
 static void clear_error(char *error, size_t capacity) {
   if (capacity > 0u) {
@@ -397,6 +303,19 @@ int fram_server_store_boot(const char *log_path,
   return FRAM_SERVER_FATAL;
 }
 
+int fram_server_store_boot_with_host(const char *log_path,
+                                     const char *space_id,
+                                     const fram_server_host_v1 *host,
+                                     fram_server_store **store_out,
+                                     char *error, size_t capacity) {
+  (void)log_path;
+  (void)space_id;
+  (void)host;
+  *store_out = NULL;
+  clear_error(error, capacity);
+  return FRAM_SERVER_FATAL;
+}
+
 int fram_server_store_dispatch(fram_server_store *store,
                                    const fram_server_request *request,
                                    fram_server_response **response_out,
@@ -426,6 +345,29 @@ int fram_server_codec_read_request(int fd,
   clear_error(error, capacity);
   return FRAM_SERVER_FATAL;
 }
+
+int fram_server_codec_decode_request(const uint8_t *bytes, size_t length,
+                                     fram_server_request **request_out,
+                                     char *error, size_t capacity) {
+  (void)bytes;
+  (void)length;
+  *request_out = NULL;
+  clear_error(error, capacity);
+  return FRAM_SERVER_FATAL;
+}
+
+int fram_server_codec_encode_response(const fram_server_response *response,
+                                      uint8_t **bytes_out,
+                                      size_t *length_out, char *error,
+                                      size_t capacity) {
+  (void)response;
+  *bytes_out = NULL;
+  *length_out = 0u;
+  clear_error(error, capacity);
+  return FRAM_SERVER_FATAL;
+}
+
+void fram_server_codec_release_bytes(uint8_t *bytes) { free(bytes); }
 
 int fram_server_codec_write_response(
     int fd,
@@ -514,6 +456,37 @@ host_hit="$("${build_env[@]}" "$builder" --host server \
 [[ "$(wc -l <"$calls")" == "$((calls_before_host + 2))" ]] ||
   fail "server host cache hit rebuilt a materializer projection"
 
+calls_before_embed="$(wc -l <"$calls")"
+embed_artifact="$("${build_env[@]}" "$builder" --host embed \
+  --adapter "$adapter" "$scratch/sources/good.bgl")" ||
+  fail "embed host build failed"
+[[ -f "$embed_artifact/READY" && -f "$embed_artifact/include/fram.h" &&
+  -f "$embed_artifact/lib/libfram.a" &&
+  -f "$embed_artifact/lib/libfram.so" ]] ||
+  fail "embed host artifact omitted its public libraries"
+grep -Fqx 'native-host-abi PASS host=embed exports=7 version=1' \
+  "$embed_artifact/native-host.report.txt" ||
+  fail "embed host artifact omitted its public ABI receipt"
+cat >"$scratch/embed-consumer.c" <<'C'
+#include <fram.h>
+int main(void) { return fram_abi_version() == FRAM_ABI_VERSION ? 0 : 1; }
+C
+"${CC:-cc}" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
+  -I"$embed_artifact/include" "$scratch/embed-consumer.c" \
+  "$embed_artifact/lib/libfram.a" -o "$scratch/embed-static"
+"$scratch/embed-static" || fail "static embed library did not run"
+"${CC:-cc}" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
+  -I"$embed_artifact/include" "$scratch/embed-consumer.c" \
+  -L"$embed_artifact/lib" -Wl,-rpath,"$embed_artifact/lib" -lfram \
+  -o "$scratch/embed-shared"
+"$scratch/embed-shared" || fail "shared embed library did not run"
+embed_hit="$("${build_env[@]}" "$builder" --host embed \
+  --adapter "$adapter" "$scratch/sources/good.bgl")" ||
+  fail "embed host cache hit failed"
+[[ "$embed_hit" == "$embed_artifact" ]] || fail "embed host missed the cache"
+[[ "$(wc -l <"$calls")" == "$((calls_before_embed + 2))" ]] ||
+  fail "embed host cache hit rebuilt a materializer projection"
+
 printf '%s\n' '#lang beagle' '(ns demo.missing-symbol)' \
   ';; MISSING_SERVER_SYMBOL' >"$scratch/sources/missing-symbol.bgl"
 if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
@@ -559,7 +532,7 @@ if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
 fi
 grep -Fq 'fram_server_codec_release_response' "$scratch/missing-export.err" ||
   fail "server host link did not name the missing ABI export"
-[[ "$(find "$scratch/cache" -mindepth 2 -maxdepth 2 -name READY | wc -l)" == "3" ]] ||
+[[ "$(find "$scratch/cache" -mindepth 2 -maxdepth 2 -name READY | wc -l)" == "2" ]] ||
   fail "failed server host link exposed a READY artifact"
 [[ -z "$(find "$scratch/cache/.tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
   fail "failed server host link left temporary artifacts"
