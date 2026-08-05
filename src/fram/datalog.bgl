@@ -175,8 +175,8 @@
 (defn record-query-evaluation-error!
   [context: QueryEvaluationContext
    error-value: QueryEvaluationError] -> Nil
-  (swap! (queryevaluationcontext-error context)
-         preserve-first-query-evaluation-error error-value)
+  (compare-and-set! (queryevaluationcontext-error context)
+                    no-query-evaluation-error error-value)
   nil)
 
 (defn query-evaluation-context-error
