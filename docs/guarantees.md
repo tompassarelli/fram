@@ -164,10 +164,14 @@ writes/s) must not be quoted for head. Remaining envelope work:
   writes/s at `dd4aff2` to 241.2 writes/s with group commit (one run per side;
   shared-host variance is not characterized). The seven read-only FRAMRPC
   operations stay entirely on pinned published roots;
-- overload behavior is **unspecified**: the head server currently has no
-  admission control (unbounded connection futures). Until bounded admission
-  lands, nothing can be promised about behavior at saturation — that is a
-  gap, stated as one;
+- connection admission is bounded. The managed/Graal server defaults to 32
+  running connections and 128 pending accepted connections; operators may set
+  `FRAM_CONNECTION_WORKERS` and `FRAM_CONNECTION_QUEUE` inside their validated
+  ceilings. A connection beyond that envelope is closed before request decode,
+  so saturation does not promise a FRAMRPC response. Shutdown stops admission,
+  cancels active reads, gives finite requests a bounded drain, and then closes
+  remaining transports. Existing concurrency gates cover admitted traffic;
+  saturation rejection itself has no dedicated gate;
 - W5 landed runtime telemetry and heap bounds. The observability floor still
   gates every envelope entry.
 
