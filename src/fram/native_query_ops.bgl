@@ -465,9 +465,10 @@
    served-version: Int
    page: t/RpcPageResponse?
    payload: t/Triple] -> t/RpcResponse
-  (t/->RpcResponse (t/rpcrequest-space request)
-                   (t/rpcrequest-op request)
-                   served-version page nil payload))
+  (let [payload-term: t/Term payload]
+    (t/->RpcResponse (t/rpcrequest-space request)
+                     (t/rpcrequest-op request)
+                     served-version page nil payload-term)))
 
 (defn error-response
   [request: t/RpcRequest
@@ -1168,9 +1169,11 @@
                   next-cursor: t/Term?
                   (if done
                     nil
-                    (rpc-query-cursor
-                     snapshot-version digest (inc ordinal)
-                     (nth selected (dec (count selected)))))]
+                    (let [cursor-term: t/Term
+                          (rpc-query-cursor
+                           snapshot-version digest (inc ordinal)
+                           (nth selected (dec (count selected))))]
+                      cursor-term))]
               (->PageResult
                (rpc-query-rows selected)
                (t/->RpcPageResponse ordinal next-cursor done)))))]))))
@@ -1209,10 +1212,12 @@
                   next-cursor: t/Term?
                   (if done
                     nil
-                    (rpc-query-cursor
-                     snapshot-version digest (inc ordinal)
-                     [(dec next-position)
-                      (nth selected (dec (count selected)))]))]
+                    (let [cursor-term: t/Term
+                          (rpc-query-cursor
+                           snapshot-version digest (inc ordinal)
+                           [(dec next-position)
+                            (nth selected (dec (count selected)))])]
+                      cursor-term))]
               (->PageResult
                (rpc-occurrences selected)
                (t/->RpcPageResponse ordinal next-cursor done)))))]))))
