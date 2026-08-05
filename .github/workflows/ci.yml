@@ -122,7 +122,7 @@ jobs:
             evidence_file=""
             evidence_regex=""
             case "$disposition" in
-              exclude|exclude-gate|aggregate-nix|aggregate-zig|baseline-bb|baseline-shell)
+              exclude|exclude-gate|aggregate-nix|baseline-bb|baseline-shell)
                 if [[ "$evidence" != *'#'* ]]; then
                   echo "$test_path: evidence must be file#regex" >&2
                   fail=1
@@ -139,7 +139,7 @@ jobs:
             esac
 
             case "$disposition" in
-              exclude|exclude-gate|aggregate-nix|aggregate-zig)
+              exclude|exclude-gate|aggregate-nix)
                 if ! rg -q -- "$evidence_regex" "$evidence_file"; then
                   echo "$test_path: evidence not found in $evidence_file: $evidence_regex" >&2
                   fail=1
@@ -206,7 +206,7 @@ jobs:
                   fi
                 fi
                 ;;
-              aggregate-nix|aggregate-zig)
+              aggregate-nix)
                 echo "== $test_path (current $class aggregate; toolchain-owned) =="
                 ;;
               exclude|exclude-gate)

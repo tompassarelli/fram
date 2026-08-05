@@ -77,7 +77,7 @@
          (= 2 fri/FMT)
          (= [2 0 0 0]
             (mapv #(bit-and (int %) 255) (subvec (vec bytes-one) 8 12))))]
-   ["TermCodecV1 bytes equal the committed JVM/Zig FRAMLOG golden"
+   ["TermCodecV1 bytes equal the committed FRAMLOG golden"
     (= framlog-golden-term-hex (hex (encode-term-v1! framlog-golden-term)))]
    ["TermCodecV1 rejects a truncated sized value"
     (= :invalid-fri-cache (error-type #(decode-term-v1! malformed-length)))]

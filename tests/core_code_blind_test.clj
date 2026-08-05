@@ -14,7 +14,8 @@
 ;;       "beagle-file" as QUOTED string literals it matches/dispatches on. Survives a
 ;;       reimplementation = genuine subject-matter coupling. THIS is the only leak we ban.
 ;;
-;; Falsifiable test for the ban-set: "would this token survive a reimplementation in Zig?"
+;; Falsifiable test for the ban-set: "would this token survive a reimplementation
+;; in another language?"
 ;;   `(defn f [..] ..)`            -> dissolves -> axis 1 -> NOT banned.
 ;;   `(contains? DEF-FORMS "defn")`-> survives  -> axis 2 -> BANNED.
 ;;

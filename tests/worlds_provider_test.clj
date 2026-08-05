@@ -141,7 +141,7 @@
 (commit-plan! term-store seal)
 
 (def build-spec
-  (t/triple (t/triple :tool "beagle" "zig")
+  (t/triple (t/triple :tool "beagle" "native")
             :target "x86_64-linux"))
 (def build-input (worlds/build-digest-input version build-spec))
 (def build-digest (sha256-term build-input))

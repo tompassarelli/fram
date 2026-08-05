@@ -33,9 +33,9 @@
 (check "has-whitespace? is false for a clean ref" (false? (kc/has-whitespace? "@a-b_c")))
 (check "has-whitespace? sees a space" (true? (kc/has-whitespace? "a b")))
 (check "has-whitespace? sees a newline" (true? (kc/has-whitespace? "a\nb")))
-;; Whitespace is the six ASCII bytes {9,10,11,12,13,32}, the set server's
-;; #"\s" and Zig's std.ascii.isWhitespace both already recognized. VT/FF spell
-;; as \uNNNN in the lowerable subset, the same form key-sep uses.
+;; Whitespace is the six ASCII bytes {9,10,11,12,13,32}, the set server's #"\s"
+;; already recognized. VT/FF spell as \uNNNN in the lowerable subset, the same
+;; form key-sep uses.
 (doseq [[label code] [["TAB" 9] ["LF" 10] ["VT" 11] ["FF" 12] ["CR" 13] ["space" 32]]]
   (check (str "has-whitespace? sees " label)
          (true? (kc/has-whitespace? (str "a" (char code) "b")))))

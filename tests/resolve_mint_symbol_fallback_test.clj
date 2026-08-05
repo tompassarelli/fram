@@ -39,12 +39,12 @@
   (rmi/->Emit ctx nil BOUND REFERS FIXED {} identity identity #{} #{}))
 (def emit-line (ns-resolve 'resolve-mint 'emit-line))
 
-(let [[leaf v-cid] (symbol! "zig/getenv")
+(let [[leaf v-cid] (symbol! "posix/getenv")
       external-target (node!)]
   (ri/assert! ctx leaf REFERS external-target)
   (ri/assert! ctx leaf QUALIFIER "must-not-prefix")
   (check! "unresolved external target preserves the quoted leaf spelling"
-          (str "[" (ri/ordinal ctx leaf) " \"v\" \"zig/getenv\"]")
+          (str "[" (ri/ordinal ctx leaf) " \"v\" \"posix/getenv\"]")
           (emit-line emit nil leaf v-cid)))
 
 (let [[leaf v-cid] (symbol! "old-name")

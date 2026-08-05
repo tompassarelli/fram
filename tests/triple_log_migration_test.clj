@@ -417,7 +417,8 @@
             #(database/migrate-legacy-flat-log! (.getPath fri-source)
                                              "bad-space" (.getPath fri-target)))))
 
-;; Cross-runtime golden owned jointly with src/zig/log.zig.
+;; Frozen FRAMLOG v1 on-disk golden; a writer change that moves these bytes is a
+;; format break, not a refactor.
 (def golden-triple (t/triple "Alice" :email "alice@example.com"))
 (def golden-write
   ((deref #'database/write-triple-log-temp!)
@@ -426,7 +427,7 @@
      :operations [{:ordinal 0 :action 1 :triple golden-triple}]}]))
 (def golden-hex
   "4652414d4c4f470001000000090000006d73612d73706163653c0000003207000000000000010000000000000001070105000000416c6963650605000000656d61696c0111000000616c696365406578616d706c652e636f6dd42d3294")
-(check! "JVM writer matches the Zig FRAMLOG v1 golden bytes"
+(check! "JVM writer matches the FRAMLOG v1 golden bytes"
         (= golden-hex
            (hex (java.nio.file.Files/readAllBytes (:path golden-write)))))
 (java.nio.file.Files/deleteIfExists (:path golden-write))

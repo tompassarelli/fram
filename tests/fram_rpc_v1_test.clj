@@ -62,7 +62,7 @@
     (check! "Term golden is consumed exactly" (zero? (.remaining buffer)))
     (t/termcodecdecoded-value decoded)))
 
-(def zig-four-frame-golden
+(def four-frame-golden
   (str
    "4652414d5250430001000000010077000000080706050403020101090000006d73612d737061636506050000007175657279012900000000000000011900000001070106000000637572736f720605000000616674657202070000000000000001dc050000070105000000416c6963650702d6ffffffffffffff03000000000000f83f08c059cc690000000015cd5b0705"
    "4652414d5250430001000000020096000000080706050403020101090000006d73612d7370616365060500000071756572792a00000000000000010200000001070106000000637572736f720605000000616674657202070000000000000000010608000000636f6e666c69637401010d00000076657273696f6e206d6f766564010401070105000000416c6963650702d6ffffffffffffff03000000000000f83f08c059cc690000000015cd5b0705"
@@ -101,13 +101,13 @@
       (first
        (keep-indexed
         (fn [index pair] (when (not= (first pair) (second pair)) index))
-        (map vector zig-four-frame-golden actual)))]
+        (map vector four-frame-golden actual)))]
   (check! (if mismatch
-            (str "JVM matches Zig four-frame golden; first mismatch " mismatch)
-            "JVM matches Zig four-frame golden byte-for-byte")
-          (= zig-four-frame-golden actual)))
+            (str "encoder matches the frozen four-frame golden; first mismatch " mismatch)
+            "encoder matches the frozen four-frame golden byte-for-byte")
+          (= four-frame-golden actual)))
 
-(check! "all four Zig frame kinds decode to their closed records"
+(check! "all four frame kinds decode to their closed records"
         (= frames (mapv wire/decode-rpc-frame-v1! encoded-frames)))
 (check! "cancel has a zero-byte body"
         (= 26 (alength ^bytes (nth encoded-frames 2))))

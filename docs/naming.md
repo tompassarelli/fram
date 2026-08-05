@@ -104,7 +104,7 @@ The deciding prior is boundary ownership: at that revision no in-scope family wa
 
 The thing is the three neutral positional addresses of `Triple := (Term, Term, Term)`. **t1**, **t2**, and **t3** follow 1-based tuple coordinates: projections π1/π2/π3, Prolog `arg(1,...)`, Erlang `element(1,...)`, RDF `rdf:_1`, and Scala `_1`; **t** comes directly from the kernel grammar, so t1 is the first Term.
 
-The names do not change the binary wire, where triples encode as positional tagged arrays. They apply consistently across the client API, engine, Zig implementation, generated output, tests, and documentation. `TripleRow` and the `SPO`/`POS`/`OSP` tries remain private storage mechanics, but their three coordinates use the same t1/t2/t3 vocabulary.
+The names do not change the binary wire, where triples encode as positional tagged arrays. They apply consistently across the client API, engine, generated output, tests, and documentation. `TripleRow` and the `SPO`/`POS`/`OSP` tries remain private storage mechanics, but their three coordinates use the same t1/t2/t3 vocabulary.
 
 Rejected bench:
 

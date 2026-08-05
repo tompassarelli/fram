@@ -50,12 +50,10 @@ run-shell	current-boundary	tests/fram_native_generated_adapter_smoke.sh	-
 run-shell	current-docs	tests/docs_semantics_ratchet.sh	-
 run-shell	current-boundary	tests/occurrence_native_ci_compare_test.sh	-
 run-shell	current-cache	tests/fri_golden.sh	-
-run-shell	current-boundary	tests/zig_rpc_source_ratchet.sh	-
+run-shell	current-model	tests/fri2_replay_oracle_test.sh	-
 run-node	current-cloudflare	tests/cloudflare_worker_client_test.mjs	-
 run-node	current-node-client	tests/node_framrpc_client_test.mjs	-
 aggregate-nix	package-closure	tests/package_server_smoke.sh	flake.nix#package_server_smoke
-aggregate-zig	zig-bootstrap	tests/zig_server_bootstrap_test.sh	build.zig#fram-server-zig
-aggregate-zig	zig-oracle	tests/zig_occ_oracle_test.sh	build.zig#fram-server-zig
 baseline-shell	vocab-residue	tests/vocab_ratchet_test.sh	tests/vocab_ratchet_test.sh#REGROWTH
 
 exclude-gate	removed-flat-cli	scripts/readme-check.sh	scripts/readme-check.sh#core.engine.loop

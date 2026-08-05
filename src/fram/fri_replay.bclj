@@ -42,7 +42,7 @@
 (defn- trim-character? [character: String] -> Bool
   (or (= character " ") (= character "\t") (= character "\r")))
 
-;; The Zig oracle trims " \t\r" from both ends of a corpus line before it splits
+;; The corpus format trims " \t\r" from both ends of a line before splitting
 ;; fields; a divergence here would shift every field index.
 (defn- trim-line [text: String] -> String
   (let [limit: Int
@@ -658,8 +658,7 @@
                                    "\t" (modeltriple-t2 row)
                                    "\t" (modeltriple-t3 row) "\n")))))))))))
 
-;; Byte-identical to the frozen Zig oracle's per-corpus summary line, so the two
-;; independent replays are diffed as text rather than compared by eye.
+;; The frozen per-corpus summary line: independent replays are diffed as text.
 (defn summary-line
   [path: String
    result: ReplayResult

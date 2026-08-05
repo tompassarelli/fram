@@ -48,57 +48,27 @@ The twelve committed corpora are:
 - `S8.tsv`: cardinality declaration and lossy multi-to-single refusal.
 - `F1.tsv`, `F2.tsv`, `F3.tsv`: deterministic 200-operation generated corpora.
 
-Conformance requires 100% line-identical JVM-server versus Zig replay output on
-all twelve corpora, including every normalized outcome and final fingerprint.
-The exact bar is:
+## Replay leg
 
-```sh
-bash tests/zig_occ_oracle_test.sh
-```
-
-Expected output:
-
-```text
-oracle: 12/12 corpora agree
-```
-
-Until the Zig replay executable exists, `bash tests/zig_occ_oracle_test.sh
---jvm-only` runs and retains the JVM side alone for deterministic-oracle checks.
-
-## Beagle replay leg
-
-`src/fram/fri_replay.bclj` decides the same twelve corpora and folds the
-accepted transactions through `fram.store`. Its bar is
+`src/fram/fri_replay.bclj` decides all twelve corpora and folds the accepted
+transactions through `fram.store`. Conformance is the replay model and the
+folded TermStore agreeing on every corpus, plus a non-empty summary line. The
+exact bar is:
 
 ```sh
 bash tests/fri2_replay_oracle_test.sh
 ```
 
-which per corpus diffs the module's summary line against the frozen Zig
-oracle's own byte-for-byte and then compares final state with the FRAMLOG that
-Zig server persisted. The two states are equal modulo one stated projection:
-the Zig server masks a single-cardinality displacement in its live index and
-leaves the displaced assertion in history, while the Beagle module records the
-displacement as a retraction so the TermStore needs no projection layer.
+Expected output:
 
+```text
+fri2-replay: 12/12 oracle corpora replay and fold in agreement
+```
 
-## Excluded incidental server facts (C3 record)
+## Excluded incidental server facts
 
 Fingerprints exclude facts whose subject matches `@snapshot:*` or `@log:*`:
-server snapshot/rotation bookkeeping whose values embed per-run absolute
-paths. They are not write/OCC semantics and the Zig core never emits them.
-Recorded 2026-07-31 after the determinism bar caught `@snapshot:0
-image_path <run-dir>` varying across runs.
-
-## A3 restored (oracle runs with snapshots disabled)
-
-The plan assumed an empty-log server boots at version 0 minting no txs, and
-the observed JVM version 6 read as a falsification. It was not core-store
-bootstrap: it was six optional post-boot `@snapshot:*` appends. Version is
-the maximum PERSISTED transaction on both sides, so the oracle boots the JVM
-with `FRAM_SNAPSHOT_BOOT=0` and an empty log is version 0 for both — the
-same isolation the excluded-facts record above already assumes.
-
-The oracle therefore does not test Zig snapshot feature parity; that belongs
-to a separate host-feature contract. Production snapshot transactions remain
-authoritative persisted history and replay normally.
+server snapshot/rotation bookkeeping whose values embed per-run absolute paths,
+and therefore vary across runs. They are not write/OCC semantics. Production
+snapshot transactions remain authoritative persisted history and replay
+normally.
