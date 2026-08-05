@@ -1,9 +1,9 @@
-;; coord.clj — authoritative TermStore v2 coordinator.
+;; database.clj — authoritative TermStore v2 database.
 ;;
 ;; This file deliberately depends only on the recursive-Term kernel. Schema,
 ;; query, pull, worlds, and codegraph remain downstream projections; none may
 ;; restore the removed fact-object store beneath this boundary.
-(ns coord
+(ns database
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [coord-daemon-wire :as wire]
@@ -440,12 +440,12 @@
     (.setLength file length)
     (.force (.getChannel file) true)))
 
-(defn open-coordinator!
+(defn open-database!
   "Open a FRAMLOG-backed TermStore. A passive reader reports a torn trailing
    frame and refuses later writes. An authority-holding caller may pass
    {:repair-torn? true}; only the last incomplete frame is truncated."
-  ([path] (open-coordinator! path nil {}))
-  ([path expected-space] (open-coordinator! path expected-space {}))
+  ([path] (open-database! path nil {}))
+  ([path expected-space] (open-database! path expected-space {}))
   ([path expected-space {:keys [repair-torn?] :or {repair-torn? false}}]
    (let [canonical (.getPath (.getCanonicalFile (java.io.File. (str path))))
          parsed (read-triple-log! canonical)
@@ -466,38 +466,38 @@
         :torn-tail (when-not repair-torn? (:torn-tail parsed))
         :recovered-tail (when repair-torn? (:torn-tail parsed))}))))
 
-(defn new-coordinator
-  "Create an in-memory authoritative coordinator for one immutable SpaceId."
+(defn new-database
+  "Create an in-memory authoritative database for one immutable SpaceId."
   [space-id]
   {:term-store (term-store/new-term-store space-id)
    :space-id space-id :log nil :lock (Object.)
    :mutation-state (atom {:status :ready})
    :torn-tail nil :recovered-tail nil})
 
-(defn coordinator-recovery-state [co]
-  @(:mutation-state co))
+(defn database-recovery-state [db]
+  @(:mutation-state db))
 
-(defn mutation-ready? [co]
-  (= :ready (:status (coordinator-recovery-state co))))
+(defn mutation-ready? [db]
+  (= :ready (:status (database-recovery-state db))))
 
-(defn require-mutation-ready! [co]
-  (let [{:keys [status] :as state} (coordinator-recovery-state co)]
+(defn require-mutation-ready! [db]
+  (let [{:keys [status] :as state} (database-recovery-state db)]
     (case status
       :ready true
       :recovery-required
       (fail! :recovery-required
-             "coordinator is fenced after a durability-ambiguous commit"
+             "database is fenced after a durability-ambiguous commit"
              {:recovery state})
       :corrupt
-      (fail! :coordinator-corrupt
-             "coordinator is permanently fenced because durable history is corrupt"
+      (fail! :database-corrupt
+             "database is permanently fenced because durable history is corrupt"
              {:recovery state})
-      (fail! :coordinator-state-invalid "coordinator mutation state is invalid"
+      (fail! :database-state-invalid "database mutation state is invalid"
              {:recovery state}))))
 
-(defn- require-readable! [co]
+(defn- require-readable! [db]
   (let [{:keys [status reconciled?] :as state}
-        (coordinator-recovery-state co)]
+        (database-recovery-state db)]
     (case status
       :ready true
       :recovery-required
@@ -507,40 +507,40 @@
                "durable history reconciliation has not completed"
                {:recovery state}))
       :corrupt
-      (fail! :coordinator-corrupt
+      (fail! :database-corrupt
              "durable history could not be reconciled"
              {:recovery state})
-      (fail! :coordinator-state-invalid "coordinator mutation state is invalid"
+      (fail! :database-state-invalid "database mutation state is invalid"
              {:recovery state}))))
 
-(defn coordinator-store [co]
-  (require-readable! co)
-  (:term-store co))
+(defn database-store [db]
+  (require-readable! db)
+  (:term-store db))
 
-(defn coordinator-space [co] (:space-id co))
+(defn database-space [db] (:space-id db))
 
 (defn store-view
-  "Read-only coordinator over an immutable TermStore root: every read accessor
+  "Read-only database over an immutable TermStore root: every read accessor
    below works against the pinned root instead of the live store."
-  [co root]
-  (assoc co :term-store (atom root)))
+  [db root]
+  (assoc db :term-store (atom root)))
 
-(defn current-transaction [co]
+(defn current-transaction [db]
   (t/transaction-coordinate
-   (coordinator-space co)
-   (term-store/current-sequence (coordinator-store co))))
+   (database-space db)
+   (term-store/current-sequence (database-store db))))
 
-(defn coordinator-status [co]
-  (locking (:lock co)
+(defn database-status [db]
+  (locking (:lock db)
     (let [{:keys [status reconciled?] :as recovery}
-          (coordinator-recovery-state co)
+          (database-recovery-state db)
           readable? (or (= :ready status)
                         (and (= :recovery-required status) reconciled?))
-          context (:term-store co)]
-      {:space-id (coordinator-space co)
+          context (:term-store db)]
+      {:space-id (database-space db)
        :version (when readable?
                   (t/transaction-coordinate
-                   (coordinator-space co)
+                   (database-space db)
                    (term-store/current-sequence context)))
        :transactions (when readable? (term-store/transaction-count context))
        :operations (when readable? (term-store/operation-count context))
@@ -553,23 +553,23 @@
   (let [now (java.time.Instant/now)]
     (t/instant (.getEpochSecond now) (.getNano now))))
 
-(defn- occurrence-events [co]
-  (term-store/operation-occurrences (coordinator-store co)))
+(defn- occurrence-events [db]
+  (term-store/operation-occurrences (database-store db)))
 
 ;; Ranged: the whole-history operation-occurrences scan costs O(all operations)
 ;; per commit, making a corpus fold O(n^2) in propositions.
-(defn- occurrence-events-range [co from to]
-  (let [store @(coordinator-store co)]
+(defn- occurrence-events-range [db from to]
+  (let [store @(database-store db)]
     (mapv (fn [position]
             (let [slots (term-store/occurrence-tuple-at store position)]
               (t/triple (nth slots 0) (nth slots 1) (nth slots 2))))
           (range from to))))
 
-(defn history [co]
-  (term-store/semantic-history (coordinator-store co)))
+(defn history [db]
+  (term-store/semantic-history (database-store db)))
 
-(defn occurrence [co coordinate]
-  (some #(when (= coordinate (kernel/occurrence-of %)) %) (occurrence-events co)))
+(defn occurrence [db coordinate]
+  (some #(when (= coordinate (kernel/occurrence-of %)) %) (occurrence-events db)))
 
 (defn- relation-proposition? [predicate value]
   (and (t/triple? value)
@@ -577,54 +577,54 @@
        (= predicate (t/triple-slot1 value))
        (t/occurrence-coordinate? (t/triple-slot2 value))))
 
-(defn supersession-triples [co]
+(defn supersession-triples [db]
   (filterv #(relation-proposition? :kernel/supersedes %)
-           (term-store/live-propositions (coordinator-store co))))
+           (term-store/live-propositions (database-store db))))
 
-(defn withdrawal-triples [co]
+(defn withdrawal-triples [db]
   (vec
    (distinct
     (concat
-     (term-store/withdrawal-triples (coordinator-store co))
+     (term-store/withdrawal-triples (database-store db))
      (filter #(relation-proposition? :kernel/withdraws %)
-             (term-store/live-propositions (coordinator-store co)))))))
+             (term-store/live-propositions (database-store db)))))))
 
 ;; Only the frame just appended can name the occurrence coordinates it minted,
 ;; so withdrawal-triples' store-wide live-proposition scan cannot match here.
-(defn- frame-withdrawal-triples [co frame-operations]
+(defn- frame-withdrawal-triples [db frame-operations]
   (vec
    (distinct
     (concat
-     (term-store/withdrawal-triples (coordinator-store co))
+     (term-store/withdrawal-triples (database-store db))
      (->> frame-operations
           (filter #(= t/assert-action (t/commitoperation-action %)))
           (map t/commitoperation-proposition)
           (filter #(relation-proposition? :kernel/withdraws %)))))))
 
-(defn- suppressed-occurrences [co]
+(defn- suppressed-occurrences [db]
   (into #{}
         (map t/triple-slot2)
-        (concat (supersession-triples co)
+        (concat (supersession-triples db)
                 (filter #(relation-proposition? :kernel/withdraws %)
                         (term-store/live-propositions
-                         (coordinator-store co))))))
+                         (database-store db))))))
 
-(defn live-occurrences [co]
-  (let [suppressed (suppressed-occurrences co)]
+(defn live-occurrences [db]
+  (let [suppressed (suppressed-occurrences db)]
     (filterv #(not (contains? suppressed (kernel/occurrence-of %)))
-             (term-store/live-occurrences (coordinator-store co)))))
+             (term-store/live-occurrences (database-store db)))))
 
-(defn live-propositions [co]
-  (mapv kernel/proposition-of (live-occurrences co)))
+(defn live-propositions [db]
+  (mapv kernel/proposition-of (live-occurrences db)))
 
-(defn- validate-base [co base]
+(defn- validate-base [db base]
   (when base
     (when-not (t/transaction-coordinate? base)
       (fail! :invalid-base "OCC base must be a transaction-coordinate Triple"
              {:base base}))
-    (when-not (= (coordinator-space co) (t/triple-slot0 base))
+    (when-not (= (database-space db) (t/triple-slot0 base))
       (fail! :space-mismatch "OCC base belongs to a different SpaceId"
-             {:base base :space-id (coordinator-space co)})))
+             {:base base :space-id (database-space db)})))
   base)
 
 (def ^:private occurrence-metadata-order
@@ -657,22 +657,22 @@
     (fail! :invalid-commit-operation "operation action must be :assert or :retract"
            {:operation operation}))))
 
-(defn- validate-occurrence-reference! [co coordinate field]
+(defn- validate-occurrence-reference! [db coordinate field]
   (when coordinate
     (when-not (t/occurrence-coordinate? coordinate)
       (fail! :invalid-occurrence-coordinate
              (str field " must be an occurrence-coordinate Triple")
              {field coordinate}))
     (let [tx (t/triple-slot0 coordinate)]
-      (when-not (= (coordinator-space co) (t/triple-slot0 tx))
+      (when-not (= (database-space db) (t/triple-slot0 tx))
         (fail! :space-mismatch "occurrence coordinate belongs to another SpaceId"
-               {field coordinate :space-id (coordinator-space co)})))
-    (when-not (occurrence co coordinate)
+               {field coordinate :space-id (database-space db)})))
+    (when-not (occurrence db coordinate)
       (fail! :unknown-occurrence "occurrence coordinate does not resolve"
              {field coordinate})))
   coordinate)
 
-(defn- metadata-operations [co tx-coordinate source-operations request]
+(defn- metadata-operations [db tx-coordinate source-operations request]
   (let [source-count (count source-operations)
         per-source
         (mapcat
@@ -686,8 +686,8 @@
                                                      canonical-term!)
                          :kernel/withdraws (:withdraws operation)
                          :kernel/supersedes (:supersedes operation)}]
-             (validate-occurrence-reference! co (:withdraws operation) :withdraws)
-             (validate-occurrence-reference! co (:supersedes operation) :supersedes)
+             (validate-occurrence-reference! db (:withdraws operation) :withdraws)
+             (validate-occurrence-reference! db (:supersedes operation) :supersedes)
              (when (and (:recorded-at operation)
                         (not (t/instant? (:recorded-at operation))))
                (fail! :invalid-instant
@@ -716,41 +716,41 @@
       (fail! :invalid-term "actor must be a Term" {:actor (:actor request)}))
     (vec (concat per-source tx-metadata))))
 
-(defn- append-and-replay! [co sequence operations]
+(defn- append-and-replay! [db sequence operations]
   (let [frame (term-store/transaction-frame sequence operations)
         serializable {:tx-seq sequence
                       :operations (mapv operation-map (range) operations)}]
     (if *deferred-frames*
       (swap! *deferred-frames* conj serializable)
-      (when-let [path (:log co)]
-        (append-frame-durable! path serializable (:deflate? co))))
-    (term-store/replay-transaction! (coordinator-store co) frame)))
+      (when-let [path (:log db)]
+        (append-frame-durable! path serializable (:deflate? db))))
+    (term-store/replay-transaction! (database-store db) frame)))
 
 (defn- throwable-code [error]
   (let [data (ex-data error)]
     (or (:fram/code data) (:type data) (:code data)
         (keyword (.getSimpleName (class error))))))
 
-(defn- fence-and-reconcile! [co before-store ^Throwable error]
+(defn- fence-and-reconcile! [db before-store ^Throwable error]
   ;; No caller may observe the pre-append version as writable while the log is
   ;; being resolved after a write whose durable outcome is unknown.
   (let [cause {:code (throwable-code error) :message (.getMessage error)}]
-    (reset! (:mutation-state co)
+    (reset! (:mutation-state db)
             {:status :recovery-required :reconciled? false :cause cause})
     (try
       (let [{:keys [context torn-tail valid-bytes source]}
-            (if-let [path (:log co)]
+            (if-let [path (:log db)]
               (let [parsed (read-triple-log! path)
                     space-id (:space-id parsed)
                     context (term-store/new-term-store space-id)]
-                (when-not (= (coordinator-space co) space-id)
+                (when-not (= (database-space db) space-id)
                   (fail! :space-mismatch
                          "durable history changed SpaceId during reconciliation"
-                         {:expected (coordinator-space co) :actual space-id}))
+                         {:expected (database-space db) :actual space-id}))
                 (replay-frames! context (:frames parsed))
                 {:context context :torn-tail (:torn-tail parsed)
                  :valid-bytes (:valid-bytes parsed) :source :durable-prefix})
-              (let [context (term-store/new-term-store (coordinator-space co))]
+              (let [context (term-store/new-term-store (database-space db))]
                 (reset! context before-store)
                 {:context context :torn-tail nil :valid-bytes nil
                  :source :memory-snapshot}))
@@ -760,11 +760,11 @@
                       :source source
                       :cause cause
                       :version (t/transaction-coordinate
-                                (coordinator-space co) sequence)
+                                (database-space db) sequence)
                       :torn-tail torn-tail
                       :valid-bytes valid-bytes}]
-        (reset! (:term-store co) @context)
-        (reset! (:mutation-state co) recovery)
+        (reset! (:term-store db) @context)
+        (reset! (:mutation-state db) recovery)
         recovery)
       (catch Throwable reconciliation-error
         (let [corruption {:status :corrupt
@@ -773,14 +773,14 @@
                           :corruption
                           {:code (throwable-code reconciliation-error)
                            :message (.getMessage reconciliation-error)}}]
-          (reset! (:mutation-state co) corruption)
+          (reset! (:mutation-state db) corruption)
           corruption)))))
 
 (defn- propagate-ambiguous-commit! [recovery error]
   (if (= :corrupt (:status recovery))
     (throw
      (ex-info "durable history is corrupt after a commit failure"
-              {:type :coordinator-corrupt :fram/code :coordinator-corrupt
+              {:type :database-corrupt :fram/code :database-corrupt
                :recovery recovery}
               error))
     (throw
@@ -793,61 +793,61 @@
   "Commit one ordered transaction. REQUEST contains :operations and may contain
    :base, :actor, and typed :recorded-at. The response exposes transaction and
    occurrence coordinates; no physical row handle is public."
-  [co {:keys [operations base] :as request}]
-  (locking (:lock co)
-    (require-mutation-ready! co)
-    (validate-base co base)
-    (let [current (current-transaction co)]
+  [db {:keys [operations base] :as request}]
+  (locking (:lock db)
+    (require-mutation-ready! db)
+    (validate-base db base)
+    (let [current (current-transaction db)]
       (if (and base (not= base current))
         {:reject :conflict :expected base :current current}
         (do
           (when-not (and (vector? operations) (seq operations))
             (fail! :invalid-transaction-frame
                    "transaction requires a nonempty operation vector" {}))
-          (when (:torn-tail co)
+          (when (:torn-tail db)
             (fail! :torn-tail-repair-required
                    "FRAMLOG has a torn trailing frame; writer authority must repair it"
-                   {:path (:log co) :torn-tail (:torn-tail co)}))
-          (let [context (coordinator-store co)
+                   {:path (:log db) :torn-tail (:torn-tail db)}))
+          (let [context (database-store db)
                 sequence (term-store/next-sequence context)
                 tx-coordinate (t/transaction-coordinate
-                               (coordinator-space co) sequence)
+                               (database-space db) sequence)
                 source-operations (mapv commit-operation! operations)
-                metadata (metadata-operations co tx-coordinate operations request)
+                metadata (metadata-operations db tx-coordinate operations request)
                 all-operations (into source-operations metadata)
                 before (term-store/operation-count context)
                 before-store @context]
             (try
-              (let [committed (append-and-replay! co sequence all-operations)
+              (let [committed (append-and-replay! db sequence all-operations)
                     events (occurrence-events-range
-                            co before (+ before (count source-operations)))
+                            db before (+ before (count source-operations)))
                     event-coordinates (into #{} (map kernel/occurrence-of) events)
                     withdrawals (filterv #(contains? event-coordinates
                                                       (t/triple-slot0 %))
                                          (frame-withdrawal-triples
-                                          co all-operations))]
+                                          db all-operations))]
                 {:ok committed
                  :occurrences events
                  :withdrawals withdrawals
                  :operation-count (count all-operations)})
               (catch Throwable error
                 (propagate-ambiguous-commit!
-                 (fence-and-reconcile! co before-store error)
+                 (fence-and-reconcile! db before-store error)
                  error)))))))))
 
 (defn commit-cohort!
   "Run mutation functions in FIFO order against a private store root, append
    every resulting FRAMLOG frame under one durability barrier, and publish the
    root atomically. Individual pre-append failures are returned without
-   aborting later functions; a barrier failure fences the whole coordinator."
-  [co mutation-functions]
-  (locking (:lock co)
-    (require-mutation-ready! co)
-    (let [context (coordinator-store co)
+   aborting later functions; a barrier failure fences the whole database."
+  [db mutation-functions]
+  (locking (:lock db)
+    (require-mutation-ready! db)
+    (let [context (database-store db)
           before-store @context
-          scratch (assoc co
+          scratch (assoc db
                          :term-store (atom before-store)
-                         :mutation-state (atom @(:mutation-state co)))
+                         :mutation-state (atom @(:mutation-state db)))
           frames (atom [])
           results
           (binding [*deferred-frames* frames]
@@ -856,39 +856,39 @@
                       (let [value (mutation scratch)]
                         {:value value
                          :version (term-store/current-sequence
-                                   (coordinator-store scratch))})
+                                   (database-store scratch))})
                       (catch Throwable error
                         {:error error
                          :version (term-store/current-sequence
-                                   (coordinator-store scratch))})))
+                                   (database-store scratch))})))
                   mutation-functions))]
       (if (empty? @frames)
         {:results results :frame-count 0 :root before-store
          :version (term-store/current-sequence context)}
         (try
-          (when-let [path (:log co)]
-            (append-frame-cohort-durable! path @frames (:deflate? co)))
-          (let [root @(coordinator-store scratch)]
+          (when-let [path (:log db)]
+            (append-frame-cohort-durable! path @frames (:deflate? db)))
+          (let [root @(database-store scratch)]
             (reset! context root)
             {:results results :frame-count (count @frames) :root root
              :version (term-store/current-sequence context)})
           (catch Throwable error
             (propagate-ambiguous-commit!
-             (fence-and-reconcile! co before-store error)
+             (fence-and-reconcile! db before-store error)
              error)))))))
 
 (defn assert!
-  ([co proposition] (assert! co proposition {}))
-  ([co proposition options]
-   (commit! co (assoc options :operations
+  ([db proposition] (assert! db proposition {}))
+  ([db proposition options]
+   (commit! db (assoc options :operations
                       [{:action :assert :proposition proposition
                         :supersedes (:supersedes options)
                         :source-frame (:source-frame options)}]))))
 
 (defn retract!
-  ([co proposition] (retract! co proposition {}))
-  ([co proposition options]
-   (commit! co (assoc options :operations
+  ([db proposition] (retract! db proposition {}))
+  ([db proposition options]
+   (commit! db (assoc options :operations
                       [{:action :retract :proposition proposition
                         :withdraws (:withdraws options)
                         :source-frame (:source-frame options)}]))))
@@ -897,10 +897,10 @@
   "Withdraw one exact currently-effective occurrence. TermStore's physical
    retraction targets the most recent equal live proposition; rejecting any
    other coordinate keeps the public target exact."
-  [co target options]
-  (locking (:lock co)
-    (let [event (occurrence co target)
-          effective (into #{} (map kernel/occurrence-of) (live-occurrences co))]
+  [db target options]
+  (locking (:lock db)
+    (let [event (occurrence db target)
+          effective (into #{} (map kernel/occurrence-of) (live-occurrences db))]
       (cond
         (nil? event) {:reject :unknown-occurrence :occurrence target}
         (not (kernel/assertion-occurrence? event))
@@ -911,34 +911,34 @@
         (let [proposition (kernel/proposition-of event)
               matching (filterv #(= proposition (kernel/proposition-of %))
                                 (term-store/live-occurrences
-                                 (coordinator-store co)))
+                                 (database-store db)))
               current (some-> matching peek kernel/occurrence-of)]
           (if (not= target current)
             {:reject :withdrawal-target-not-current
              :occurrence target :current current}
-            (retract! co proposition (assoc options :withdraws target))))))))
+            (retract! db proposition (assoc options :withdraws target))))))))
 
 (defn supersede!
   "Assert REPLACEMENT while relating its new occurrence to exact TARGET."
-  [co target replacement options]
-  (locking (:lock co)
-    (if-not (some #{target} (map kernel/occurrence-of (live-occurrences co)))
+  [db target replacement options]
+  (locking (:lock db)
+    (if-not (some #{target} (map kernel/occurrence-of (live-occurrences db)))
       {:reject :occurrence-not-live :occurrence target}
-      (assert! co replacement (assoc options :supersedes target)))))
+      (assert! db replacement (assoc options :supersedes target)))))
 
-(defn view-select! [co view target options]
-  (locking (:lock co)
-    (validate-occurrence-reference! co target :target)
+(defn view-select! [db view target options]
+  (locking (:lock db)
+    (validate-occurrence-reference! db target :target)
     (let [selection (t/triple view :kernel/selects target)]
-      (if (some #{selection} (live-propositions co))
+      (if (some #{selection} (live-propositions db))
         {:idempotent true :selection selection}
-        (assert! co selection options)))))
+        (assert! db selection options)))))
 
-(defn view-deselect! [co view target options]
-  (retract! co (t/triple view :kernel/selects target) options))
+(defn view-deselect! [db view target options]
+  (retract! db (t/triple view :kernel/selects target) options))
 
-(defn view-occurrences [co view]
-  (let [effective (live-occurrences co)
+(defn view-occurrences [db view]
+  (let [effective (live-occurrences db)
         by-coordinate (into {} (map (juxt kernel/occurrence-of identity)) effective)
         selected (for [event effective
                        :let [proposition (kernel/proposition-of event)]
@@ -965,24 +965,24 @@
        :occurrence (kernel/occurrence-of event)
        :proposition proposition})))
 
-(defn current-lease [co resource]
-  (some->> (live-occurrences co)
+(defn current-lease [db resource]
+  (some->> (live-occurrences db)
            (keep lease-record)
            (filter #(= resource (:resource %)))
            last))
 
-(defn acquire-lease! [co resource holder ttl-ms now-ms]
-  (locking (:lock co)
+(defn acquire-lease! [db resource holder ttl-ms now-ms]
+  (locking (:lock db)
     (when-not (and (t/term? resource) (t/term? holder)
                    (integer? ttl-ms) (pos? ttl-ms)
                    (integer? now-ms))
       (fail! :invalid-lease-request "lease requires Term resource/holder and positive ttl"
              {:resource resource :holder holder :ttl-ms ttl-ms :now-ms now-ms}))
-    (let [prior (current-lease co resource)]
+    (let [prior (current-lease db resource)]
       (if (and prior (> (:expires-ms prior) now-ms))
         {:reject :lease-held :holder (:holder prior)
          :epoch (:occurrence prior) :expires-ms (:expires-ms prior)}
-        (let [result (assert! co
+        (let [result (assert! db
                               (t/triple resource :kernel/lease
                                         (lease-value holder (+ now-ms ttl-ms)))
                               (cond-> {:actor holder}
@@ -991,14 +991,14 @@
           {:ok epoch :expires-ms (+ now-ms ttl-ms)
            :transaction (:ok result)})))))
 
-(defn renew-lease! [co resource holder epoch ttl-ms now-ms]
-  (locking (:lock co)
-    (let [prior (current-lease co resource)]
+(defn renew-lease! [db resource holder epoch ttl-ms now-ms]
+  (locking (:lock db)
+    (let [prior (current-lease db resource)]
       (if-not (and prior (= holder (:holder prior))
                    (= epoch (:occurrence prior))
                    (> (:expires-ms prior) now-ms))
         {:reject :lease-fence-mismatch :current prior}
-        (let [result (assert! co
+        (let [result (assert! db
                               (t/triple resource :kernel/lease
                                         (lease-value holder (+ now-ms ttl-ms)))
                               {:actor holder :supersedes epoch})
@@ -1006,18 +1006,18 @@
           {:ok next-epoch :expires-ms (+ now-ms ttl-ms)
            :transaction (:ok result)})))))
 
-(defn release-lease! [co resource holder epoch]
-  (locking (:lock co)
-    (let [prior (current-lease co resource)]
+(defn release-lease! [db resource holder epoch]
+  (locking (:lock db)
+    (let [prior (current-lease db resource)]
       (if-not (and prior (= holder (:holder prior)) (= epoch (:occurrence prior)))
         {:reject :lease-fence-mismatch :current prior}
-        (let [result (withdraw-occurrence! co epoch {:actor holder})]
+        (let [result (withdraw-occurrence! db epoch {:actor holder})]
           (if (:ok result)
             {:ok true :transaction (:ok result) :withdrawals (:withdrawals result)}
             result))))))
 
-(defn lease-fence-valid? [co resource holder epoch now-ms]
-  (let [lease (current-lease co resource)]
+(defn lease-fence-valid? [db resource holder epoch now-ms]
+  (let [lease (current-lease db resource)]
     (boolean (and lease (= holder (:holder lease))
                   (= epoch (:occurrence lease))
                   (> (:expires-ms lease) now-ms)))))

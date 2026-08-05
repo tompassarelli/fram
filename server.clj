@@ -1,9 +1,9 @@
-;; coord_daemon.clj — narrow TermStore v2 coordinator daemon.
+;; server.clj — narrow TermStore v2 database server.
 ;;
 ;; Run long-lived servers with `clojure -M`, never Babashka. This surface stays
 ;; deliberately small until schema/query/pull/world projections consume TermStore
 ;; directly; it never reconstructs the removed fact-object APIs.
-(ns coord-daemon
+(ns server
   (:require [clojure.java.io :as io]
             [coord-daemon-wire :as wire]
             [fram.datalog :as datalog]
@@ -20,30 +20,30 @@
            [java.time Instant]
            [java.util.concurrent LinkedBlockingQueue TimeUnit]))
 
-(load-file "coord.clj")
-(load-file "coord_writer_authority.clj")
+(load-file "database.clj")
+(load-file "writer_authority.clj")
 
-(def coordinator (atom nil))
-(def coordinator-role (atom nil))
+(def database (atom nil))
+(def server-role (atom nil))
 (def writer-authority (atom nil))
 (def listener (atom nil))
 (def stopping? (atom false))
 (def active-requests (atom {}))
 (def published-snapshot (atom nil))
-(def daemon-generation (atom 0))
-(def write-sequencer (atom nil))
-(def write-sequencer-stats
+(def server-generation (atom 0))
+(def commit-sequencer (atom nil))
+(def commit-sequencer-stats
   (atom {:cohorts 0 :frames 0 :barriers 0 :publications 0}))
-(def ^:private write-cohort-max-frames 32)
-(def ^:private write-cohort-max-bytes (* 1024 1024))
-(def ^:private write-cohort-max-wait-ns 1000000)
+(def ^:private commit-cohort-max-frames 32)
+(def ^:private commit-cohort-max-bytes (* 1024 1024))
+(def ^:private commit-cohort-max-wait-ns 1000000)
 (def ^:private query-page-snapshot-limit 4)
 (def ^:private query-page-snapshots (atom {:order [] :by-version {}}))
 (def ^:private query-result-version-limit 4)
 (def ^:private query-result-per-version-limit 8)
 (def ^:private query-result-byte-limit (* 64 1024 1024))
 (def query-archive-manifest (atom []))
-(def ^:private query-archive-coordinators (atom {}))
+(def ^:private query-archive-databases (atom {}))
 (def ^:private query-archive-magic
   (.getBytes "FRAMQAR1" java.nio.charset.StandardCharsets/UTF_8))
 (def ^:private text-index-version-limit 4)
@@ -74,11 +74,11 @@
 
 (def text-index-cache (atom (empty-text-index-cache 0)))
 
-(declare start-write-sequencer! stop-write-sequencer! sequence-mutation!
+(declare start-commit-sequencer! stop-commit-sequencer! sequence-commit!
          response-version read-query-archive-manifest!)
 
 ;; Request observability: the slow threshold is checked before the quiet gate,
-;; so a stalled request still leaves a trace under FRAM_DAEMON_QUIET.
+;; so a stalled request still leaves a trace under FRAM_SERVER_QUIET.
 
 (defn- env-string [name]
   (not-empty (System/getenv name)))
@@ -88,8 +88,8 @@
         (try (Long/parseLong (.trim ^String raw)) (catch Throwable _ nil)))
       fallback))
 
-(def request-log-path (env-string "FRAM_DAEMON_LOG"))
-(def request-log-quiet? (= "1" (System/getenv "FRAM_DAEMON_QUIET")))
+(def request-log-path (env-string "FRAM_SERVER_LOG"))
+(def request-log-quiet? (= "1" (System/getenv "FRAM_SERVER_QUIET")))
 (def slow-request-ms (env-long "FRAM_SLOW_MS" 1000))
 (def runtime-engine (atom :rpc/jvm))
 (def query-checkpoint-interval
@@ -108,7 +108,7 @@
                            (catch Throwable _ nil)))))))
 
 (defn- emit-log-line! [line]
-  ;; System/err rather than *err*: a daemon thread must not inherit whatever
+  ;; System/err rather than *err*: a server thread must not inherit whatever
   ;; dynamic binding happened to be live when the connection thread forked.
   (if-let [^Writer writer (request-log-sink)]
     (locking request-log-writer
@@ -124,9 +124,9 @@
     (reset! request-log-writer nil)))
 
 (defn record-request!
-  "Account one served request and log it. `elapsed-ns` covers daemon-side work
+  "Account one served request and log it. `elapsed-ns` covers server-side work
    only — decode to response-written — so client send time never reads as
-   coordinator latency."
+   database latency."
   [operation elapsed-ns outcome code response-bytes]
   (let [ms (quot (long elapsed-ns) 1000000)
         slow? (>= ms slow-request-ms)]
@@ -172,53 +172,53 @@
          [:rpc/assert :rpc/retract :rpc/batch :rpc/lease-acquire
           :rpc/lease-renew :rpc/lease-release]))
 
-(defn- daemon-fail! [code message data]
+(defn- server-fail! [code message data]
   (throw (ex-info message (assoc data :type code :fram/code code :code code))))
 
 (defn- canonical-path [path]
   (.getPath (.getCanonicalFile (io/file (str path)))))
 
 (defn writer-authority-status []
-  (when @coordinator
-    (let [physical (coord-writer-authority/status
-                    @coordinator-role @writer-authority (:log @coordinator))
+  (when @database
+    (let [physical (writer-authority/status
+                    @server-role @writer-authority (:log @database))
           lock-held (:write-authorized physical)
-          recovery (coord/coordinator-recovery-state @coordinator)]
+          recovery (database/database-recovery-state @database)]
       (assoc physical
              :lock-held lock-held
              :write-authorized (and lock-held
-                                    (coord/mutation-ready? @coordinator))
-             :coordinator-recovery recovery))))
+                                    (database/mutation-ready? @database))
+             :database-recovery recovery))))
 
 (defn- writer-lock-held? []
-  (boolean (and (= :active @coordinator-role)
-                (coord-writer-authority/held? @writer-authority))))
+  (boolean (and (= :active @server-role)
+                (writer-authority/held? @writer-authority))))
 
 (defn write-authorized? []
   (boolean (and (writer-lock-held?)
-                (coord/mutation-ready? @coordinator))))
+                (database/mutation-ready? @database))))
 
-(defn- snapshot-of [co]
-  (let [root @(coord/coordinator-store co)]
-    {:generation @daemon-generation
-     :space (coord/coordinator-space co)
+(defn- snapshot-of [db]
+  (let [root @(database/database-store db)]
+    {:generation @server-generation
+     :space (database/database-space db)
      :version (dec (t/termstore-next-sequence root))
      :root root}))
 
-(defn- publish-snapshot! [co]
-  (let [snapshot (snapshot-of co)]
+(defn- publish-snapshot! [db]
+  (let [snapshot (snapshot-of db)]
     (reset! published-snapshot snapshot)
     snapshot))
 
 (defn- drop-query-caches! []
   (reset! query-page-snapshots {:order [] :by-version {}})
   (reset! query-result-cache
-          (empty-query-result-cache @daemon-generation))
+          (empty-query-result-cache @server-generation))
   (reset! text-index-cache
-          (empty-text-index-cache @daemon-generation)))
+          (empty-text-index-cache @server-generation)))
 
-(defn- advance-daemon-generation! []
-  (swap! daemon-generation inc)
+(defn- advance-server-generation! []
+  (swap! server-generation inc)
   (drop-query-caches!))
 
 (defn shutdown! []
@@ -228,17 +228,17 @@
   (doseq [cancellation (vals @active-requests)]
     (reset! (:cancelled cancellation) true)
     (when-let [control @(:query-control cancellation)]
-      (datalog/cancel-query! control :daemon-shutdown)))
-  (stop-write-sequencer!)
+      (datalog/cancel-query! control :server-shutdown)))
+  (stop-commit-sequencer!)
   (reset! active-requests {})
   (drop-query-caches!)
   (reset! query-archive-manifest [])
-  (reset! query-archive-coordinators {})
+  (reset! query-archive-databases {})
   (reset! published-snapshot nil)
-  (coord-writer-authority/release! @writer-authority)
+  (writer-authority/release! @writer-authority)
   (reset! writer-authority nil)
-  (reset! coordinator nil)
-  (reset! coordinator-role nil)
+  (reset! database nil)
+  (reset! server-role nil)
   (reset! listener nil)
   (close-request-log!)
   nil)
@@ -247,80 +247,80 @@
   "Install one FRAMLOG generation. Active boot acquires lifetime writer
    authority before creation or torn-tail repair; standby boot stays read-only."
   ([path expected-space]
-   (boot! path expected-space (coord-writer-authority/role-from-env)))
+   (boot! path expected-space (writer-authority/server-role-from-env)))
   ([path expected-space role]
    (shutdown!)
    (reset! stopping? false)
    (let [canonical (canonical-path path)
          file (io/file canonical)
-         role (coord-writer-authority/role-from (name role))
+         role (writer-authority/server-role-from (name role))
          authority (when (= :active role)
-                     (coord-writer-authority/acquire! canonical))]
+                     (writer-authority/acquire! canonical))]
      (try
        (when-not (.exists file)
          (when-not expected-space
-           (daemon-fail! :space-id-required
+           (server-fail! :space-id-required
                          "new FRAMLOG generation requires an explicit SpaceId"
                          {:path canonical}))
-         (coord/create-triple-log! canonical expected-space))
-       (let [opened (coord/open-coordinator!
+         (database/create-triple-log! canonical expected-space))
+       (let [opened (database/open-database!
                      canonical expected-space {:repair-torn? (= :active role)})]
-         (advance-daemon-generation!)
-         (reset! coordinator opened)
+         (advance-server-generation!)
+         (reset! database opened)
          (read-query-archive-manifest! opened)
          (publish-snapshot! opened)
-         (reset! coordinator-role role)
+         (reset! server-role role)
          (reset! writer-authority authority)
          (when (= :active role)
-           (start-write-sequencer!))
+           (start-commit-sequencer!))
          opened)
        (catch Throwable error
-         (coord-writer-authority/release! authority)
+         (writer-authority/release! authority)
          (throw error))))))
 
 (defn- refresh-standby! []
-  (when (= :standby @coordinator-role)
-    (locking coordinator
-      (let [current @coordinator
-            opened (coord/open-coordinator! (:log current) (:space-id current))]
-        (advance-daemon-generation!)
-        (reset! coordinator opened)
+  (when (= :standby @server-role)
+    (locking database
+      (let [current @database
+            opened (database/open-database! (:log current) (:space-id current))]
+        (advance-server-generation!)
+        (reset! database opened)
         (publish-snapshot! opened)))))
 
 (defn native-op-disposition [operation]
   (if (contains? native-rpc-operations operation) :supported :unsupported))
 
-(defn- current-version [co]
-  (t/triple-slot2 (coord/current-transaction co)))
+(defn- current-version [db]
+  (t/triple-slot2 (database/current-transaction db)))
 
 (defn- require-term! [value label]
   (when-not (t/term? value)
-    (daemon-fail! :rpc-invalid-payload (str label " must be a Term") {}))
+    (server-fail! :rpc-invalid-payload (str label " must be a Term") {}))
   value)
 
 (defn- require-triple! [value label]
   (when-not (t/triple? value)
-    (daemon-fail! :rpc-invalid-payload (str label " must be a Triple") {}))
+    (server-fail! :rpc-invalid-payload (str label " must be a Triple") {}))
   value)
 
 (defn- require-keyword! [value label]
   (when-not (keyword? value)
-    (daemon-fail! :rpc-invalid-payload (str label " must be a Keyword") {}))
+    (server-fail! :rpc-invalid-payload (str label " must be a Keyword") {}))
   value)
 
 (defn- require-string! [value label]
   (when-not (string? value)
-    (daemon-fail! :rpc-invalid-payload (str label " must be a String") {}))
+    (server-fail! :rpc-invalid-payload (str label " must be a String") {}))
   value)
 
 (defn- require-int! [value label]
   (when-not (integer? value)
-    (daemon-fail! :rpc-invalid-payload (str label " must be an Int") {}))
+    (server-fail! :rpc-invalid-payload (str label " must be an Int") {}))
   value)
 
 (defn- require-bool! [value label]
   (when-not (boolean? value)
-    (daemon-fail! :rpc-invalid-payload (str label " must be a Bool") {}))
+    (server-fail! :rpc-invalid-payload (str label " must be a Bool") {}))
   value)
 
 (defn- record-fields! [value tag field-count]
@@ -334,24 +334,24 @@
 
 (defn- require-unit! [payload]
   (when-not (= wire/rpc-unit payload)
-    (daemon-fail! :rpc-invalid-payload "operation payload must be :rpc/unit" {})))
+    (server-fail! :rpc-invalid-payload "operation payload must be :rpc/unit" {})))
 
 (defn- cancelled! [cancellation]
   (when @(:cancelled cancellation)
-    (daemon-fail! :rpc/cancelled "request was cancelled before completion" {})))
+    (server-fail! :rpc/cancelled "request was cancelled before completion" {})))
 
 (defn- require-writer! []
   (when-not (writer-lock-held?)
-    (daemon-fail! :rpc/writer-authority-required
+    (server-fail! :rpc/writer-authority-required
                   "active writer authority is required" {}))
-  (coord/require-mutation-ready! @coordinator))
+  (database/require-mutation-ready! @database))
 
 (defn- require-version-expected! [version expected]
   (when (and (some? expected) (not= expected version))
-    (daemon-fail! :rpc/conflict "expected-version does not match current version" {})))
+    (server-fail! :rpc/conflict "expected-version does not match current version" {})))
 
-(defn- require-expected! [co expected]
-  (require-version-expected! (current-version co) expected))
+(defn- require-expected! [db expected]
+  (require-version-expected! (current-version db) expected))
 
 (defn- occurrence-epoch [coordinate]
   (t/triple-slot2 (t/triple-slot0 coordinate)))
@@ -367,37 +367,37 @@
      (require-term! holder "fence holder")
      (require-int! epoch "fence epoch")]))
 
-(defn- current-fence [co resource]
-  (when-let [lease (coord/current-lease co resource)]
+(defn- current-fence [db resource]
+  (when-let [lease (database/current-lease db resource)]
     [(:holder lease) (occurrence-epoch (:occurrence lease))
      (:occurrence lease) (:expires-ms lease)]))
 
-(defn- valid-fence? [co resource holder epoch now-ms]
+(defn- valid-fence? [db resource holder epoch now-ms]
   (when-let [[current-holder current-epoch _ expires-ms]
-             (current-fence co resource)]
+             (current-fence db resource)]
     (and (= holder current-holder) (= epoch current-epoch)
          (> expires-ms now-ms))))
 
-(defn- require-fence! [co fence]
+(defn- require-fence! [db fence]
   (when fence
     (let [[resource holder epoch] (parse-fence! fence)]
-      (when-not (valid-fence? co resource holder epoch
+      (when-not (valid-fence? db resource holder epoch
                               (System/currentTimeMillis))
-        (daemon-fail! :rpc/lease-fence-mismatch
+        (server-fail! :rpc/lease-fence-mismatch
                       "lease fence is not current and unexpired" {})))))
 
 (defn- parse-policy! [value]
   (require-keyword! value "subject policy")
   (when-not (or (= value wire/rpc-subject-any)
                 (= value wire/rpc-subject-existing))
-    (daemon-fail! :rpc-invalid-policy "subject policy is unsupported" {}))
+    (server-fail! :rpc-invalid-policy "subject policy is unsupported" {}))
   value)
 
 (defn- parse-action! [value]
   (let [[operation proposition policy] (record-fields! value :rpc/action 3)]
     (require-keyword! operation "action operation")
     (when-not (or (= operation :rpc/assert) (= operation :rpc/retract))
-      (daemon-fail! :rpc-invalid-action "action operation is unsupported" {}))
+      (server-fail! :rpc-invalid-action "action operation is unsupported" {}))
     [operation (require-triple! proposition "action proposition")
      (parse-policy! policy)]))
 
@@ -421,7 +421,7 @@
       (let [[operation proposition policy] (first remaining)]
         (when (and (= policy wire/rpc-subject-existing)
                    (not (subject-known? simulated proposition)))
-          (daemon-fail! :rpc/subject-not-found
+          (server-fail! :rpc/subject-not-found
                         "subject-existing policy requires a live slot0" {}))
         (if (= operation :rpc/assert)
           (recur (rest remaining) (inc index) (conj simulated proposition)
@@ -434,7 +434,7 @@
                      operations)
                    (conj decisions [index changed]))))))))
 
-(defn- prepare-actions-on-store! [co actions]
+(defn- prepare-actions-on-store! [db actions]
   (if (every? (fn [[operation _ policy]]
                 (and (= operation :rpc/assert)
                      (= policy wire/rpc-subject-any)))
@@ -443,23 +443,23 @@
              {:action :assert :proposition proposition})
            actions)
      (mapv (fn [index] [index true]) (range (count actions)))]
-    (prepare-actions! (coord/live-propositions co) actions)))
+    (prepare-actions! (database/live-propositions db) actions)))
 
-(defn- mutation-payload! [co request actions fence cancellation]
+(defn- mutation-payload! [db request actions fence cancellation]
   (let [expected (t/rpcrequest-expected-version request)]
     (require-writer!)
-    (require-expected! co expected)
-    (require-fence! co fence)
+    (require-expected! db expected)
+    (require-fence! db fence)
     (cancelled! cancellation)
-    (let [[operations decisions] (prepare-actions-on-store! co actions)
+    (let [[operations decisions] (prepare-actions-on-store! db actions)
           base (when (some? expected)
-                 (t/transaction-coordinate (coord/coordinator-space co) expected))
+                 (t/transaction-coordinate (database/database-space db) expected))
           committed
           (when (seq operations)
             (cancelled! cancellation)
-            (coord/commit! co {:base base :operations operations}))]
+            (database/commit! db {:base base :operations operations}))]
       (when (:reject committed)
-        (daemon-fail! :rpc/conflict "expected-version lost its commit race" {}))
+        (server-fail! :rpc/conflict "expected-version lost its commit race" {}))
       (loop [remaining decisions events (vec (:occurrences committed)) results []]
         (if (empty? remaining)
           (wire/rpc-mutation-result! results)
@@ -474,11 +474,11 @@
   (let [[proposition policy fence-option]
         (record-fields! (t/rpc-request-payload-value request) :rpc/write 3)
         [fence-present fence] (option-value! fence-option)]
-    (sequence-mutation!
+    (sequence-commit!
      request cancellation
-     (fn [co]
+     (fn [db]
        (mutation-payload!
-        co request [[operation (require-triple! proposition "write proposition")
+        db request [[operation (require-triple! proposition "write proposition")
                      (parse-policy! policy)]]
         (when fence-present (require-triple! fence "write fence")) cancellation)))))
 
@@ -488,12 +488,12 @@
         actions (mapv parse-action! (list-values! action-list))
         [fence-present fence] (option-value! fence-option)]
     (when (empty? actions)
-      (daemon-fail! :rpc-invalid-action "batch requires at least one action" {}))
-    (sequence-mutation!
+      (server-fail! :rpc-invalid-action "batch requires at least one action" {}))
+    (sequence-commit!
      request cancellation
-     (fn [co]
+     (fn [db]
        (mutation-payload!
-        co request actions
+        db request actions
         (when fence-present (require-triple! fence "batch fence"))
         cancellation)))))
 
@@ -509,8 +509,8 @@
                            proposition))))
            options)))
 
-(defn- operation-occurrences [co]
-  (filterv kernel/operation-occurrence? (coord/history co)))
+(defn- operation-occurrences [db]
+  (filterv kernel/operation-occurrence? (database/history db)))
 
 (defn- query-record-tag [value]
   (when (and (t/triple? value) (= :rpc/record (t/triple-slot2 value)))
@@ -526,7 +526,7 @@
     (let [[constant] (record-fields! value :query/const 1)]
       (datalog/constant (require-term! constant "query constant")))
 
-    (daemon-fail! :query-invalid-term
+    (server-fail! :query-invalid-term
                   "query term must be query/var or query/const" {})))
 
 (defn- parse-query-terms! [value]
@@ -553,7 +553,7 @@
           (record-fields! value :query/predicate 3)
           operation (require-keyword! operation "query predicate")]
       (when-not (contains? datalog/comparison-operators operation)
-        (daemon-fail! :query-invalid-predicate
+        (server-fail! :query-invalid-predicate
                       "query predicate operation is unsupported" {}))
       (datalog/comparison-literal
        operation [(parse-query-term! left) (parse-query-term! right)]))
@@ -563,12 +563,12 @@
           (record-fields! value :query/function 3)
           operation (require-keyword! operation "query function")]
       (when-not (contains? datalog/builtin-operators operation)
-        (daemon-fail! :query-invalid-function
+        (server-fail! :query-invalid-function
                       "query function operation is unsupported" {}))
       (datalog/builtin-literal operation (parse-query-terms! terms)
                                (require-string! binding "query function binding")))
 
-    (daemon-fail! :query-invalid-clause "query clause record is unsupported" {})))
+    (server-fail! :query-invalid-clause "query clause record is unsupported" {})))
 
 (defn- parse-query-rule! [value]
   (let [[head clauses] (record-fields! value :query/rule 2)
@@ -585,7 +585,7 @@
         operation (require-keyword! operation "query aggregate")
         [argument-present argument] (option-value! argument-option)]
     (when-not (contains? query/aggregate-operators operation)
-      (daemon-fail! :query-invalid-aggregate
+      (server-fail! :query-invalid-aggregate
                     "query aggregate operation is unsupported" {}))
     (query/aggregate-spec operation
                           (when argument-present
@@ -596,7 +596,7 @@
         (record-fields! value :query/having 3)
         comparison (require-keyword! comparison "having comparison")]
     (when-not (contains? datalog/comparison-operators comparison)
-      (daemon-fail! :query-invalid-having
+      (server-fail! :query-invalid-having
                     "having comparison operation is unsupported" {}))
     (query/having-clause comparison
                          (require-int! aggregate-index "having aggregate index")
@@ -618,7 +618,7 @@
        (mapv parse-query-aggregate! (list-values! aggregates))
        (mapv parse-query-having! (list-values! having))))
 
-    (daemon-fail! :query-invalid-find "query find record is unsupported" {})))
+    (server-fail! :query-invalid-find "query find record is unsupported" {})))
 
 (defn- parse-query-plan! [value]
   (let [[find strata] (record-fields! value :query/plan 2)
@@ -627,11 +627,11 @@
               (mapv parse-query-stratum! (list-values! strata)))
         errors (query/validate-plan plan)]
     (when-let [error (first errors)]
-      (daemon-fail! (query/error-code error) (query/error-message error) {}))
+      (server-fail! (query/error-code error) (query/error-message error) {}))
     plan))
 
-(defn- query-checkpoint-directory [co]
-  (when-let [log (:log co)]
+(defn- query-checkpoint-directory [db]
+  (when-let [log (:log db)]
     (io/file (str log ".query-checkpoints"))))
 
 (defn- query-checkpoint-version [^java.io.File file]
@@ -640,8 +640,8 @@
            second
            Long/parseLong))
 
-(defn- query-checkpoint-files [co upper-inclusive]
-  (if-let [directory (query-checkpoint-directory co)]
+(defn- query-checkpoint-files [db upper-inclusive]
+  (if-let [directory (query-checkpoint-directory db)]
     (->> (or (.listFiles directory) (make-array java.io.File 0))
          (keep (fn [file]
                  (when-let [version (query-checkpoint-version file)]
@@ -649,50 +649,50 @@
          (sort-by first >))
     []))
 
-(defn- query-checkpoint-source! [co version]
+(defn- query-checkpoint-source! [db version]
   (let [{:keys [space-id fingerprint valid-bytes sequence]}
-        (coord/triple-log-prefix-source! (:log co) version)]
+        (database/triple-log-prefix-source! (:log db) version)]
     {:binding (fri/source-binding space-id fingerprint valid-bytes)
      :sequence sequence}))
 
-(defn- load-query-checkpoint-root! [co upper-inclusive]
+(defn- load-query-checkpoint-root! [db upper-inclusive]
   (some
    (fn [[version file]]
      (try
        (let [{:keys [binding sequence]}
-             (query-checkpoint-source! co version)
+             (query-checkpoint-source! db version)
              image (fri/open-fri! (.getPath ^java.io.File file) binding)
-             context (term-store/new-term-store (coord/coordinator-space co))]
+             context (term-store/new-term-store (database/database-space db))]
          (fri/restore-store! image context)
          (let [root @context]
            (when (= sequence (dec (t/termstore-next-sequence root))) root)))
        (catch Throwable _ nil)))
-   (query-checkpoint-files co upper-inclusive)))
+   (query-checkpoint-files db upper-inclusive)))
 
-(defn- prune-query-checkpoints! [co]
+(defn- prune-query-checkpoints! [db]
   (doseq [[_ file] (drop query-page-snapshot-limit
-                         (query-checkpoint-files co Long/MAX_VALUE))]
+                         (query-checkpoint-files db Long/MAX_VALUE))]
     (try (.delete ^java.io.File file) (catch Throwable _ nil))))
 
-(defn- write-query-checkpoint! [co version root]
-  (when (and (:log co)
+(defn- write-query-checkpoint! [db version root]
+  (when (and (:log db)
              (pos? version)
              (zero? (mod version query-checkpoint-interval)))
     (try
-      (let [directory (query-checkpoint-directory co)
+      (let [directory (query-checkpoint-directory db)
             _ (.mkdirs ^java.io.File directory)
             path (.getPath (io/file directory (str "snapshot-" version ".fri")))
-            {:keys [binding]} (query-checkpoint-source! co version)]
+            {:keys [binding]} (query-checkpoint-source! db version)]
         (fri/write-fri! (term-store/dump-term-store (atom root)) path binding)
-        (prune-query-checkpoints! co))
+        (prune-query-checkpoints! db))
       (catch Throwable _ nil)))
   root)
 
-(defn- query-archive-directory [co]
-  (io/file (str (:log co) ".query-archives")))
+(defn- query-archive-directory [db]
+  (io/file (str (:log db) ".query-archives")))
 
-(defn- query-archive-manifest-file [co]
-  (io/file (query-archive-directory co) "ranges.v1"))
+(defn- query-archive-manifest-file [db]
+  (io/file (query-archive-directory db) "ranges.v1"))
 
 (defn- write-archive-text! [^java.io.DataOutputStream output value]
   (let [bytes (.getBytes (str value) java.nio.charset.StandardCharsets/UTF_8)]
@@ -708,10 +708,10 @@
       (.readFully input bytes)
       (String. bytes java.nio.charset.StandardCharsets/UTF_8))))
 
-(defn- write-query-archive-manifest! [co entries]
-  (let [directory (query-archive-directory co)
+(defn- write-query-archive-manifest! [db entries]
+  (let [directory (query-archive-directory db)
         _ (.mkdirs ^java.io.File directory)
-        target (query-archive-manifest-file co)
+        target (query-archive-manifest-file db)
         temporary (io/file directory "ranges.v1.tmp")]
     (with-open [file-output (java.io.FileOutputStream. temporary)
                 output (java.io.DataOutputStream.
@@ -734,8 +734,8 @@
     (reset! query-archive-manifest entries)
     entries))
 
-(defn- read-query-archive-manifest! [co]
-  (let [file (query-archive-manifest-file co)]
+(defn- read-query-archive-manifest! [db]
+  (let [file (query-archive-manifest-file db)]
     (if-not (.isFile file)
       (reset! query-archive-manifest [])
       (with-open [input (java.io.DataInputStream.
@@ -746,7 +746,7 @@
               count-value (.readInt input)]
           (when (or (not (java.util.Arrays/equals magic query-archive-magic))
                     (neg? count-value) (> count-value 100000))
-            (daemon-fail! :query/archive-unavailable
+            (server-fail! :query/archive-unavailable
                           "query archive range manifest is invalid" {}))
           (reset!
            query-archive-manifest
@@ -761,19 +761,19 @@
 (defn seal-query-epoch!
   "Seal a canonical inclusive prefix and publish its range before cache GC."
   [upper-inclusive]
-  (let [co @coordinator
-        head (current-version co)]
+  (let [db @database
+        head (current-version db)]
     (when (or (neg? upper-inclusive) (> upper-inclusive head))
-      (daemon-fail! :query-invalid-snapshot
+      (server-fail! :query-invalid-snapshot
                     "query epoch cut is outside available history" {}))
     (let [{:keys [valid-bytes fingerprint]}
-          (coord/triple-log-prefix-source! (:log co) upper-inclusive)
-          directory (query-archive-directory co)
+          (database/triple-log-prefix-source! (:log db) upper-inclusive)
+          directory (query-archive-directory db)
           _ (.mkdirs ^java.io.File directory)
           target (io/file directory (str "epoch-through-" upper-inclusive ".framlog"))
           temporary (io/file directory (str ".epoch-through-" upper-inclusive ".tmp"))
           bytes (java.nio.file.Files/readAllBytes
-                 (.toPath (io/file (:log co))))
+                 (.toPath (io/file (:log db))))
           prefix (java.util.Arrays/copyOfRange bytes 0 valid-bytes)
           prior (vec (remove #(= upper-inclusive (:upper %))
                              @query-archive-manifest))
@@ -792,46 +792,46 @@
        (into-array java.nio.file.CopyOption
                    [java.nio.file.StandardCopyOption/ATOMIC_MOVE
                     java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
-      (write-query-archive-manifest! co entries)
-      (reset! query-archive-coordinators {})
+      (write-query-archive-manifest! db entries)
+      (reset! query-archive-databases {})
       (drop-query-caches!)
       entry)))
 
 (defn expire-query-epoch!
   "Mark one sealed range unavailable by retention policy; canonical deletion is separate."
   [upper-inclusive]
-  (let [co @coordinator
+  (let [db @database
         entries (mapv (fn [entry]
                         (cond-> entry
                           (= upper-inclusive (:upper entry))
                           (assoc :expired true)))
                       @query-archive-manifest)]
-    (write-query-archive-manifest! co entries)
-    (reset! query-archive-coordinators {})
+    (write-query-archive-manifest! db entries)
+    (reset! query-archive-databases {})
     (drop-query-caches!)
     entries))
 
 (defn- query-archive-entry [version]
   (some #(when (<= (:lower %) version (:upper %)) %) @query-archive-manifest))
 
-(defn- query-history-coordinator! [active version]
+(defn- query-history-database! [active version]
   (if-let [{:keys [expired path fingerprint upper] :as entry}
            (query-archive-entry version)]
     (do
       (when expired
-        (daemon-fail! :query/snapshot-expired
+        (server-fail! :query/snapshot-expired
                       "query snapshot was removed by explicit retention policy"
                       {:range [(:lower entry) upper]}))
-      (or (get @query-archive-coordinators [path fingerprint])
+      (or (get @query-archive-databases [path fingerprint])
           (try
-            (let [source (coord/triple-log-prefix-source! path upper)]
+            (let [source (database/triple-log-prefix-source! path upper)]
               (when-not (= fingerprint (:fingerprint source))
-                (daemon-fail! :query/archive-unavailable
+                (server-fail! :query/archive-unavailable
                               "query archive fingerprint does not match its manifest"
                               {:range [(:lower entry) upper]}))
-              (let [opened (coord/open-coordinator!
-                            path (coord/coordinator-space active))]
-                (swap! query-archive-coordinators
+              (let [opened (database/open-database!
+                            path (database/database-space active))]
+                (swap! query-archive-databases
                        assoc [path fingerprint] opened)
                 opened))
             (catch Throwable error
@@ -839,30 +839,30 @@
                                :query/snapshot-expired}
                              (:fram/code (ex-data error)))
                 (throw error)
-                (daemon-fail! :query/archive-unavailable
+                (server-fail! :query/archive-unavailable
                               "query archive is temporarily unavailable"
                               {:range [(:lower entry) upper]}))))))
     active))
 
-(defn- replayed-store-root! [co version]
-  (let [head (current-version co)]
+(defn- replayed-store-root! [db version]
+  (let [head (current-version db)]
     (when (or (neg? version) (> version head))
-      (daemon-fail! :query-invalid-snapshot
+      (server-fail! :query-invalid-snapshot
                     "query snapshot is outside available history" {}))
     (if (= version head)
-      @(coord/coordinator-store co)
-      (let [history-co (query-history-coordinator! co version)
-            head-root @(coord/coordinator-store history-co)
-            base (load-query-checkpoint-root! history-co version)
+      @(database/database-store db)
+      (let [history-db (query-history-database! db version)
+            head-root @(database/database-store history-db)
+            base (load-query-checkpoint-root! history-db version)
             context (if base
                       (atom base)
                       (term-store/new-term-store
-                       (coord/coordinator-space history-co)))
+                       (database/database-space history-db)))
             lower-exclusive (dec (t/termstore-next-sequence @context))]
         (doseq [frame (term-store/transaction-frames-between
                        head-root lower-exclusive version)]
           (term-store/replay-transaction! context frame))
-        (write-query-checkpoint! history-co version @context)))))
+        (write-query-checkpoint! history-db version @context)))))
 
 (defn- snapshot-image [version root]
   (let [context (atom root)]
@@ -1191,7 +1191,7 @@
     (cancelled! cancellation)
     (let [remaining-ms (quot (- deadline-ns (System/nanoTime)) 1000000)]
       (when (<= remaining-ms 0)
-        (daemon-fail! :query-time-limit "query exceeded its time limit" {}))
+        (server-fail! :query-time-limit "query exceeded its time limit" {}))
       (let [outcome (deref flight (long (min 25 remaining-ms))
                            text-index-wait-pending)]
         (if (identical? text-index-wait-pending outcome)
@@ -1312,7 +1312,7 @@
     (let [remaining-ms (when deadline-ns
                          (quot (- deadline-ns (System/nanoTime)) 1000000))]
       (when (and remaining-ms (<= remaining-ms 0))
-        (daemon-fail! :query-time-limit "query exceeded its time limit" {}))
+        (server-fail! :query-time-limit "query exceeded its time limit" {}))
       (let [wait-ms (long (if remaining-ms (min 25 remaining-ms) 25))
             outcome (deref flight wait-ms result-wait-pending)]
         (if (identical? result-wait-pending outcome)
@@ -1347,7 +1347,7 @@
         snapshot-version (require-int! snapshot-version "cursor snapshot version")
         next-page-ordinal (require-int! next-page-ordinal "cursor page ordinal")]
     (when (or (neg? snapshot-version) (neg? next-page-ordinal))
-      (daemon-fail! :query-cursor-mismatch
+      (server-fail! :query-cursor-mismatch
                     "query cursor coordinates must be non-negative" {}))
     {:snapshot-version snapshot-version
      :query-sha256 (require-string! query-sha256 "cursor query digest")
@@ -1361,7 +1361,7 @@
     (let [[version] (record-fields! snapshot :query/as-of 1)]
       (require-int! version "query snapshot version"))
     :else
-    (daemon-fail! :query-invalid-snapshot
+    (server-fail! :query-invalid-snapshot
                   "query upper snapshot must be current or as-of" {})))
 
 (defn- requested-query-view! [snapshot cursor head]
@@ -1371,21 +1371,21 @@
           (let [[lower upper] (record-fields! snapshot :query/since 2)
                 lower (require-int! lower "query since lower bound")]
             (when (neg? lower)
-              (daemon-fail! :query-invalid-snapshot
+              (server-fail! :query-invalid-snapshot
                             "query since lower bound must be non-negative" {}))
             [lower (upper-snapshot-version! upper cursor head)])
           [-1 (upper-snapshot-version! snapshot cursor head)])]
     (when (and cursor-version (not= cursor-version requested))
-      (daemon-fail! :query-cursor-mismatch
+      (server-fail! :query-cursor-mismatch
                     "query cursor belongs to a different snapshot" {}))
     (when (> lower-exclusive requested)
-      (daemon-fail! :query-invalid-snapshot
+      (server-fail! :query-invalid-snapshot
                     "query since lower bound exceeds its upper snapshot" {}))
     {:version requested :lower-exclusive lower-exclusive}))
 
 (defn- result-rows! [result]
   (when-let [error (first (query/result-errors result))]
-    (daemon-fail! (query/error-code error) (query/error-message error) {}))
+    (server-fail! (query/error-code error) (query/error-message error) {}))
   (query/result-rows result))
 
 ;; rows come from a Set (no duplicates), ordered by query/row-key: locate by
@@ -1406,7 +1406,7 @@
                        index
                        (recur (inc index)))))]
     (when (nil? position)
-      (daemon-fail! :query-cursor-mismatch
+      (server-fail! :query-cursor-mismatch
                     "query cursor row is absent from its snapshot" {}))
     position))
 
@@ -1418,7 +1418,7 @@
                    (integer? position)
                    (< -1 position (count rows))
                    (= value (nth rows position)))
-      (daemon-fail! :query-cursor-mismatch
+      (server-fail! :query-cursor-mismatch
                     "page cursor row is absent from its snapshot" {}))
     position))
 
@@ -1448,9 +1448,9 @@
           cursor-value (t/rpc-page-request-cursor-value page)
           cursor (when cursor-value (parse-query-cursor! cursor-value))]
       (when (or (< limit 1) (> limit query/max-page-limit))
-        (daemon-fail! :query-page-limit "query page limit must be from 1 through 4096" {}))
+        (server-fail! :query-page-limit "query page limit must be from 1 through 4096" {}))
       (when (and cursor (not= digest (:query-sha256 cursor)))
-        (daemon-fail! :query-cursor-mismatch
+        (server-fail! :query-cursor-mismatch
                       "query cursor belongs to a different query" {}))
       (let [ordinal (or (:next-page-ordinal cursor) 0)
             start (if cursor
@@ -1498,12 +1498,12 @@
         version (page-version snapshot page)
         cache-snapshot (assoc (select-keys snapshot [:generation :space])
                               :version version)
-        build #(let [co (coord/store-view @coordinator (:root snapshot))
+        build #(let [db (database/store-view @database (:root snapshot))
                      root (or (cached-query-page-root version)
                               (retain-query-page-root!
-                               version (replayed-store-root! co version)))
-                     view (coord/store-view co root)]
-                 (collect-rows (coord/live-propositions view)
+                               version (replayed-store-root! db version)))
+                     view (database/store-view db root)]
+                 (collect-rows (database/live-propositions view)
                                (fn [row] (scan-match? options row))
                                (when-not page unpaged-row-cutoff)
                                cancellation))
@@ -1522,12 +1522,12 @@
         version (page-version snapshot page)
         cache-snapshot (assoc (select-keys snapshot [:generation :space])
                               :version version)
-        build #(let [co (coord/store-view @coordinator (:root snapshot))
+        build #(let [db (database/store-view @database (:root snapshot))
                      root (or (cached-query-page-root version)
                               (retain-query-page-root!
-                               version (replayed-store-root! co version)))
-                     view (coord/store-view co root)]
-                 (collect-rows (coord/history view)
+                               version (replayed-store-root! db version)))
+                     view (database/store-view db root)]
+                 (collect-rows (database/history view)
                                kernel/operation-occurrence?
                                (when-not page unpaged-row-cutoff)
                                cancellation))
@@ -1549,7 +1549,7 @@
         cursor (when cursor-value (parse-query-cursor! cursor-value))
         direct-pattern (one-triple-pattern plan)
         direct? (some? direct-pattern)
-        co (coord/store-view @coordinator (:root published))
+        db (database/store-view @database (:root published))
         view (requested-query-view!
               requested-snapshot cursor (:version published))
         version (:version view)
@@ -1568,7 +1568,7 @@
         (if direct?
           #(let [root (or (cached-query-page-root version)
                           (retain-query-page-root!
-                           version (replayed-store-root! co version)))]
+                           version (replayed-store-root! db version)))]
              (one-triple-query-rows root direct-pattern cancellation))
           #(do
              (reset! (:query-control cancellation) control)
@@ -1577,7 +1577,7 @@
              (try
                (let [root (or (cached-query-page-root version)
                               (retain-query-page-root!
-                               version (replayed-store-root! co version)))
+                               version (replayed-store-root! db version)))
                      text? (plan-uses-text? plan)
                      occurrence? (plan-uses-occurrence? plan)
                      only-text? (and text? (plan-uses-only-text-base? plan))
@@ -1614,9 +1614,9 @@
     (cancelled! cancellation)
     (assoc paged :served version)))
 
-(defn- lease-mutation-guard! [co request cancellation]
+(defn- lease-mutation-guard! [db request cancellation]
   (require-writer!)
-  (require-expected! co (t/rpcrequest-expected-version request))
+  (require-expected! db (t/rpcrequest-expected-version request))
   (cancelled! cancellation))
 
 (defn- handle-lease-acquire! [request cancellation]
@@ -1626,15 +1626,15 @@
         holder (require-term! holder "lease holder")
         ttl-ms (require-int! ttl-ms "lease ttl-ms")]
     (when-not (pos? ttl-ms)
-      (daemon-fail! :rpc-invalid-payload "lease ttl-ms must be positive" {}))
-    (sequence-mutation!
+      (server-fail! :rpc-invalid-payload "lease ttl-ms must be positive" {}))
+    (sequence-commit!
      request cancellation
-     (fn [co]
-       (lease-mutation-guard! co request cancellation)
-       (let [result (coord/acquire-lease! co resource holder ttl-ms
+     (fn [db]
+       (lease-mutation-guard! db request cancellation)
+       (let [result (database/acquire-lease! db resource holder ttl-ms
                                           (System/currentTimeMillis))]
          (when (:reject result)
-           (daemon-fail! :rpc/lease-held "lease resource is already held" {}))
+           (server-fail! :rpc/lease-held "lease resource is already held" {}))
          (wire/rpc-lease-grant!
           (wire/rpc-fence! resource holder (occurrence-epoch (:ok result)))
           (millis->instant (:expires-ms result))))))))
@@ -1645,21 +1645,21 @@
         [resource holder epoch] (parse-fence! fence)
         ttl-ms (require-int! ttl-ms "lease ttl-ms")]
     (when-not (pos? ttl-ms)
-      (daemon-fail! :rpc-invalid-payload "lease ttl-ms must be positive" {}))
-    (sequence-mutation!
+      (server-fail! :rpc-invalid-payload "lease ttl-ms must be positive" {}))
+    (sequence-commit!
      request cancellation
-     (fn [co]
-       (lease-mutation-guard! co request cancellation)
+     (fn [db]
+       (lease-mutation-guard! db request cancellation)
        (let [[current-holder current-epoch occurrence]
-             (or (current-fence co resource) [nil nil nil nil])]
+             (or (current-fence db resource) [nil nil nil nil])]
          (when-not (and (= holder current-holder) (= epoch current-epoch))
-            (daemon-fail! :rpc/lease-fence-mismatch
+            (server-fail! :rpc/lease-fence-mismatch
                           "lease fence does not name the current lease" {}))
-         (let [result (coord/renew-lease!
-                       co resource holder occurrence ttl-ms
+         (let [result (database/renew-lease!
+                       db resource holder occurrence ttl-ms
                        (System/currentTimeMillis))]
            (when (:reject result)
-             (daemon-fail! :rpc/lease-fence-mismatch
+             (server-fail! :rpc/lease-fence-mismatch
                            "lease fence is stale or expired" {}))
            (wire/rpc-lease-grant!
             (wire/rpc-fence! resource holder (occurrence-epoch (:ok result)))
@@ -1668,21 +1668,21 @@
 (defn- handle-lease-release! [request cancellation]
   (let [[resource holder epoch]
         (parse-fence! (t/rpc-request-payload-value request))]
-    (sequence-mutation!
+    (sequence-commit!
      request cancellation
-     (fn [co]
-       (lease-mutation-guard! co request cancellation)
+     (fn [db]
+       (lease-mutation-guard! db request cancellation)
        (let [[current-holder current-epoch occurrence]
-             (or (current-fence co resource) [nil nil nil nil])]
+             (or (current-fence db resource) [nil nil nil nil])]
          (if-not (and (= holder current-holder) (= epoch current-epoch))
            (wire/rpc-lease-released! false)
-           (let [result (coord/release-lease! co resource holder occurrence)]
+           (let [result (database/release-lease! db resource holder occurrence)]
              (wire/rpc-lease-released! (boolean (:ok result))))))))))
 
 (defn- handle-lease-check! [payload cancellation snapshot]
   (let [[resource holder epoch] (parse-fence! payload)]
     (cancelled! cancellation)
-    (let [view (coord/store-view @coordinator (:root snapshot))
+    (let [view (database/store-view @database (:root snapshot))
           [current-holder current-epoch _ expires-ms]
           (or (current-fence view resource) [nil nil nil nil])
           matching (and (= holder current-holder) (= epoch current-epoch))
@@ -1694,12 +1694,12 @@
   (require-unit! payload)
   (cancelled! cancellation)
   (try
-    (let [co (coord/store-view @coordinator (:root snapshot))
-          dump (term-store/dump-term-store (coord/coordinator-store co))
-          space-id (coord/coordinator-space co)
+    (let [db (database/store-view @database (:root snapshot))
+          dump (term-store/dump-term-store (database/database-store db))
+          space-id (database/database-space db)
           copy (term-store/new-term-store space-id)
           profile-violations
-          (kernel/lint-declared-profile (coord/live-propositions co) space-id)]
+          (kernel/lint-declared-profile (database/live-propositions db) space-id)]
       (term-store/load-term-store! copy dump)
       (wire/rpc-validation!
        true
@@ -1714,12 +1714,12 @@
                  (or (.getMessage error) "validation failed"))])))))
 
 (defn- status-payload [snapshot]
-  (let [co (coord/store-view @coordinator (:root snapshot))
-        state (:status (coord/coordinator-recovery-state co))
+  (let [db (database/store-view @database (:root snapshot))
+        state (:status (database/database-recovery-state db))
         {:keys [hits misses bytes evictions]} @query-result-cache
         cache (wire/rpc-record! :rpc/result-cache
                                 [hits misses bytes evictions])]
-    (wire/rpc-status! state (count (coord/live-propositions co))
+    (wire/rpc-status! state (count (database/live-propositions db))
                       @runtime-engine cache)))
 
 (defn- request-body-bytes [request]
@@ -1728,10 +1728,10 @@
                (wire/rpc-request-frame 0 request)))
      wire/rpc-v1-header-bytes))
 
-(defn- take-write-cohort! [^LinkedBlockingQueue queue first-ticket]
-  (let [deadline (+ (:enqueued-ns first-ticket) write-cohort-max-wait-ns)]
+(defn- take-commit-cohort! [^LinkedBlockingQueue queue first-ticket]
+  (let [deadline (+ (:enqueued-ns first-ticket) commit-cohort-max-wait-ns)]
     (loop [tickets [first-ticket] bytes (:bytes first-ticket)]
-      (if (>= (count tickets) write-cohort-max-frames)
+      (if (>= (count tickets) commit-cohort-max-frames)
         [tickets nil]
         (let [ready (.poll queue)
               remaining (- deadline (System/nanoTime))
@@ -1740,29 +1740,29 @@
                            (.poll queue remaining TimeUnit/NANOSECONDS)))]
           (if ticket
             (if (or (:stop ticket)
-                    (> (+ bytes (:bytes ticket)) write-cohort-max-bytes))
+                    (> (+ bytes (:bytes ticket)) commit-cohort-max-bytes))
               [tickets ticket]
               (recur (conj tickets ticket) (+ bytes (:bytes ticket))))
             [tickets nil]))))))
 
-(defn- sequencer-stopped-error []
-  (ex-info "write sequencer is not running"
+(defn- commit-sequencer-stopped-error []
+  (ex-info "commit sequencer is not running"
            {:type :rpc/not-booted :fram/code :rpc/not-booted}))
 
-(defn- deliver-cohort! [tickets]
+(defn- deliver-commit-cohort! [tickets]
   (try
-    (let [co @coordinator
-          committed (coord/commit-cohort! co (mapv :mutation tickets))
+    (let [db @database
+          committed (database/commit-cohort! db (mapv :mutation tickets))
           frame-count (:frame-count committed)
-          _ (swap! write-sequencer-stats
+          _ (swap! commit-sequencer-stats
                    (fn [stats]
                      (cond-> (-> stats
                                  (update :cohorts inc)
                                  (update :frames + frame-count))
                        (pos? frame-count) (update :barriers inc))))
           snapshot (if (pos? (:frame-count committed))
-                     (let [published (publish-snapshot! co)]
-                       (swap! write-sequencer-stats update :publications inc)
+                     (let [published (publish-snapshot! db)]
+                       (swap! commit-sequencer-stats update :publications inc)
                        published)
                      @published-snapshot)]
       (doseq [[ticket result] (map vector tickets (:results committed))]
@@ -1776,54 +1776,54 @@
         (deliver (:completion ticket)
                  {:error error :version (response-version)})))))
 
-(defn- write-sequencer-loop! [^LinkedBlockingQueue queue]
+(defn- commit-sequencer-loop! [^LinkedBlockingQueue queue]
   (try
     (loop [pending nil]
-      (if (identical? queue (:queue @write-sequencer))
+      (if (identical? queue (:queue @commit-sequencer))
         (let [first-ticket (or pending (.take queue))]
           (when-not (:stop first-ticket)
             (let [[tickets next-pending]
-                  (take-write-cohort! queue first-ticket)]
-              (deliver-cohort! tickets)
+                  (take-commit-cohort! queue first-ticket)]
+              (deliver-commit-cohort! tickets)
               (recur next-pending))))
         (when-let [completion (:completion pending)]
           (deliver completion
-                   {:error (sequencer-stopped-error)
+                   {:error (commit-sequencer-stopped-error)
                     :version (response-version)}))))
     (catch InterruptedException _ nil)
     (finally
-      (let [error (sequencer-stopped-error)]
+      (let [error (commit-sequencer-stopped-error)]
         (loop []
           (when-let [ticket (.poll queue)]
             (when-let [completion (:completion ticket)]
               (deliver completion {:error error :version (response-version)}))
             (recur)))))))
 
-(defn- start-write-sequencer! []
+(defn- start-commit-sequencer! []
   (let [queue (LinkedBlockingQueue.)
-        thread (Thread. #(write-sequencer-loop! queue) "fram-write-sequencer")]
+        thread (Thread. #(commit-sequencer-loop! queue) "fram-commit-sequencer")]
     (.setDaemon thread true)
-    (reset! write-sequencer-stats
+    (reset! commit-sequencer-stats
             {:cohorts 0 :frames 0 :barriers 0 :publications 0})
-    (reset! write-sequencer {:queue queue :thread thread})
+    (reset! commit-sequencer {:queue queue :thread thread})
     (.start thread)
     nil))
 
-(defn- stop-write-sequencer! []
+(defn- stop-commit-sequencer! []
   (when-let [{:keys [^Thread thread ^LinkedBlockingQueue queue]}
-             @write-sequencer]
-    (reset! write-sequencer nil)
+             @commit-sequencer]
+    (reset! commit-sequencer nil)
     (.put queue {:stop true})
     (when-not (identical? thread (Thread/currentThread))
       (.join thread 5000)))
   nil)
 
-(defn- sequence-mutation! [request cancellation mutation]
+(defn- sequence-commit! [request cancellation mutation]
   (cancelled! cancellation)
   (require-writer!)
-  (let [{:keys [^LinkedBlockingQueue queue]} @write-sequencer]
+  (let [{:keys [^LinkedBlockingQueue queue]} @commit-sequencer]
     (when-not queue
-      (throw (sequencer-stopped-error)))
+      (throw (commit-sequencer-stopped-error)))
     (let [completion (promise)
           ticket {:mutation mutation
                   :completion completion
@@ -1852,7 +1852,7 @@
       :rpc/lease-release (handle-lease-release! request cancellation)
       :rpc/lease-check {:payload (handle-lease-check! payload cancellation snapshot)}
       :rpc/validate {:payload (handle-validate! payload cancellation snapshot)}
-      (daemon-fail! :rpc/unsupported-operation
+      (server-fail! :rpc/unsupported-operation
                     "operation is not part of FRAMRPC v1" {}))))
 
 (def ^:private retryable-error-codes
@@ -1867,22 +1867,22 @@
         operation (t/rpcrequest-op request)
         served-version (volatile! nil)]
     (try
-      (when-not @coordinator
-        (daemon-fail! :rpc/not-booted "coordinator is not booted" {}))
+      (when-not @database
+        (server-fail! :rpc/not-booted "database is not booted" {}))
       (refresh-standby!)
-      (when-not (= space (coord/coordinator-space @coordinator))
-        (daemon-fail! :rpc/space-mismatch
+      (when-not (= space (database/database-space @database))
+        (server-fail! :rpc/space-mismatch
                       "request SpaceId does not match the served space" {}))
       (when (= :unsupported (native-op-disposition operation))
-        (daemon-fail! :rpc/unsupported-operation
+        (server-fail! :rpc/unsupported-operation
                       "operation is not part of FRAMRPC v1" {}))
       (when (and (not (contains? paged-rpc-operations operation))
                  (t/rpcrequest-page request))
-        (daemon-fail! :rpc/unexpected-page
+        (server-fail! :rpc/unexpected-page
                       "paging is supported only by rpc/query, rpc/scan, and rpc/occurrences"
                       {}))
       (when (and (not= operation :rpc/query) (t/rpcrequest-timeout-ms request))
-        (daemon-fail! :rpc/unexpected-timeout
+        (server-fail! :rpc/unexpected-timeout
                       "timeout-ms is supported only by rpc/query" {}))
       (let [result
             (if (contains? read-only-rpc-operations operation)
@@ -1924,7 +1924,7 @@
   (dotimes [index 8]
     (when-not (= (bit-and 255 (int (aget header index)))
                  (bit-and 255 (int (aget wire/rpc-v1-magic index))))
-      (daemon-fail! :rpc-invalid-magic "FRAMRPC magic does not match" {})))
+      (server-fail! :rpc-invalid-magic "FRAMRPC magic does not match" {})))
   (let [buffer (doto (ByteBuffer/wrap header) (.order ByteOrder/LITTLE_ENDIAN))]
     (.position buffer 8)
     (let [major (Short/toUnsignedInt (.getShort buffer))
@@ -1934,14 +1934,14 @@
           body-length (Integer/toUnsignedLong (.getInt buffer))]
       (when-not (and (= major wire/rpc-v1-major)
                      (= minor wire/rpc-v1-minor))
-        (daemon-fail! :rpc-unsupported-version
+        (server-fail! :rpc-unsupported-version
                       "FRAMRPC major/minor version is unsupported" {}))
       (when-not (<= 1 kind 4)
-        (daemon-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown" {}))
+        (server-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown" {}))
       (when-not (zero? flags)
-        (daemon-fail! :rpc-invalid-flags "FRAMRPC v1 flags must be zero" {}))
+        (server-fail! :rpc-invalid-flags "FRAMRPC v1 flags must be zero" {}))
       (when (> body-length wire/rpc-v1-max-body-bytes)
-        (daemon-fail! :rpc-frame-too-large
+        (server-fail! :rpc-frame-too-large
                       "FRAMRPC declared body exceeds the byte limit" {}))
       (int body-length))))
 
@@ -1949,15 +1949,15 @@
   (let [first-byte (.read input)]
     (when-not (neg? first-byte)
       (when-not (= first-byte (bit-and 255 (int (aget wire/rpc-v1-magic 0))))
-        (daemon-fail! :rpc-invalid-magic "FRAMRPC magic does not match" {}))
+        (server-fail! :rpc-invalid-magic "FRAMRPC magic does not match" {}))
       (let [header (byte-array wire/rpc-v1-header-bytes)]
         (aset-byte header 0 (unchecked-byte first-byte))
         (when-not (read-exact! input header 1 (dec wire/rpc-v1-header-bytes))
-          (daemon-fail! :rpc-truncated "FRAMRPC frame ended inside its header" {}))
+          (server-fail! :rpc-truncated "FRAMRPC frame ended inside its header" {}))
         (let [body-length (validate-stream-header! header)
               body (byte-array body-length)]
           (when-not (read-exact! input body 0 body-length)
-            (daemon-fail! :rpc-truncated "FRAMRPC body is shorter than declared" {}))
+            (server-fail! :rpc-truncated "FRAMRPC body is shorter than declared" {}))
           (let [frame (byte-array (+ wire/rpc-v1-header-bytes body-length))]
             (System/arraycopy header 0 frame 0 wire/rpc-v1-header-bytes)
             (System/arraycopy body 0 frame wire/rpc-v1-header-bytes body-length)
@@ -1997,7 +1997,7 @@
 (defn- register-request! [request-id cancellation]
   (locking active-requests
     (when (contains? @active-requests request-id)
-      (daemon-fail! :rpc/duplicate-request-id
+      (server-fail! :rpc/duplicate-request-id
                     "request id is already active" {}))
     (swap! active-requests assoc request-id cancellation)))
 
@@ -2012,7 +2012,7 @@
       (when-let [target (get @active-requests (t/rpcframev1-request-id frame))]
         (cancel-state! target :client-cancelled))
       nil)
-    (daemon-fail! :rpc-invalid-kind
+    (server-fail! :rpc-invalid-kind
                   "listener accepts request and cancel frames only" {})))
 
 (defn serve-connection! [^Socket socket]
@@ -2066,15 +2066,15 @@
         server (ServerSocket. (int port) 128
                               (java.net.InetAddress/getByName bind-host))]
     (reset! listener server)
-    (println (str "TermStore coordinator listening on " bind-host ":" port
-                  " space=" (coord/coordinator-space @coordinator)
-                  " role=" (name @coordinator-role)))
+    (println (str "Fram server listening on " bind-host ":" port
+                  " space=" (database/database-space @database)
+                  " role=" (name @server-role)))
     (flush)
     (emit-log-line!
-     (str "fram-rpc ts=" (Instant/now) " op=daemon/listen"
+     (str "fram-rpc ts=" (Instant/now) " op=server/listen"
           " bind=" bind-host ":" port
-          " space=" (coord/coordinator-space @coordinator)
-          " role=" (name @coordinator-role)
+          " space=" (database/database-space @database)
+          " role=" (name @server-role)
           " slow-ms=" slow-request-ms
           " quiet=" (if request-log-quiet? 1 0)
           " log=" (or request-log-path "stderr")
@@ -2104,19 +2104,19 @@
               (or second-arg
                   (str (System/getProperty "user.dir") "/data/history.framlog"))
               (or third-arg (System/getenv "FRAM_SPACE_ID"))
-              (coord-writer-authority/role-from-env))
+              (writer-authority/server-role-from-env))
 
       "migrate-triple-log"
       (println (pr-str
-                (coord/migrate-legacy-flat-log! first-arg second-arg third-arg)))
+                (database/migrate-legacy-flat-log! first-arg second-arg third-arg)))
 
       "serve-flat"
-      (daemon-fail! :migration-required
+      (server-fail! :migration-required
                     "flat-log runtime boot was removed; run bin/fram-migrate-triple-log"
                     {:source second-arg
                      :migrator "bin/fram-migrate-triple-log"})
 
-      (daemon-fail! :unknown-command
+      (server-fail! :unknown-command
                     "expected serve or migrate-triple-log"
                     {:command command}))))
 

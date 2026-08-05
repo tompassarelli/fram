@@ -1,31 +1,31 @@
-;; coord_writer_authority.clj — cross-generation coordinator writer authority.
+;; writer_authority.clj — cross-generation database writer authority.
 ;;
 ;; A systemd unit name or a generation-local launcher lock cannot fence two
 ;; overlapping deployments: blue and green necessarily have different process
 ;; identities and runtime directories.  This lock is instead named by the
-;; canonical log itself and held for the active coordinator's entire lifetime.
+;; canonical log itself and held for the active database's entire lifetime.
 ;; Standbys do not acquire it and therefore cannot mutate canonical state.
-(ns coord-writer-authority
+(ns writer-authority
   (:require [clojure.java.io :as io]
             [clojure.string :as str])
   (:import [java.nio.channels FileChannel]
            [java.nio.file Files StandardOpenOption]))
 
-(def authority-format "fram-coordinator-writer-authority/v1")
+(def authority-format "fram-writer-authority/v1")
 
-(defn role-from
-  "Parse a coordinator role. nil/empty preserves the existing active default."
+(defn server-role-from
+  "Parse a server role. nil/empty preserves the existing active default."
   [raw]
   (case (str/lower-case (str/trim (or raw "")))
     ("" "active") :active
     "standby" :standby
     (throw
      (ex-info
-      "FRAM_COORD_ROLE must be active or standby"
-      {:code :invalid-coordinator-role :value raw}))))
+      "FRAM_SERVER_ROLE must be active or standby"
+      {:code :invalid-server-role :value raw}))))
 
-(defn role-from-env []
-  (role-from (System/getenv "FRAM_COORD_ROLE")))
+(defn server-role-from-env []
+  (server-role-from (System/getenv "FRAM_SERVER_ROLE")))
 
 (defn authority-path
   "Stable, cross-generation lock path for one canonical log."
@@ -76,7 +76,7 @@
   (or (try-acquire! log)
       (throw
        (ex-info
-        (str "another coordinator generation holds writer authority for "
+        (str "another database generation holds writer authority for "
              (.getCanonicalPath (io/file (str log))))
         {:code :writer-authority-held
          :log (.getCanonicalPath (io/file (str log)))
