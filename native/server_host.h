@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define FRAM_SERVER_GENERATED_ABI 1u
+#define FRAM_SERVER_GENERATED_ABI 2u
 #define FRAM_SERVER_ERROR_CAPACITY 512u
 
 typedef struct fram_server_store fram_server_store;

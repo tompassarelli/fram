@@ -13,6 +13,9 @@
 (def framlog-flags: Int 0)
 (def max-codec-count: Int 2147483647)
 (def max-term-depth: Int 256)
+(def framlog-stream-max-chunk-bytes: Int 1048602)
+(def framlog-stream-max-space-bytes: Int 4096)
+(def framlog-stream-max-payload-bytes: Int 1048576)
 (def crc32-mask: Int 4294967295)
 (def crc32-polynomial: Int 3988292384)
 (def framlog-magic: (Vec Int) [70 82 65 77 76 79 71 0])
@@ -21,6 +24,16 @@
   [status: Int
    store: (U Nil (Atom t/TermStore))
    valid-log-bytes: Int
+   boot-append: (Vec Int)
+   error: String?])
+
+(defrecord BootStream
+  [configured-space-id: String
+   store: (U Nil (Atom t/TermStore))
+   pending: (Vec Int)
+   valid-log-bytes: Int
+   header-complete: Bool
+   complete: Bool
    boot-append: (Vec Int)
    error: String?])
 
@@ -65,6 +78,43 @@
                            shifted)))))]
         (recur (+ position 1) (bit-and crc32-mask next-crc))))))
 
+(defn crc32-range
+  [bytes: (Vec Int)
+   start: Int
+   end: Int] -> Int
+  (loop [position start crc crc32-mask]
+    (if (>= position end)
+      (bit-and crc32-mask (bit-xor crc crc32-mask))
+      (let [mixed (bit-xor crc (nth bytes position))
+            next-crc
+            (loop [bit 0 value mixed]
+              (if (>= bit 8)
+                value
+                (let [shifted (unsigned-bit-shift-right value 1)]
+                  (recur (+ bit 1)
+                         (if (= 1 (bit-and value 1))
+                           (bit-xor shifted crc32-polynomial)
+                           shifted)))))]
+        (recur (+ position 1) (bit-and crc32-mask next-crc))))))
+
+(defn u16-le-at
+  [bytes: (Vec Int)
+   position: Int] -> Int
+  (+ (nth bytes position)
+     (bit-shift-left (nth bytes (+ position 1)) 8)))
+
+(defn u32-le-at
+  [bytes: (Vec Int)
+   position: Int] -> Int
+  (loop [offset 0 value 0]
+    (if (>= offset 4)
+      value
+      (recur
+       (+ offset 1)
+       (bit-or value
+               (bit-shift-left
+                (nth bytes (+ position offset)) (* offset 8)))))))
+
 (defn magic-at-start? [bytes: (Vec Int)] -> Bool
   (if (< (count bytes) (count framlog-magic))
     false
@@ -98,10 +148,13 @@
               (->BytesResult status-ok
                              (deref (wire/encoder-bytes encoder)) nil))))))))
 
-(defn decode-frame-payload! [payload: (Vec Int)] -> FrameDecodeResult
-  (let [decoder (wire/->Decoder payload (atom 0) (atom 0)
+(defn decode-frame-payload-range!
+  [bytes: (Vec Int)
+   start: Int
+   end: Int] -> FrameDecodeResult
+  (let [decoder (wire/->Decoder bytes (atom start) end (atom 0)
                                 (wire/empty-error-cell))]
-    (if (< (count payload) 12)
+    (if (< (- end start) 12)
       (->FrameDecodeResult nil "FRAMLOG transaction header is truncated")
       (let [sequence (wire/read-i64-le! decoder "FRAMLOG transaction sequence")
             operation-count
@@ -154,6 +207,220 @@
                    [:else
                     (->FrameDecodeResult
                      nil "FRAMLOG contains an unknown operation action")]))))])))))
+
+(defn decode-frame-payload! [payload: (Vec Int)] -> FrameDecodeResult
+  (decode-frame-payload-range! payload 0 (count payload)))
+
+(defn start-framlog-stream [configured-space-id: String] -> BootStream
+  (->BootStream configured-space-id nil [] 0 false false [] nil))
+
+(defn failed-boot-stream
+  [stream: BootStream
+   message: String] -> BootStream
+  (->BootStream
+   (bootstream-configured-space-id stream)
+   (bootstream-store stream)
+   []
+   (bootstream-valid-log-bytes stream)
+   (bootstream-header-complete stream)
+   true
+   []
+   message))
+
+(defn complete-boot-stream [stream: BootStream] -> BootStream
+  (->BootStream
+   (bootstream-configured-space-id stream)
+   (bootstream-store stream)
+   []
+   (bootstream-valid-log-bytes stream)
+   (bootstream-header-complete stream)
+   true
+   (bootstream-boot-append stream)
+   nil))
+
+(defn pending-boot-stream
+  [stream: BootStream
+   pending: (Vec Int)] -> BootStream
+  (->BootStream
+   (bootstream-configured-space-id stream)
+   (bootstream-store stream)
+   pending
+   (bootstream-valid-log-bytes stream)
+   (bootstream-header-complete stream)
+   false
+   (bootstream-boot-append stream)
+   nil))
+
+(defn consume-framlog-frames!
+  [stream: BootStream
+   bytes: (Vec Int)
+   position: Int
+   final: Bool] -> BootStream
+  (let [remaining (- (count bytes) position)]
+    (cond
+      [(= remaining 0)
+       (if final (complete-boot-stream stream) stream)]
+      [(< remaining 4)
+       (if final
+         (complete-boot-stream stream)
+         (pending-boot-stream stream (subvec bytes position (count bytes))))]
+      [:else
+       (let [payload-length (u32-le-at bytes position)
+             frame-length (+ payload-length 8)]
+         (cond
+           [(> payload-length framlog-stream-max-payload-bytes)
+            (failed-boot-stream
+             stream "FRAMLOG frame exceeds the supported byte range")]
+           [(< remaining frame-length)
+            (if final
+              (complete-boot-stream stream)
+              (pending-boot-stream
+               stream (subvec bytes position (count bytes))))]
+           [:else
+            (let [payload-start (+ position 4)
+                  payload-end (+ payload-start payload-length)
+                  stored-crc (u32-le-at bytes payload-end)
+                  actual-crc (crc32-range bytes payload-start payload-end)
+                  decoded
+                  (decode-frame-payload-range!
+                   bytes payload-start payload-end)
+                  frame (framedecoderesult-frame decoded)
+                  root (bootstream-store stream)]
+              (cond
+                [(not= stored-crc actual-crc)
+                 (failed-boot-stream stream "FRAMLOG frame CRC does not match")]
+                [(framedecoderesult-error decoded)
+                 (failed-boot-stream
+                  stream
+                  (str "FRAMLOG transaction decode failed: "
+                       (framedecoderesult-error decoded)))]
+                [(nil? frame)
+                 (failed-boot-stream
+                  stream "FRAMLOG transaction decoder returned no frame")]
+                [(nil? root)
+                 (failed-boot-stream stream "FRAMLOG header was not decoded")]
+                [:else
+                 (let [replayed
+                       (term-store/replay-transaction-result! root frame)]
+                   (if (term-store/transactionreplayresult-ok replayed)
+                     (consume-framlog-frames!
+                      (->BootStream
+                       (bootstream-configured-space-id stream)
+                       root
+                       []
+                       (+ (bootstream-valid-log-bytes stream) frame-length)
+                       true
+                       false
+                       []
+                       nil)
+                      bytes (+ position frame-length) final)
+                     (failed-boot-stream
+                      stream
+                      (or (term-store/transactionreplayresult-message replayed)
+                          "FRAMLOG transaction sequence does not advance"))))]))]))])))
+
+(defn consume-framlog-header!
+  [stream: BootStream
+   bytes: (Vec Int)
+   final: Bool] -> BootStream
+  (let [minimum-header-bytes (+ (count framlog-magic) 8)]
+    (cond
+      [(= 0 (count bytes))
+       (if final
+         (let [header
+               (encode-header! (bootstream-configured-space-id stream))]
+           (if (= status-ok (bytesresult-status header))
+             (->BootStream
+              (bootstream-configured-space-id stream)
+              (term-store/new-term-store
+               (bootstream-configured-space-id stream))
+              [] 0 true true (bytesresult-bytes header) nil)
+             (failed-boot-stream
+              stream
+              (error-or (bytesresult-error header)
+                        "FRAMLOG header encode failed"))))
+         stream)]
+      [(< (count bytes) minimum-header-bytes)
+       (if final
+         (failed-boot-stream stream "FRAMLOG header is truncated")
+         (pending-boot-stream stream bytes))]
+      [(not (magic-at-start? bytes))
+       (failed-boot-stream
+        stream "FRAMLOG magic does not match; migration is required")]
+      [:else
+       (let [version (u16-le-at bytes (count framlog-magic))
+             flags (u16-le-at bytes (+ (count framlog-magic) 2))
+             space-length (u32-le-at bytes (+ (count framlog-magic) 4))
+             header-bytes (+ minimum-header-bytes space-length)]
+         (cond
+           [(or (not= version framlog-version) (not= flags framlog-flags))
+            (failed-boot-stream
+             stream "FRAMLOG version or flags are unsupported")]
+           [(or (= space-length 0)
+                (> space-length framlog-stream-max-space-bytes))
+            (failed-boot-stream stream "FRAMLOG SpaceId length is invalid")]
+           [(< (count bytes) header-bytes)
+            (if final
+              (failed-boot-stream
+               stream "FRAMLOG header is truncated inside SpaceId")
+              (pending-boot-stream stream bytes))]
+           [:else
+            (let [decoder
+                  (wire/->Decoder bytes (atom minimum-header-bytes)
+                                  header-bytes (atom 0)
+                                  (wire/empty-error-cell))
+                  space-id
+                  (wire/read-utf8! decoder space-length "FRAMLOG SpaceId")
+                  error (deref (wire/decoder-error decoder))]
+              (cond
+                [error
+                 (failed-boot-stream
+                  stream (error-or error "FRAMLOG SpaceId decode failed"))]
+                [(= 0 (count space-id))
+                 (failed-boot-stream
+                  stream "FRAMLOG SpaceId must be nonempty")]
+                [(and
+                  (not= 0 (count (bootstream-configured-space-id stream)))
+                  (not= (bootstream-configured-space-id stream) space-id))
+                 (failed-boot-stream
+                  stream "FRAMLOG belongs to a different SpaceId")]
+                [:else
+                 (consume-framlog-frames!
+                  (->BootStream
+                   (bootstream-configured-space-id stream)
+                   (term-store/new-term-store space-id)
+                   [] header-bytes true false [] nil)
+                  bytes header-bytes final)]))]))])))
+
+(defn feed-framlog-stream!
+  [stream: BootStream
+   bytes: (Vec Int)
+   final: Bool] -> BootStream
+  (cond
+    [(bootstream-complete stream)
+     (failed-boot-stream stream "FRAMLOG boot stream is already complete")]
+    [(bootstream-error stream) stream]
+    [(> (count bytes) framlog-stream-max-chunk-bytes)
+     (failed-boot-stream stream "FRAMLOG boot chunk exceeds the byte limit")]
+    [(not (valid-byte-vector? bytes))
+     (failed-boot-stream
+      stream "FRAMLOG byte vector contains a value outside u8")]
+    [:else
+     (let [pending (bootstream-pending stream)
+           combined (if (= 0 (count pending)) bytes (into pending bytes))
+           ready
+           (->BootStream
+            (bootstream-configured-space-id stream)
+            (bootstream-store stream)
+            []
+            (bootstream-valid-log-bytes stream)
+            (bootstream-header-complete stream)
+            false
+            (bootstream-boot-append stream)
+            nil)]
+       (if (bootstream-header-complete ready)
+         (consume-framlog-frames! ready combined 0 final)
+         (consume-framlog-header! ready combined final)))]))
 
 (defn canonical-store-copy! [root: (Atom t/TermStore)] -> (Atom t/TermStore)
   (let [dump (term-store/dump-term-store root)
@@ -239,6 +506,7 @@
      (failed-boot "FRAMLOG magic does not match; migration is required")]
     [:else
      (let [decoder (wire/->Decoder bytes (atom (count framlog-magic))
+                                   (count bytes)
                                    (atom 0) (wire/empty-error-cell))]
        (if (< (wire/decoder-remaining decoder) 8)
          (failed-boot "FRAMLOG header is truncated")
@@ -314,23 +582,22 @@
                   (->BytesResult status-ok
                                  (deref (wire/encoder-bytes out)) nil))))))))))
 
-(defn encode-store-tail!
+(defn encode-store-append!
   [root: (Atom t/TermStore)
    lower-exclusive: Int] -> BytesResult
-  (let [canonical (canonical-store-copy! root)
-        current (term-store/current-sequence canonical)]
-    (if (or (< lower-exclusive 0) (> lower-exclusive current))
-      (failed-bytes "FRAMLOG tail lower bound is outside store history")
-      (let [frames
-            (term-store/transaction-frames-between
-             (deref canonical) lower-exclusive current)]
-        (loop [position 0 bytes: (Vec Int) []]
-          (if (>= position (count frames))
-            (->BytesResult status-ok bytes nil)
-            (let [encoded (append-frame-bytes! (nth frames position))]
-              (if (= status-ok (bytesresult-status encoded))
-                (recur (+ position 1)
-                       (into bytes (bytesresult-bytes encoded)))
-                (failed-bytes
-                 (error-or (bytesresult-error encoded)
-                           "FRAMLOG tail encode failed"))))))))))
+  (let [current (term-store/current-sequence root)]
+    (cond
+      [(or (< lower-exclusive 0) (> lower-exclusive current))
+       (failed-bytes "FRAMLOG append lower bound is outside store history")]
+      [(= lower-exclusive current)
+       (->BytesResult status-ok [] nil)]
+      [(not= current (+ lower-exclusive 1))
+       (failed-bytes "FRAMLOG dispatch produced more than one transaction")]
+      [:else
+       (let [frames
+             (term-store/transaction-frames-between
+              (deref root) lower-exclusive current)]
+         (if (= 1 (count frames))
+           (append-frame-bytes! (nth frames 0))
+           (failed-bytes
+            "FRAMLOG append did not resolve exactly one transaction")))])))

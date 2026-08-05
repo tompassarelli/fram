@@ -27,6 +27,7 @@
 (defrecord Decoder
   [bytes: (Vec Int)
    position: (Atom Int)
+   limit: Int
    nodes: (Atom Int)
    error: (Atom String?)])
 
@@ -61,7 +62,7 @@
   (and (>= value 0) (<= value 255)))
 
 (defn decoder-remaining [decoder: Decoder] -> Int
-  (- (count (decoder-bytes decoder)) (deref (decoder-position decoder))))
+  (- (decoder-limit decoder) (deref (decoder-position decoder))))
 
 (defn ensure-bytes!
   [decoder: Decoder
@@ -478,7 +479,8 @@
       valid)))
 
 (defn decode-request-bytes! [bytes: (Vec Int)] -> DecodeResult
-  (let [decoder (->Decoder bytes (atom 0) (atom 0) (empty-error-cell))
+  (let [decoder (->Decoder bytes (atom 0) (count bytes)
+                           (atom 0) (empty-error-cell))
         byte-count (count bytes)]
     (cond
       [(> byte-count rpc-v1-max-frame-bytes)

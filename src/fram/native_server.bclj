@@ -10,7 +10,7 @@
 
 (define-mode strict)
 
-(def server-abi: Int 1)
+(def server-abi: Int 2)
 (def status-ok: Int 0)
 (def status-fatal: Int 2)
 (def empty-bytes: (Vec Int) [])
@@ -40,7 +40,9 @@
   [status: Int
    response: Response?
    error: String?
-   append-bytes: (Vec Int)])
+   append-bytes: (Vec Int)
+   next-store: StoreResult
+   state-changed: Bool])
 
 (defrecord BytesResult [status: Int bytes: (Vec Int)])
 
@@ -58,24 +60,58 @@
 (defn failed-request [message: String] -> RequestResult
   (->RequestResult status-fatal nil message))
 
-(defn failed-response [message: String] -> ResponseResult
-  (->ResponseResult status-fatal nil message empty-bytes))
+(defn failed-response
+  [message: String
+   store-result: StoreResult] -> ResponseResult
+  (->ResponseResult
+   status-fatal nil message empty-bytes store-result false))
+
+(defn next-store-result
+  [prior: StoreResult
+   store: Store] -> StoreResult
+  (->StoreResult
+   status-ok store nil
+   (storeresult-valid-log-bytes prior) empty-bytes))
 
 (defn boot-store!
   [canonical-log-path: String
    space-id: String
    log-bytes: (Vec Int)] -> StoreResult
-  (let [decoded (log/boot-framlog! space-id log-bytes)
-        root (log/bootresult-store decoded)]
-    (if (and (= status-ok (log/bootresult-status decoded)) root)
+  (let [byte-count (count log-bytes)
+        streamed
+        (loop [position 0
+               stream (log/start-framlog-stream space-id)]
+          (if (or (>= position byte-count)
+                  (log/bootstream-complete stream)
+                  (log/bootstream-error stream))
+            stream
+            (let [remaining (- byte-count position)
+                  chunk-size
+                  (if (> remaining log/framlog-stream-max-chunk-bytes)
+                    log/framlog-stream-max-chunk-bytes remaining)
+                  chunk-end (+ position chunk-size)]
+              (recur
+               chunk-end
+               (log/feed-framlog-stream!
+                stream (subvec log-bytes position chunk-end) false)))))
+        completed
+        (if (or (log/bootstream-complete streamed)
+                (log/bootstream-error streamed))
+          streamed
+          (log/feed-framlog-stream! streamed empty-bytes true))
+        root (log/bootstream-store completed)
+        error (log/bootstream-error completed)]
+    (if (and (nil? error)
+             (log/bootstream-complete completed)
+             root)
       (->StoreResult
        status-ok
        (->Store canonical-log-path (schema/session root))
        nil
-       (log/bootresult-valid-log-bytes decoded)
-       (log/bootresult-boot-append decoded))
+       (log/bootstream-valid-log-bytes completed)
+       (log/bootstream-boot-append completed))
       (failed-store
-       (error-or (log/bootresult-error decoded)
+       (error-or error
                  "native FRAMLOG boot failed")))))
 
 (defn wrap-rpc-response
@@ -87,26 +123,40 @@
                    nil rpc-response)))
 
 (defn dispatch-request!
-  [store: Store
+  [store-result: StoreResult
+   store: Store
    request-value: Request
    now-ms: Int] -> ResponseResult
   (let [frame (request-frame request-value)
         request (t/rpcframev1-request frame)]
     (if request
       (let [session (store-session store)
-            root (schema/store-of session)
+            working-session (schema/fork-session session)
+            root (schema/store-of working-session)
             before-sequence (term-store/current-sequence root)
-            rpc-response (dispatch/dispatch! session request now-ms)
-            encoded (log/encode-store-tail! root before-sequence)]
+            before-derived (schema/derived-generation-of working-session)
+            rpc-response (dispatch/dispatch! working-session request now-ms)
+            after-sequence (term-store/current-sequence root)
+            after-derived (schema/derived-generation-of working-session)
+            encoded (log/encode-store-append! root before-sequence)
+            next-store
+            (next-store-result
+             store-result
+             (->Store (store-canonical-log-path store) working-session))]
         (if (= status-ok (log/bytesresult-status encoded))
           (->ResponseResult status-ok
                             (wrap-rpc-response frame rpc-response)
                             nil
-                            (log/bytesresult-bytes encoded))
+                            (log/bytesresult-bytes encoded)
+                            next-store
+                            (or (not= before-sequence after-sequence)
+                                (not= before-derived after-derived)))
           (failed-response
            (error-or (log/bytesresult-error encoded)
-                     "native FRAMLOG append encoding failed"))))
-      (failed-response "decoded request frame omitted RpcRequest"))))
+                     "native FRAMLOG append encoding failed")
+           store-result)))
+      (failed-response
+       "decoded request frame omitted RpcRequest" store-result))))
 
 (defn read-request! [request-bytes: (Vec Int)] -> RequestResult
   (let [decoded (native-wire/decode-request-bytes! request-bytes)
@@ -146,12 +196,13 @@
              store
              (= status-ok (requestresult-status request-result))
              request-value)
-      (dispatch-request! store request-value now-ms)
+      (dispatch-request! store-result store request-value now-ms)
       (failed-response
        (if (not= status-ok (storeresult-status store-result))
          (error-or (storeresult-error store-result) "store boot failed")
          (error-or (requestresult-error request-result)
-                   "request decode failed"))))))
+                   "request decode failed"))
+       store-result))))
 
 (defn server-store-shutdown [store-result: StoreResult] -> Status
   (let [store (storeresult-store store-result)]
