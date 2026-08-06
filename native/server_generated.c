@@ -116,9 +116,11 @@ struct fram_server_store {
   size_t compaction_base_generations;
 };
 
+#ifndef FRAM_WASM_HOST_IMPORTS
 typedef struct posix_storage {
   int fd;
 } posix_storage;
+#endif
 
 struct fram_server_request {
   generated_owner *owner;
@@ -322,6 +324,9 @@ static int generated_status(int64_t status, char *error,
   return FRAM_SERVER_FATAL;
 }
 
+// The POSIX storage and realtime regime is the host of last resort; a build
+// that names its own host imports compiles it out rather than linking it dead.
+#ifndef FRAM_WASM_HOST_IMPORTS
 static int posix_realtime_milliseconds(void *context,
                                        int64_t *milliseconds_out, char *error,
                                        size_t error_capacity) {
@@ -340,6 +345,7 @@ static int posix_realtime_milliseconds(void *context,
       (int64_t)now.tv_sec * INT64_C(1000) + (int64_t)(now.tv_nsec / 1000000L);
   return FRAM_SERVER_OK;
 }
+#endif
 
 static bool valid_host(const fram_server_host_v1 *host) {
   return host != NULL && host->abi_version == FRAM_SERVER_HOST_ABI &&
@@ -380,6 +386,7 @@ static int read_exact(int fd, uint8_t *destination, size_t length,
   return FRAM_SERVER_OK;
 }
 
+#ifndef FRAM_WASM_HOST_IMPORTS
 static int posix_storage_open(const char *path, posix_storage **storage_out,
                               char *error, size_t error_capacity) {
   struct stat status;
@@ -485,7 +492,9 @@ static int posix_storage_append(void *context, const uint8_t *bytes,
   posix_storage *storage = context;
   size_t position = 0u;
 
-  if (lseek(storage->fd, (off_t)0, SEEK_END) < (off_t)0) {
+  // Parenthesized: wasi-libc defines lseek as a statement-expression macro,
+  // which -pedantic rejects; the parentheses suppress that expansion.
+  if ((lseek)(storage->fd, (off_t)0, SEEK_END) < (off_t)0) {
     copy_error(error, error_capacity, "cannot seek the canonical FRAMLOG");
     return FRAM_SERVER_HOST_ERROR;
   }
@@ -528,6 +537,7 @@ static int posix_storage_close(void *context, char *error,
   free(storage);
   return status;
 }
+#endif
 
 static int vector_length(const native_vec *vector, size_t minimum,
                          size_t maximum, size_t *length_out, char *error,
@@ -907,6 +917,7 @@ boot_failed:
   return status;
 }
 
+#ifndef FRAM_WASM_HOST_IMPORTS
 int fram_server_store_boot(const char *canonical_log_path,
                            const char *space_id,
                            fram_server_store **store_out, char *error,
@@ -947,6 +958,7 @@ int fram_server_store_boot(const char *canonical_log_path,
   }
   return status;
 }
+#endif
 
 int fram_server_store_dispatch(fram_server_store *store,
                                    const fram_server_request *request,

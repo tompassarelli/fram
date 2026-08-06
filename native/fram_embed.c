@@ -272,6 +272,7 @@ fram_status fram_open(const fram_open_options_v1 *options,
   fram_database *database;
   fram_server_host_v1 server_host;
   fram_host_v1 allocation_host;
+  const fram_host_v1 *host;
   char detail[FRAM_SERVER_ERROR_CAPACITY];
   const char *log_label;
   int status;
@@ -283,10 +284,22 @@ fram_status fram_open(const fram_open_options_v1 *options,
   if (options == NULL || database_out == NULL ||
       options->abi_version != FRAM_ABI_VERSION ||
       options->struct_size < (uint32_t)sizeof(*options) ||
-      options->space_id == NULL || options->space_id[0] == '\0' ||
-      (options->host == NULL &&
+      options->space_id == NULL || options->space_id[0] == '\0') {
+    set_error(error, FRAM_INVALID_ARGUMENT,
+              "Fram open options or host ABI are invalid");
+    return FRAM_INVALID_ARGUMENT;
+  }
+  host = options->host;
+#ifdef FRAM_WASM_HOST_IMPORTS
+  /* No POSIX regime is compiled in to fall through to: the named imports are
+     this build's only storage, clock, and allocation seam. */
+  if (host == NULL) {
+    host = fram_wasm_host_v1();
+  }
+#endif
+  if ((host == NULL &&
        (options->log_path == NULL || options->log_path[0] == '\0')) ||
-      (options->host != NULL && !valid_host(options->host))) {
+      (host != NULL && !valid_host(host))) {
     set_error(error, FRAM_INVALID_ARGUMENT,
               "Fram open options or host ABI are invalid");
     return FRAM_INVALID_ARGUMENT;
@@ -296,8 +309,8 @@ fram_status fram_open(const fram_open_options_v1 *options,
               "generated Fram engine ABI does not match the embedding host");
     return FRAM_ENGINE_ERROR;
   }
-  if (options->host != NULL) {
-    allocation_host = *options->host;
+  if (host != NULL) {
+    allocation_host = *host;
   } else {
     allocation_host = (fram_host_v1){
         .abi_version = FRAM_ABI_VERSION,
@@ -325,10 +338,14 @@ fram_status fram_open(const fram_open_options_v1 *options,
     return FRAM_ENGINE_ERROR;
   }
   log_label = options->log_path != NULL ? options->log_path : "embedded";
-  if (options->host == NULL) {
+  // The wasm regime compiles the POSIX boot out, so its call site goes too.
+#ifndef FRAM_WASM_HOST_IMPORTS
+  if (host == NULL) {
     status = fram_server_store_boot(log_label, options->space_id,
                                     &database->store, detail, sizeof(detail));
-  } else {
+  } else
+#endif
+  {
     server_host = (fram_server_host_v1){
         .abi_version = FRAM_SERVER_HOST_ABI,
         .struct_size = (uint32_t)sizeof(server_host),

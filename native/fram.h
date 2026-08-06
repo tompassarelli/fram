@@ -133,6 +133,28 @@ FRAM_API void fram_buffer_release(fram_buffer *buffer);
 /* CLOSE always consumes DATABASE, including when durability close fails. */
 FRAM_API fram_status fram_close(fram_database *database, fram_error *error);
 
+#if defined(FRAM_WASM_HOST_IMPORTS)
+/*
+ * This build has no POSIX storage: HOST == NULL selects nine named imports of
+ * wasm module "fram_host_v1", one per fram_host_v1 callback, each named for
+ * its field and typed by the wasm32 lowering of the prototype above. LOG_PATH
+ * is then a diagnostic label, host contexts are 0, and the embedder owns
+ * FRAMLOG exclusivity. An import reports failure by returning nonzero; a
+ * trapping import unwinds the guest uncleaned, so a trap is instance-fatal.
+ * A response buffer is released only by fram_buffer_release, its release field
+ * being a guest table index. fram_wasm_alloc/fram_wasm_free stage embedder
+ * requests, options, and error structs; they never free a response. The module
+ * still imports wasi_snapshot_preview1 clock_time_get (the engine's monotonic
+ * clock) and environ_sizes_get/environ_get, which an embedder answers with an
+ * empty environment; native/wasm-embed.seams pins the whole seam.
+ */
+FRAM_API void *fram_wasm_alloc(size_t size);
+FRAM_API void fram_wasm_free(void *allocation);
+
+/* The import-backed vtable, internal to this build and never exported. */
+const fram_host_v1 *fram_wasm_host_v1(void);
+#endif
+
 #ifdef __cplusplus
 }
 #endif
