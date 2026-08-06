@@ -944,7 +944,11 @@ elif [[ "$host" == "wasm-embed" ]]; then
   for wasm_export in "${wasm_exports[@]}"; do
     wasm_export_flags+=("-Wl,--export=$wasm_export")
   done
+  # --stack-first puts the shadow stack below every static, so an overflow
+  # traps at address zero instead of quietly overwriting allocator statics.
+  # 4 MiB is a control value the certification pass revisits.
   if ! "$cc" -mexec-model=reactor -O2 "${wasm_objects[@]}" \
+      -Wl,--stack-first -Wl,-z,stack-size=4194304 \
       "${wasm_export_flags[@]}" -o "$stage/lib/libfram.wasm" \
       >>"$stage/native-host.log" 2>&1; then
     sed -n '1,240p' "$stage/native-host.log" >&2
