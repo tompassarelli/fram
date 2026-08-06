@@ -13,33 +13,43 @@ usage() {
 Usage:
   fram-native-build --host server [--adapter FILE] SOURCE.bgl...
   fram-native-build --host embed [--adapter FILE] SOURCE.bgl...
+  fram-native-build --host wasm-embed --abi wasm32 [--adapter FILE] SOURCE.bgl...
+  fram-native-build --host wasm-embed --abi wasm32 --regen-wasm-seams SOURCE.bgl...
   fram-native-build --host world [--abi ID] [--entry NS/NAME]... SOURCE.bgl...
   fram-native-build --host world --regen-qbe-frontier [--entry NS/NAME]... SOURCE.bgl...
 
 Prints the absolute immutable artifact directory on success.
 Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, FRAM_NATIVE_CC,
-FRAM_NATIVE_STATIC=1 (server host: link -static), FRAM_NATIVE_AR, and
-FRAM_QBE_FRONTIER_LEDGER as needed.
+FRAM_NATIVE_STATIC=1 (server host: link -static), FRAM_NATIVE_AR,
+FRAM_WASI_CC (or WASI_CC), FRAM_QBE_FRONTIER_LEDGER, and
+FRAM_WASM_SEAMS_LEDGER as needed.
 
 Native hosts default to native/server_generated.c beside this script. The
-embed host emits include/fram.h, lib/libfram.a, and lib/libfram.so. The world
-host stops at the sealed Native World and its C17 projection, emits no C host,
-and is how a source slice narrower than the server ABI is taken through the
-same release gate.
+embed host emits include/fram.h, lib/libfram.a, and lib/libfram.so. The
+wasm-embed host emits include/fram.h and lib/libfram.wasm: a reactor whose
+fram_host_v1 table is built from nine named wasm imports, so an external
+engine embedder supplies storage, clock, and allocation as host functions. The
+world host stops at the sealed Native World and its C17 projection, emits no C
+host, and is how a source slice narrower than the server ABI is taken through
+the same release gate.
 
 --abi names the Beagle ABI profile the world is sealed at (default lp64;
-Beagle owns the registry and refuses an unknown id by name). It needs --host
-world, because the C hosts link their projection with the native compiler. Each
-profile gets its own Native World cache entry and its own QBE frontier scope.
+Beagle owns the registry and refuses an unknown id by name). server and embed
+link their projection with the native compiler and stay at lp64; wasm-embed
+requires wasm32. Each profile gets its own Native World cache entry and its own
+QBE frontier scope.
 
 RELEASE GATE
   REQUIRED (build fails)  complete C17 materialization, all seven obligation
                           projections PASS, no pending lowering work, and for
-                          server/embed a clean C17 host link.
+                          server/embed/wasm-embed a clean C17 host link.
   RATCHETED (build fails) the QBE frontier: an unrecorded refusal fails, and a
                           recorded refusal that no longer reproduces fails
                           until its native/qbe-frontier.ledger line is deleted.
                           --regen-qbe-frontier rewrites this scope's line.
+  PINNED (build fails)    the wasm-embed seam ledger: every import and export
+                          of libfram.wasm must equal native/wasm-embed.seams.
+                          --regen-wasm-seams rewrites that fixture.
 USAGE
 }
 
@@ -48,7 +58,9 @@ adapter=""
 sources=()
 entries=()
 regen_qbe_frontier=0
+regen_wasm_seams=0
 default_abi=lp64
+wasm_abi=wasm32
 abi="$default_abi"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -76,6 +88,10 @@ while [[ $# -gt 0 ]]; do
       regen_qbe_frontier=1
       shift
       ;;
+    --regen-wasm-seams)
+      regen_wasm_seams=1
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -90,22 +106,31 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 case "$host" in
-  server|embed|world) ;;
-  "") die "--host must be server, embed, or world" ;;
+  server|embed|wasm-embed|world) ;;
+  "") die "--host must be server, embed, wasm-embed, or world" ;;
   *) die "unsupported host: $host" ;;
 esac
 [[ ${#sources[@]} -gt 0 ]] || die "provide the dependency-first source closure"
 # Beagle owns the profile registry; the shape check is ours because the id
 # enters both the cache manifest and the tab-separated frontier scope.
 [[ "$abi" =~ ^[A-Za-z0-9_.-]+$ ]] || die "--abi takes a bare profile id: $abi"
-[[ "$abi" == "$default_abi" || "$host" == "world" ]] ||
-  die "--abi $abi needs --host world; the $host host links its C17 projection with the native compiler"
+case "$host" in
+  world) ;;
+  wasm-embed)
+    [[ "$abi" == "$wasm_abi" ]] ||
+      die "--host wasm-embed needs --abi $wasm_abi; its reactor is a $wasm_abi module" ;;
+  *)
+    [[ "$abi" == "$default_abi" ]] ||
+      die "--abi $abi needs --host world; the $host host links its C17 projection with the native compiler" ;;
+esac
 [[ ${#entries[@]} -eq 0 || "$host" == "world" ]] ||
   die "--entry overrides the server ABI entry set and needs --host world"
 [[ "$regen_qbe_frontier" == 0 || "$host" == "world" ]] ||
   die "--regen-qbe-frontier needs --host world"
+[[ "$regen_wasm_seams" == 0 || "$host" == "wasm-embed" ]] ||
+  die "--regen-wasm-seams needs --host wasm-embed"
 
-for command in awk cmp flock git grep mktemp realpath sed sha256sum; do
+for command in awk cmp diff flock git grep mktemp realpath sed sha256sum; do
   command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
 done
 
@@ -120,7 +145,8 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 host_source=""
 host_header=""
 adapter_header=""
-if [[ "$host" == "server" || "$host" == "embed" ]]; then
+wasm_host_source=""
+if [[ "$host" != "world" ]]; then
   if [[ "$host" == "server" ]]; then
     host_source="$repo/native/server_host.c"
     host_header="$repo/native/server_host.h"
@@ -139,12 +165,32 @@ if [[ "$host" == "server" || "$host" == "embed" ]]; then
   host_header="$(realpath "$host_header")"
   [[ -z "$adapter_header" ]] || adapter_header="$(realpath "$adapter_header")"
   adapter="$(realpath "$adapter")"
+  if [[ "$host" == "wasm-embed" ]]; then
+    wasm_host_source="$repo/native/fram_wasm_host.c"
+    [[ -f "$wasm_host_source" ]] ||
+      die "wasm host-import source is unavailable: $wasm_host_source"
+    wasm_host_source="$(realpath "$wasm_host_source")"
+  fi
 fi
 
-cc_candidate="${FRAM_NATIVE_CC:-${CC:-cc}}"
+if [[ "$host" == "wasm-embed" ]]; then
+  # Refusal-visible: the wasi toolchain is never inferred from the native one.
+  cc_candidate="${FRAM_WASI_CC:-${WASI_CC:-}}"
+  [[ -n "$cc_candidate" ]] ||
+    die "set FRAM_WASI_CC to an executable wasi C17 compiler for --host wasm-embed"
+else
+  cc_candidate="${FRAM_NATIVE_CC:-${CC:-cc}}"
+fi
 cc="$(command -v "$cc_candidate" 2>/dev/null || true)"
 [[ -n "$cc" && -x "$cc" ]] || die "C17 compiler is not executable: $cc_candidate"
 cc="$(realpath "$cc")"
+wasm_tools=""
+if [[ "$host" == "wasm-embed" ]]; then
+  wasm_tools="$(command -v wasm-tools 2>/dev/null || true)"
+  [[ -n "$wasm_tools" && -x "$wasm_tools" ]] ||
+    die "wasm-tools is required for --host wasm-embed; the seam ledger reads the linked module"
+  wasm_tools="$(realpath "$wasm_tools")"
+fi
 case "${FRAM_NATIVE_STATIC:-}" in
   "") link_mode=dynamic ;;
   1) link_mode=static ;;
@@ -195,6 +241,8 @@ if [[ -x "$(dirname "$beagle")/beagle-build-core" ]]; then
 fi
 cc_identity="$cc:$($cc --version 2>&1 | sed -n '1p')"
 [[ -z "$ar" ]] || cc_identity+=":ar=$ar:$($ar --version 2>&1 | sed -n '1p')"
+[[ -z "$wasm_tools" ]] ||
+  cc_identity+=":wasm-tools=$wasm_tools:$($wasm_tools --version 2>&1 | sed -n '1p')"
 builder_identity="$(sha256sum "${BASH_SOURCE[0]}" | sed 's/ .*//')"
 
 input_manifest=""
@@ -242,6 +290,20 @@ for native_server_entry in "${world_entries[@]}"; do
 done
 
 qbe_ledger="${FRAM_QBE_FRONTIER_LEDGER:-$repo/native/qbe-frontier.ledger}"
+wasm_seams_ledger="${FRAM_WASM_SEAMS_LEDGER:-$repo/native/wasm-embed.seams}"
+# The public ABI plus the two staging allocators an external embedder needs to
+# place a request frame, its options, and its error struct in guest memory.
+wasm_exports=(
+  fram_abi_version
+  fram_open
+  fram_transact
+  fram_query
+  fram_snapshot
+  fram_buffer_release
+  fram_close
+  fram_wasm_alloc
+  fram_wasm_free
+)
 
 write_world_input_manifest() {
   local destination="$1" index source
@@ -279,6 +341,15 @@ write_input_manifest() {
     fi
     printf 'adapter %q %s\n' "$adapter" \
       "$(sha256sum "$adapter" | sed 's/ .*//')"
+    if [[ "$host" == "wasm-embed" ]]; then
+      printf 'wasm-host-source %q %s\n' "$wasm_host_source" \
+        "$(sha256sum "$wasm_host_source" | sed 's/ .*//')"
+      # The pinned seam set is part of the artifact's identity: editing the
+      # fixture must produce a different artifact, never a stale cache hit.
+      printf 'wasm-seams %q %s\n' "$wasm_seams_ledger" \
+        "$(sha256sum "$wasm_seams_ledger" 2>/dev/null | sed 's/ .*//' || true)"
+      printf 'wasm-export %s\n' "${wasm_exports[@]}"
+    fi
   } >"$destination"
 }
 
@@ -429,6 +500,83 @@ check_qbe_frontier() {
     "QBE frontier MOVED for scope $world_scope." \
     "  recorded: $recorded" \
     "  observed: $observed")"
+}
+
+# The seam set an external embedder actually faces: every import with its
+# resolved wasm signature, every export with its kind. Type indices are
+# resolved here because the printed import only carries the index.
+write_wasm_seams() {
+  local module_path="$1" destination="$2"
+  {
+    printf 'fram-wasm-embed-seams/v1\n'
+    "$wasm_tools" print "$module_path" |
+      awk '
+        function signature(line,   params, results) {
+          params = ""
+          results = ""
+          if (match(line, /\(param [^)]*\)/)) {
+            params = substr(line, RSTART + 7, RLENGTH - 8)
+          }
+          if (match(line, /\(result [^)]*\)/)) {
+            results = substr(line, RSTART + 8, RLENGTH - 9)
+          }
+          return "(" params ") -> (" results ")"
+        }
+        /^ *\(type \(;[0-9]+;\) \(func/ {
+          index_text = $2
+          gsub(/[^0-9]/, "", index_text)
+          types[index_text] = signature($0)
+          next
+        }
+        /^ *\(import "/ {
+          split($0, quoted, "\"")
+          if ($0 ~ /\(func /) {
+            type_index = $0
+            sub(/.*\(type /, "", type_index)
+            gsub(/[^0-9]/, "", type_index)
+            printf "import %s %s %s\n", quoted[2], quoted[4], types[type_index]
+          } else {
+            kind = $0
+            sub(/.*\(/, "", kind)
+            split(kind, kind_fields, " ")
+            printf "import %s %s %s\n", quoted[2], quoted[4], kind_fields[1]
+          }
+          next
+        }
+        /^ *\(export "/ {
+          split($0, quoted, "\"")
+          kind = $0
+          sub(/.*\(export "[^"]*" \(/, "", kind)
+          split(kind, kind_fields, " ")
+          printf "export %s %s\n", quoted[2], kind_fields[1]
+        }
+      ' | LC_ALL=C sort
+  } >"$destination"
+}
+
+# Exact and shrink-only by hand: the fixture never widens itself, so a new
+# import (a new capability the embedder must satisfy) fails the build.
+check_wasm_seams() {
+  local observed="$1" expected="$2"
+  if [[ "$regen_wasm_seams" == 1 ]]; then
+    # Justification comments survive regeneration; the seam set does not.
+    { [[ ! -f "$wasm_seams_ledger" ]] ||
+        sed -n '/^[[:space:]]*#/p' "$wasm_seams_ledger"
+      cat "$observed"; } >"$expected"
+    cat "$expected" >"$wasm_seams_ledger"
+    echo "wasm seams: recorded $(grep -c '^import ' "$observed") imports and $(grep -c '^export ' "$observed") exports in $wasm_seams_ledger" >&2
+    return 0
+  fi
+  [[ -f "$wasm_seams_ledger" ]] ||
+    die "wasm-embed seam ledger is unavailable: $wasm_seams_ledger"
+  # Comment lines carry the justification a ledgered seam needs; they are not
+  # part of the compared set.
+  grep -v '^[[:space:]]*#' "$wasm_seams_ledger" | grep -v '^[[:space:]]*$' \
+    >"$expected" || true
+  cmp -s "$expected" "$observed" || die "$(printf '%s\n%s\n%s' \
+    "wasm-embed seams MOVED against $wasm_seams_ledger:" \
+    "$(diff "$expected" "$observed" || true)" \
+    "  fix it at the referencing site, or rerun with --regen-wasm-seams.")"
 }
 
 write_server_symbols() {
@@ -712,7 +860,11 @@ if [[ -e "$artifact_dir" ]]; then
     die "cache entry exists but is not READY: $artifact_dir"
   cmp -s "$input_manifest" "$artifact_dir/input.manifest" ||
     die "cache entry identity does not match its input closure: $artifact_dir"
-  if [[ "$host" == "embed" ]]; then
+  if [[ "$host" == "wasm-embed" ]]; then
+    [[ -f "$artifact_dir/include/fram.h" &&
+      -f "$artifact_dir/lib/libfram.wasm" ]] ||
+      die "wasm-embed cache entry omitted its reactor: $artifact_dir"
+  elif [[ "$host" == "embed" ]]; then
     [[ -f "$artifact_dir/include/fram.h" &&
       -f "$artifact_dir/lib/libfram.a" &&
       -f "$artifact_dir/lib/libfram.so" ]] ||
@@ -770,6 +922,49 @@ if [[ "$host" == "server" ]]; then
     printf 'native-host-abi PASS host=server exports=8\n'
     write_qbe_frontier_receipt
   } >"$stage/native-host.report.txt"
+elif [[ "$host" == "wasm-embed" ]]; then
+  mkdir -p "$stage/objects"
+  wasm_sources=("${module_sources[@]}" "$stage/native_shim.c" \
+    "$adapter" "$host_source" "$wasm_host_source")
+  wasm_objects=()
+  for index in "${!wasm_sources[@]}"; do
+    object="$stage/objects/$index.o"
+    # -O2 keeps the reactor's frames inside its default linear stack; there is
+    # no -pthread, wasip1 being single-threaded.
+    if ! "$cc" -std=c17 -pedantic -Wall -Wextra -Werror -O2 \
+        -DFRAM_WASM_HOST_IMPORTS=1 \
+        -I"$stage" -I"$repo/native" -c "${wasm_sources[$index]}" \
+        -o "$object" >>"$stage/native-host.log" 2>&1; then
+      sed -n '1,240p' "$stage/native-host.log" >&2
+      die "wasm-embed object compilation failed"
+    fi
+    wasm_objects+=("$object")
+  done
+  wasm_export_flags=()
+  for wasm_export in "${wasm_exports[@]}"; do
+    wasm_export_flags+=("-Wl,--export=$wasm_export")
+  done
+  if ! "$cc" -mexec-model=reactor -O2 "${wasm_objects[@]}" \
+      "${wasm_export_flags[@]}" -o "$stage/lib/libfram.wasm" \
+      >>"$stage/native-host.log" 2>&1; then
+    sed -n '1,240p' "$stage/native-host.log" >&2
+    die "wasm-embed reactor link failed"
+  fi
+  cp "$host_header" "$stage/include/fram.h"
+  write_wasm_seams "$stage/lib/libfram.wasm" "$stage/wasm-embed.seams"
+  check_wasm_seams "$stage/wasm-embed.seams" "$stage/wasm-embed.seams.expected"
+  rm -f "$stage/wasm-embed.seams.expected"
+  # Regeneration authors the fixture and stops: the artifact identity includes
+  # that fixture, so publishing here would seal a stale manifest.
+  [[ "$regen_wasm_seams" == 0 ]] || exit 0
+  {
+    printf 'native-host-c17 PASS compiler=%s output=%s\n' \
+      "$cc" "$stage/lib/libfram.wasm"
+    printf 'native-host-abi PASS host=wasm-embed exports=%d version=%d\n' \
+      "${#wasm_exports[@]}" 1
+    printf 'native-wasm-seams PASS ledger=%s\n' "${wasm_seams_ledger#"$repo"/}"
+    write_qbe_frontier_receipt
+  } >"$stage/native-host.report.txt"
 else
   mkdir -p "$stage/objects"
   embed_sources=("${module_sources[@]}" "$stage/native_shim.c" \
@@ -813,7 +1008,10 @@ else
     write_qbe_frontier_receipt
   } >"$stage/native-host.report.txt"
 fi
-if [[ "$host" == "embed" ]]; then
+if [[ "$host" == "wasm-embed" ]]; then
+  [[ -f "$stage/include/fram.h" && -f "$stage/lib/libfram.wasm" ]] ||
+    die "wasm-embed reactor is missing"
+elif [[ "$host" == "embed" ]]; then
   [[ -f "$stage/include/fram.h" && -f "$stage/lib/libfram.a" &&
     -f "$stage/lib/libfram.so" ]] || die "native embed libraries are missing"
 else
