@@ -47,15 +47,14 @@
 (defn empty-error-cell [] -> (Atom String?)
   (atom no-error))
 
-(defn preserve-first-error [current: String? incoming: String] -> String?
-  (if current current incoming))
-
+;; Preserve-first is the nil compare-and-set, not a swap: a swap updater is
+;; handed no arena, so one returning String? cannot build its own union.
 (defn decoder-error! [decoder: Decoder message: String] -> Nil
-  (swap! (decoder-error decoder) preserve-first-error message)
+  (compare-and-set! (decoder-error decoder) no-error message)
   nil)
 
 (defn encoder-error! [encoder: Encoder message: String] -> Nil
-  (swap! (encoder-error encoder) preserve-first-error message)
+  (compare-and-set! (encoder-error encoder) no-error message)
   nil)
 
 (defn byte-value? [value: Int] -> Bool

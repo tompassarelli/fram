@@ -62,11 +62,6 @@
 (def no-query-result-rows: (Vec (Vec Any)) [])
 (def no-triple-result-rows: (Vec t/Triple) [])
 
-(defn preserve-first-read-error
-  [current: ReadError?
-   incoming: ReadError] -> ReadError?
-  (if current current incoming))
-
 (defn new-read-context [] -> ReadContext
   (->ReadContext (atom no-read-error)))
 
@@ -74,9 +69,9 @@
   [context: ReadContext
    code: Keyword
    message: String] -> Nil
-  (swap! (readcontext-error context)
-         preserve-first-read-error
-         (->ReadError code message))
+  (compare-and-set! (readcontext-error context)
+                    no-read-error
+                    (->ReadError code message))
   nil)
 
 (defn read-context-error [context: ReadContext] -> ReadError?
