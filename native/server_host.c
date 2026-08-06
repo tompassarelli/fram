@@ -649,6 +649,19 @@ static int initialize_server_context(server_context *server,
     (void)pthread_mutex_destroy(&server->dispatch_mutex);
     return -1;
   }
+  /* musl defaults workers to 128 KiB; compaction replays the full log on a
+     worker. */
+  status = pthread_attr_setstacksize(&server->worker_attributes,
+                                     (size_t)8u * 1024u * 1024u);
+  if (status != 0) {
+    fprintf(stderr, "fram-server-native: cannot size worker stacks: %s\n",
+            strerror(status));
+    (void)pthread_attr_destroy(&server->worker_attributes);
+    (void)pthread_cond_destroy(&server->clients_idle);
+    (void)pthread_mutex_destroy(&server->clients_mutex);
+    (void)pthread_mutex_destroy(&server->dispatch_mutex);
+    return -1;
+  }
   return 0;
 }
 

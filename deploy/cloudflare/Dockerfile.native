@@ -20,9 +20,12 @@ LABEL org.fram.native-artifact="$FRAM_NATIVE_ARTIFACT_HASH"
 COPY --from=verify /fram-artifact/READY /usr/local/share/fram/READY
 COPY --from=verify /fram-artifact/fram-server-native /usr/local/bin/fram-server-native
 
+# Loopback inside the container netns is unreachable through -p; docker
+# networking owns publication.
 ENV FRAM_SERVER_PORT=7977 \
     FRAM_LOG=/data/history.framlog \
-    FRAM_SPACE_ID=cloudflare
+    FRAM_SPACE_ID=cloudflare \
+    FRAM_BIND=0.0.0.0
 
 VOLUME /data
 EXPOSE 7977

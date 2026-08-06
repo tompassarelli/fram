@@ -18,7 +18,8 @@ Usage:
 
 Prints the absolute immutable artifact directory on success.
 Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, FRAM_NATIVE_CC,
-FRAM_NATIVE_AR, and FRAM_QBE_FRONTIER_LEDGER as needed.
+FRAM_NATIVE_STATIC=1 (server host: link -static), FRAM_NATIVE_AR, and
+FRAM_QBE_FRONTIER_LEDGER as needed.
 
 Native hosts default to native/server_generated.c beside this script. The
 embed host emits include/fram.h, lib/libfram.a, and lib/libfram.so. The world
@@ -127,6 +128,14 @@ cc_candidate="${FRAM_NATIVE_CC:-${CC:-cc}}"
 cc="$(command -v "$cc_candidate" 2>/dev/null || true)"
 [[ -n "$cc" && -x "$cc" ]] || die "C17 compiler is not executable: $cc_candidate"
 cc="$(realpath "$cc")"
+case "${FRAM_NATIVE_STATIC:-}" in
+  "") link_mode=dynamic ;;
+  1) link_mode=static ;;
+  *) die "FRAM_NATIVE_STATIC must be 1 or unset" ;;
+esac
+# -static is server-host-only: embed emits -fPIC objects and a .so.
+[[ "$link_mode" == dynamic || "$host" == server ]] ||
+  die "FRAM_NATIVE_STATIC=1 needs --host server"
 ar=""
 if [[ "$host" == "embed" ]]; then
   ar_candidate="${FRAM_NATIVE_AR:-ar}"
@@ -236,6 +245,7 @@ write_input_manifest() {
     printf 'fram-native-build-input/v1\n%s\nhost=%s\nworld=%s\nnative-world=%s\n%s\n' \
       "$builder_identity" "$host" "$world_closure_hash" \
       "$native_world_digest" "$cc_identity"
+    printf 'link=%s\n' "$link_mode"
     printf 'host-source %q %s\n' "$host_source" \
       "$(sha256sum "$host_source" | sed 's/ .*//')"
     printf 'host-header %q %s\n' "$host_header" \
@@ -714,7 +724,10 @@ module_sources=("$stage"/module_*.c)
 shopt -u nullglob
 [[ ${#module_sources[@]} -gt 0 ]] || die "C17 materializer omitted module_*.c"
 if [[ "$host" == "server" ]]; then
+  link_flags=()
+  [[ "$link_mode" != static ]] || link_flags+=(-static)
   if ! "$cc" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
+      "${link_flags[@]}" \
       -I"$stage" -I"$(dirname "$host_header")" \
       "${module_sources[@]}" \
       "$stage/native_shim.c" \
