@@ -610,7 +610,13 @@
 
 (def query-current :query/current)
 
+(def rpc-v1-list-envelope-depth 6)
+
+(def rpc-v1-max-list-values (- rpc-v1-max-term-depth rpc-v1-list-envelope-depth))
+
 (defn rpc-list! [values]
+  (if (> (count values) rpc-v1-max-list-values) (do
+  (rpc-fail! :term-depth-exceeded "RPC list length exceeds the TermCodecV1 depth bound")))
   (reduce (fn [tail value] (require-rpc-term! value "RPC list value")
   (t/triple :rpc/list value tail)) rpc-list-end (reverse values)))
 

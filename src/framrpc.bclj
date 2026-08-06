@@ -875,7 +875,17 @@
 (def rpc-subject-existing: Keyword :rpc/subject-existing)
 (def query-current: Keyword :query/current)
 
+;; A list nests one Term node per value inside a six-deep request envelope, so
+;; no list longer than this encodes at any nesting; a deeper one fails earlier
+;; in the encoder, with the same code.
+(def rpc-v1-list-envelope-depth: Int 6)
+(def rpc-v1-max-list-values: Int
+  (- rpc-v1-max-term-depth rpc-v1-list-envelope-depth))
+
 (defn rpc-list! [values: (Vec Any)] -> Any
+  (when (> (count values) rpc-v1-max-list-values)
+    (rpc-fail! :term-depth-exceeded
+               "RPC list length exceeds the TermCodecV1 depth bound"))
   (reduce (fn [tail: Any value: Any] -> Any
             (require-rpc-term! value "RPC list value")
             (t/triple :rpc/list value tail))

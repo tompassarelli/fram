@@ -13,7 +13,12 @@
 (define-mode strict)
 
 (def max-list-values: Int 65536)
-(def unpaged-occurrence-limit: Int 256)
+
+;; An unpaged response nests one Term node per row, so the row count is bounded
+;; by the codec depth budget less the wrappers the list sits inside.
+(def unpaged-response-wrapper-depth: Int 8)
+(def unpaged-occurrence-limit: Int
+  (- native-wire/rpc-v1-max-term-depth unpaged-response-wrapper-depth))
 (def default-query-timeout-ms: Int 5000)
 (def max-query-timeout-ms: Int 60000)
 (def query-step-limit: Int 10000000)
