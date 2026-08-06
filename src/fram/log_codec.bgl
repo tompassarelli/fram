@@ -248,68 +248,71 @@
    bytes: (Vec Int)
    position: Int
    final: Bool] -> BootStream
-  (let [remaining (- (count bytes) position)]
-    (cond
-      [(= remaining 0)
-       (if final (complete-boot-stream stream) stream)]
-      [(< remaining 4)
-       (if final
-         (complete-boot-stream stream)
-         (pending-boot-stream stream (subvec bytes position (count bytes))))]
-      [:else
-       (let [payload-length (u32-le-at bytes position)
-             frame-length (+ payload-length 8)]
-         (cond
-           [(> payload-length framlog-stream-max-payload-bytes)
-            (failed-boot-stream
-             stream "FRAMLOG frame exceeds the supported byte range")]
-           [(< remaining frame-length)
-            (if final
-              (complete-boot-stream stream)
-              (pending-boot-stream
-               stream (subvec bytes position (count bytes))))]
-           [:else
-            (let [payload-start (+ position 4)
-                  payload-end (+ payload-start payload-length)
-                  stored-crc (u32-le-at bytes payload-end)
-                  actual-crc (crc32-range bytes payload-start payload-end)
-                  decoded
-                  (decode-frame-payload-range!
-                   bytes payload-start payload-end)
-                  frame (framedecoderesult-frame decoded)
-                  root (bootstream-store stream)]
-              (cond
-                [(not= stored-crc actual-crc)
-                 (failed-boot-stream stream "FRAMLOG frame CRC does not match")]
-                [(framedecoderesult-error decoded)
-                 (failed-boot-stream
-                  stream
-                  (str "FRAMLOG transaction decode failed: "
-                       (framedecoderesult-error decoded)))]
-                [(nil? frame)
-                 (failed-boot-stream
-                  stream "FRAMLOG transaction decoder returned no frame")]
-                [(nil? root)
-                 (failed-boot-stream stream "FRAMLOG header was not decoded")]
-                [:else
-                 (let [replayed
-                       (term-store/replay-transaction-result! root frame)]
-                   (if (term-store/transactionreplayresult-ok replayed)
-                     (consume-framlog-frames!
-                      (->BootStream
-                       (bootstream-configured-space-id stream)
-                       root
-                       []
-                       (+ (bootstream-valid-log-bytes stream) frame-length)
-                       true
-                       false
-                       []
-                       nil)
-                      bytes (+ position frame-length) final)
-                     (failed-boot-stream
-                      stream
-                      (or (term-store/transactionreplayresult-message replayed)
-                          "FRAMLOG transaction sequence does not advance"))))]))]))])))
+  ;; replay is a loop, not a self-call: one C stack frame per FRAMLOG frame
+  ;; overflows the wasm stack a few hundred commits in.
+  (loop [stream: BootStream stream position: Int position]
+    (let [remaining (- (count bytes) position)]
+      (cond
+        [(= remaining 0)
+         (if final (complete-boot-stream stream) stream)]
+        [(< remaining 4)
+         (if final
+           (complete-boot-stream stream)
+           (pending-boot-stream stream (subvec bytes position (count bytes))))]
+        [:else
+         (let [payload-length (u32-le-at bytes position)
+               frame-length (+ payload-length 8)]
+           (cond
+             [(> payload-length framlog-stream-max-payload-bytes)
+              (failed-boot-stream
+               stream "FRAMLOG frame exceeds the supported byte range")]
+             [(< remaining frame-length)
+              (if final
+                (complete-boot-stream stream)
+                (pending-boot-stream
+                 stream (subvec bytes position (count bytes))))]
+             [:else
+              (let [payload-start (+ position 4)
+                    payload-end (+ payload-start payload-length)
+                    stored-crc (u32-le-at bytes payload-end)
+                    actual-crc (crc32-range bytes payload-start payload-end)
+                    decoded
+                    (decode-frame-payload-range!
+                     bytes payload-start payload-end)
+                    frame (framedecoderesult-frame decoded)
+                    root (bootstream-store stream)]
+                (cond
+                  [(not= stored-crc actual-crc)
+                   (failed-boot-stream stream "FRAMLOG frame CRC does not match")]
+                  [(framedecoderesult-error decoded)
+                   (failed-boot-stream
+                    stream
+                    (str "FRAMLOG transaction decode failed: "
+                         (framedecoderesult-error decoded)))]
+                  [(nil? frame)
+                   (failed-boot-stream
+                    stream "FRAMLOG transaction decoder returned no frame")]
+                  [(nil? root)
+                   (failed-boot-stream stream "FRAMLOG header was not decoded")]
+                  [:else
+                   (let [replayed
+                         (term-store/replay-transaction-result! root frame)]
+                     (if (term-store/transactionreplayresult-ok replayed)
+                       (recur
+                        (->BootStream
+                         (bootstream-configured-space-id stream)
+                         root
+                         []
+                         (+ (bootstream-valid-log-bytes stream) frame-length)
+                         true
+                         false
+                         []
+                         nil)
+                        (+ position frame-length))
+                       (failed-boot-stream
+                        stream
+                        (or (term-store/transactionreplayresult-message replayed)
+                            "FRAMLOG transaction sequence does not advance"))))]))]))]))))
 
 (defn consume-framlog-header!
   [stream: BootStream
