@@ -132,8 +132,14 @@
                   (and (= :invalid-code-snapshot (:type (ex-data e)))
                        (str/includes? (.getMessage e) "page limit must be between")))))))
   (finally
-    (when server (future-cancel server))
+    ;; serve! blocks in accept, which ignores interrupts: only shutdown! stops
+    ;; the non-daemon connection workers, so cancelling the future can't exit.
+    (when server
+      (server/shutdown!)
+      (deref server 3000 nil))
     (delete-tree! scratch)))
+
+(shutdown-agents)
 
 (let [failures (remove second @checks)]
   (if (seq failures)

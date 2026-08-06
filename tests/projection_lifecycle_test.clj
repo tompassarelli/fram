@@ -193,9 +193,15 @@
                 (and (= :current (:projection-state current))
                      (false? (:repair-needed? current)))))
       (finally
-        (when server (future-cancel server)))))
+        ;; serve! blocks in accept, which ignores interrupts: only shutdown!
+        ;; stops the non-daemon connection workers, so cancelling can't exit.
+        (when server
+          (server/shutdown!)
+          (deref server 3000 nil)))))
   (finally
     (delete-tree! scratch)))
+
+(shutdown-agents)
 
 (let [failures (remove second @checks)]
   (if (seq failures)

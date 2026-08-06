@@ -117,7 +117,12 @@
             (= :query-cursor-mismatch (error-code next-page))))
 
   (finally
-    (future-cancel server)))
+    ;; serve! blocks in accept, which ignores interrupts: only shutdown! stops
+    ;; the non-daemon connection workers, so cancelling the future can't exit.
+    (server/shutdown!)
+    (deref server 3000 nil)))
+
+(shutdown-agents)
 
 (let [failure-count (count @failures)]
   (if (pos? failure-count)
