@@ -13,7 +13,7 @@ usage() {
 Usage:
   fram-native-build --host server [--adapter FILE] SOURCE.bgl...
   fram-native-build --host embed [--adapter FILE] SOURCE.bgl...
-  fram-native-build --host world [--entry NS/NAME]... SOURCE.bgl...
+  fram-native-build --host world [--abi ID] [--entry NS/NAME]... SOURCE.bgl...
   fram-native-build --host world --regen-qbe-frontier [--entry NS/NAME]... SOURCE.bgl...
 
 Prints the absolute immutable artifact directory on success.
@@ -26,6 +26,11 @@ embed host emits include/fram.h, lib/libfram.a, and lib/libfram.so. The world
 host stops at the sealed Native World and its C17 projection, emits no C host,
 and is how a source slice narrower than the server ABI is taken through the
 same release gate.
+
+--abi names the Beagle ABI profile the world is sealed at (default lp64;
+Beagle owns the registry and refuses an unknown id by name). It needs --host
+world, because the C hosts link their projection with the native compiler. Each
+profile gets its own Native World cache entry and its own QBE frontier scope.
 
 RELEASE GATE
   REQUIRED (build fails)  complete C17 materialization, all seven obligation
@@ -43,11 +48,18 @@ adapter=""
 sources=()
 entries=()
 regen_qbe_frontier=0
+default_abi=lp64
+abi="$default_abi"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host)
       [[ $# -ge 2 && -z "$host" ]] || die "--host needs one host name"
       host="$2"
+      shift 2
+      ;;
+    --abi)
+      [[ $# -ge 2 ]] || die "--abi needs one profile id"
+      abi="$2"
       shift 2
       ;;
     --adapter)
@@ -83,6 +95,11 @@ case "$host" in
   *) die "unsupported host: $host" ;;
 esac
 [[ ${#sources[@]} -gt 0 ]] || die "provide the dependency-first source closure"
+# Beagle owns the profile registry; the shape check is ours because the id
+# enters both the cache manifest and the tab-separated frontier scope.
+[[ "$abi" =~ ^[A-Za-z0-9_.-]+$ ]] || die "--abi takes a bare profile id: $abi"
+[[ "$abi" == "$default_abi" || "$host" == "world" ]] ||
+  die "--abi $abi needs --host world; the $host host links its C17 projection with the native compiler"
 [[ ${#entries[@]} -eq 0 || "$host" == "world" ]] ||
   die "--entry overrides the server ABI entry set and needs --host world"
 [[ "$regen_qbe_frontier" == 0 || "$host" == "world" ]] ||
@@ -214,6 +231,9 @@ else
   mapfile -t world_entries < <(printf '%s\n' "${entries[@]}" | LC_ALL=C sort -u)
   world_scope="$(IFS='+'; printf '%s' "${world_entries[*]}")"
 fi
+# QBE judges each ABI profile separately, so each gets its own scope; lp64 keeps
+# the bare name so every recorded ledger line stays addressed as it was written.
+[[ "$abi" == "$default_abi" ]] || world_scope+="@$abi"
 [[ "$world_scope" != *[[:space:]]* ]] ||
   die "entry names must not contain whitespace: $world_scope"
 native_server_entry_args=()
@@ -228,6 +248,9 @@ write_world_input_manifest() {
   {
     printf 'fram-native-world-input/v1\n%s\n%s\nconfiguration=profile=3\n' \
       "$builder_identity" "$beagle_identity"
+    # Mirrors the ABI profile Beagle seals into the world configuration; without
+    # it two profiles over one closure would collide on a single cache entry.
+    printf 'abi=%s\n' "$abi"
     printf 'scope=%s\n' "$world_scope"
     for native_server_entry in "${world_entries[@]}"; do
       printf 'entry=%s\n' "$native_server_entry"
@@ -294,6 +317,9 @@ validate_native_report() {
 classify_qbe_refusal() {
   local detail="$1"
   case "$detail" in
+    "abi profile "*": qbe materializes lp64 only")
+      detail="${detail#abi profile }"
+      printf 'abi-profile\t%s\n' "${detail%%:*}" ;;
     "unsupported native value-semantics op: "*)
       printf 'unsupported-value-semantics\t%s\n' "${detail#unsupported native value-semantics op: }" ;;
     "QBE codec primitive is unsupported: "*)
@@ -580,7 +606,7 @@ if [[ ! -e "$world_dir" ]]; then
   cp "$world_input_manifest" "$world_stage/input.manifest"
   combined_status=0
   "$beagle" build --materializer c17 --materializer qbe \
-      --out "$world_stage" \
+      --out "$world_stage" --abi "$abi" \
       "${native_server_entry_args[@]}" \
       -- \
       "${normalized_sources[@]}" \
@@ -604,7 +630,7 @@ if [[ ! -e "$world_dir" ]]; then
         die "Beagle Native World materialization failed"
       }
     "$beagle" build --materializer c17 \
-        --out "$world_stage" \
+        --out "$world_stage" --abi "$abi" \
         "${native_server_entry_args[@]}" \
         -- \
         "${normalized_sources[@]}" \

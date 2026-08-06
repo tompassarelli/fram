@@ -22,12 +22,14 @@ command="${1:-}"
 shift
 if [[ "$command" == "build" ]]; then
   out=""
+  abi=""
   materializers=()
   sources=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --out) out="$2"; shift 2 ;;
       --materializer) materializers+=("$2"); shift 2 ;;
+      --abi) abi="$2"; shift 2 ;;
       --entry) shift 2 ;;
       --) shift; sources+=("$@"); break ;;
       *) sources+=("$1"); shift ;;
@@ -39,7 +41,7 @@ if [[ "$command" == "build" ]]; then
     "c17") ;;
     *) exit 96 ;;
   esac
-  [[ -n "$out" && ${#sources[@]} -gt 0 ]] || exit 96
+  [[ -n "$out" && -n "$abi" && ${#sources[@]} -gt 0 ]] || exit 96
   printf '%s\n' "build-$(IFS=+; printf '%s' "${materializers[*]}")" \
     >>"$FAKE_NATIVE_CALLS"
   mkdir -p "$out"
