@@ -82,7 +82,7 @@ static musl toolchain realized from the nixpkgs revision this repo's
 
 ```sh
 rev="$(nix flake metadata --json . | jq -r '.locks.nodes.nixpkgs.locked.rev')"
-cc="$(nix build --no-link --print-out-paths \
+cc="$(nix build --out-link /home/tom/.cache/fram/native-build/.musl-cc --print-out-paths \
   "github:NixOS/nixpkgs/$rev#pkgsStatic.stdenv.cc" | grep -v -- '-man$'
 )/bin/x86_64-unknown-linux-musl-cc"
 mapfile -t sources < <(sed "s#^#$PWD/#" native/core_closure_sources.txt)
@@ -90,6 +90,8 @@ artifact="$(FRAM_NATIVE_CC="$cc" FRAM_NATIVE_STATIC=1 \
   bin/fram-native-build --host server "${sources[@]}")"
 bin/fram-cloudflare-native-image --artifact "$artifact" --tag fram-server-native:local
 ```
+
+The `--out-link` roots the musl toolchain so nix GC cannot orphan it between builds.
 
 The helper requires an absolute artifact path, verifies that its directory hash
 and `READY` receipt agree, rejects any executable that still requests a program
