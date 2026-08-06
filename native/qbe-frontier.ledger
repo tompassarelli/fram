@@ -5,7 +5,6 @@
 # scope<TAB>class<TAB>detail. QBE reports one refusal per world, so a scope
 # carries at most one line; resolving it reveals the next front.
 #
-# fram-native-server has no line: its closure does not lower completely yet, so
-# no QBE verdict on it has been observed.
 fram.store/known-term-handle+fram.store/new-term-store+fram.store/term-count	unsupported-value-semantics	hash
 fram.store/term-count	shape-outside-slice	-
+fram-native-server	clock-extern	-

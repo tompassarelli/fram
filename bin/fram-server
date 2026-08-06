@@ -4,7 +4,8 @@
 # only through the explicitly selected oracle or checkout-development routes.
 #   fram-server [serve] [port] [framlog] [space-id]   (mode defaults to serve)
 #   FRAM_SERVER_RUNTIME=native       production runtime (default)
-#   FRAM_NATIVE_ARTIFACT_DIR=<path>  READY native-build artifact directory
+#   FRAM_NATIVE_ARTIFACT_DIR=<path>  READY native-build artifact directory;
+#                                    a checkout builds its own when unset
 #   FRAM_SERVER_RUNTIME=graal        transitional self-contained server
 #   FRAM_GRAAL_ARTIFACT=<path>       absolute Graal server executable
 #   FRAM_SERVER_RUNTIME=jvm-oracle   sealed Java/classpath differential oracle
@@ -52,6 +53,19 @@ runtime="${FRAM_SERVER_RUNTIME:-native}"
 case "$runtime" in
   native)
     artifact_dir="${FRAM_NATIVE_ARTIFACT_DIR:-}"
+    # A checkout resolves its own artifact through the release gate, which is
+    # content-addressed and returns the cached directory when one already
+    # matches; a packaged tree carries no gate and must be told the path.
+    if [[ -z "$artifact_dir" && -x "$HERE/bin/fram-native-build" &&
+      -r "$HERE/native/core_closure_sources.txt" ]]; then
+      closure_sources=()
+      while IFS= read -r closure_source || [[ -n "$closure_source" ]]; do
+        [[ -n "$closure_source" ]] || continue
+        closure_sources+=("$HERE/$closure_source")
+      done <"$HERE/native/core_closure_sources.txt"
+      artifact_dir="$("$HERE/bin/fram-native-build" --host server \
+        "${closure_sources[@]}")" || exit 2
+    fi
     if [[ -z "$artifact_dir" ]]; then
       echo "fram-server: FRAM_NATIVE_ARTIFACT_DIR is required for FRAM_SERVER_RUNTIME=native" >&2
       exit 2
