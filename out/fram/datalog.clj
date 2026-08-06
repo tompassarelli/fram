@@ -94,6 +94,12 @@
 
 (defn occurrencecandidatesource-postings [r] (:postings r))
 
+(defrecord RotationCandidateSource [rotation lower-exclusive])
+
+(defn rotationcandidatesource-rotation [r] (:rotation r))
+
+(defn rotationcandidatesource-lower-exclusive [r] (:lower-exclusive r))
+
 (defrecord CandidateSource [rows positions spo pos osp occurrence rotation])
 
 (defn candidatesource-rows [r] (:rows r))
@@ -533,8 +539,17 @@
 (defn ^CandidateSource occurrence-candidate-source [root lower-exclusive upper-inclusive]
   (->CandidateSource [] {} {} {} {} (->OccurrenceCandidateSource root lower-exclusive upper-inclusive (store/operation-postings root)) nil))
 
-(defn ^CandidateSource rotation-candidate-source [rotation]
-  (->CandidateSource [] {} {} {} {} nil rotation))
+(defn ^CandidateSource rotation-candidate-source [rotation lower-exclusive]
+  (->CandidateSource [] {} {} {} {} nil (->RotationCandidateSource rotation lower-exclusive)))
+
+(defn- ^Boolean event-after-sequence? [event lower-exclusive]
+  (if (< lower-exclusive 0) true (let [occurrence (rot/occurrence-of event)]
+  (if (t/occurrence-coordinate? occurrence) (let [transaction (t/triple-t1 occurrence)
+   sequence (t/triple-t3 transaction)]
+  (> sequence lower-exclusive)) false))))
+
+(defn- events-after-sequence [events lower-exclusive]
+  (if (< lower-exclusive 0) events (filterv (fn [event] (event-after-sequence? event lower-exclusive)) events)))
 
 (defn- ^CandidateSource candidate-source-add [^String relation ^CandidateSource source tuple]
   (let [handle (count (candidatesource-rows source))
@@ -610,13 +625,13 @@
 (defn- ^Boolean source-contains? [^CandidateSource source ^String relation arguments subst]
   (let [rotation (candidatesource-rotation source)]
   (if (some? rotation) (let [wanted (ground arguments subst)]
-  (not (empty? (rot/matching rotation (nth wanted 0) (nth wanted 1) (nth wanted 2))))) (let [wanted (ground arguments subst)
+  (not (empty? (events-after-sequence (rot/matching (rotationcandidatesource-rotation rotation) (nth wanted 0) (nth wanted 1) (nth wanted 2)) (rotationcandidatesource-lower-exclusive rotation))))) (let [wanted (ground arguments subst)
    handles (source-handles source relation arguments subst)]
   (some? (some (fn [handle] (if (= wanted (source-row source handle)) (do
   handle))) (or handles [])))))))
 
-(defn- rotation-results-indexed! [rotation arguments subst ^QueryEvaluationContext context]
-  (let [events (rot/matching rotation (bound-term-value (nth arguments 0) subst) (bound-term-value (nth arguments 1) subst) (bound-term-value (nth arguments 2) subst))]
+(defn- rotation-results-indexed! [^RotationCandidateSource rotation arguments subst ^QueryEvaluationContext context]
+  (let [events (events-after-sequence (rot/matching (rotationcandidatesource-rotation rotation) (bound-term-value (nth arguments 0) subst) (bound-term-value (nth arguments 1) subst) (bound-term-value (nth arguments 2) subst)) (rotationcandidatesource-lower-exclusive rotation))]
   (loop [remaining events
    seen #{}
    results []]

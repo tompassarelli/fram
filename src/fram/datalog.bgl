@@ -64,6 +64,12 @@
    upper-inclusive: Int
    postings: (Map Int (Vec Int))])
 
+;; A projected rotation carries the upper snapshot only, so a since window's
+;; lower bound has to ride alongside it.
+(defrecord RotationCandidateSource
+  [rotation: rot/Rotation
+   lower-exclusive: Int])
+
 ;; Candidate handles are private positions in one immutable relation vector.
 (defrecord CandidateSource
   [rows: (Vec Tuple)
@@ -72,7 +78,7 @@
    pos: HandleTrie
    osp: HandleTrie
    occurrence: OccurrenceCandidateSource?
-   rotation: rot/Rotation?])
+   rotation: RotationCandidateSource?])
 (defrecord VirtualCandidateSource
   [relation: String
    source: text-search/TextSearchSource])
@@ -873,8 +879,31 @@
       root lower-exclusive upper-inclusive (store/operation-postings root))
     nil))
 
-(defn rotation-candidate-source [rotation: rot/Rotation] -> CandidateSource
-  (->CandidateSource [] {} {} {} {} nil rotation))
+(defn rotation-candidate-source
+  [rotation: rot/Rotation
+   lower-exclusive: Int] -> CandidateSource
+  (->CandidateSource [] {} {} {} {} nil
+    (->RotationCandidateSource rotation lower-exclusive)))
+
+;; Exclusive lower bound, matching store/operation-range-bounds exactly.
+(defn- event-after-sequence? [event: t/Triple lower-exclusive: Int] -> Bool
+  (if (< lower-exclusive 0)
+    true
+    (let [occurrence: t/Triple (rot/occurrence-of event)]
+      (if (t/occurrence-coordinate? occurrence)
+        (let [transaction: t/Triple (t/triple-t1 occurrence)
+              sequence: Int (t/triple-t3 transaction)]
+          (> sequence lower-exclusive))
+        false))))
+
+(defn- events-after-sequence
+  [events: (Vec t/Triple)
+   lower-exclusive: Int] -> (Vec t/Triple)
+  (if (< lower-exclusive 0)
+    events
+    (filterv (fn [event: t/Triple] -> Bool
+               (event-after-sequence? event lower-exclusive))
+      events)))
 
 (defn- candidate-source-add
   [relation: String
@@ -1057,10 +1086,12 @@
       (let [wanted: Tuple (ground arguments subst)]
         (not
          (empty?
-          (rot/matching rotation
-                        (nth wanted 0)
-                        (nth wanted 1)
-                        (nth wanted 2)))))
+          (events-after-sequence
+           (rot/matching (rotationcandidatesource-rotation rotation)
+                         (nth wanted 0)
+                         (nth wanted 1)
+                         (nth wanted 2))
+           (rotationcandidatesource-lower-exclusive rotation)))))
       (let [wanted (ground arguments subst)
             handles (source-handles source relation arguments subst)]
         (some? (some (fn [handle: Int] -> Any
@@ -1068,15 +1099,17 @@
                      (or handles [])))))))
 
 (defn- rotation-results-indexed!
-  [rotation: rot/Rotation
+  [rotation: RotationCandidateSource
    arguments: (Vec QueryTerm)
    subst: Substitution
    context: QueryEvaluationContext] -> (Vec Substitution)
   (let [events: (Vec t/Triple)
-        (rot/matching rotation
-                      (bound-term-value (nth arguments 0) subst)
-                      (bound-term-value (nth arguments 1) subst)
-                      (bound-term-value (nth arguments 2) subst))]
+        (events-after-sequence
+         (rot/matching (rotationcandidatesource-rotation rotation)
+                       (bound-term-value (nth arguments 0) subst)
+                       (bound-term-value (nth arguments 1) subst)
+                       (bound-term-value (nth arguments 2) subst))
+         (rotationcandidatesource-lower-exclusive rotation))]
     (loop [remaining events
            seen: (Set t/Triple) #{}
            results: (Vec Substitution) []]

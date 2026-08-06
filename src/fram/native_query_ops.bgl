@@ -1034,7 +1034,8 @@
   (let [rotation (queryview-rotation view)
         root: t/TermStore (deref (queryview-root view))
         triple-candidate: d/CandidateSource
-        (d/rotation-candidate-source rotation)
+        (d/rotation-candidate-source
+         rotation (queryview-lower-exclusive view))
         occurrence-candidate: d/CandidateSource?
         (if (plan-uses-any-relation? plan occurrence-relations)
           (d/occurrence-candidate-source
