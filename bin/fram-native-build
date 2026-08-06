@@ -29,11 +29,11 @@ embed host emits include/fram.h, lib/libfram.a, and lib/libfram.so. The
 wasm-embed host emits include/fram.h and lib/libfram.wasm: a reactor whose
 fram_host_v1 table is built from nine named wasm imports, so an external
 engine embedder supplies storage, clock, and allocation as host functions. The
-world host stops at the sealed Native World and its C17 projection, emits no C
+world host stops at the frozen Native World and its C17 projection, emits no C
 host, and is how a source slice narrower than the server ABI is taken through
 the same release gate.
 
---abi names the Beagle ABI profile the world is sealed at (default lp64;
+--abi names the Beagle ABI profile the world is frozen at (default lp64;
 Beagle owns the registry and refuses an unknown id by name). server and embed
 link their projection with the native compiler and stay at lp64; wasm-embed
 requires wasm32. Each profile gets its own Native World cache entry and its own
@@ -310,7 +310,7 @@ write_world_input_manifest() {
   {
     printf 'fram-native-world-input/v1\n%s\n%s\nconfiguration=profile=3\n' \
       "$builder_identity" "$beagle_identity"
-    # Mirrors the ABI profile Beagle seals into the world configuration; without
+    # Mirrors the ABI profile Beagle freezes into the world configuration; without
     # it two profiles over one closure would collide on a single cache entry.
     printf 'abi=%s\n' "$abi"
     printf 'scope=%s\n' "$world_scope"
@@ -358,7 +358,7 @@ write_input_manifest() {
 validate_native_report() {
   local report_path="$1" line
   local -a required_lines=(
-    "stage source-seal ACCEPTED"
+    "stage source-freeze ACCEPTED"
     "stage source-to-typed ACCEPTED"
     "stage typed-to-native COMPLETE"
     "native-lowering-result NativeLoweringCompleteV0"
@@ -408,8 +408,8 @@ classify_qbe_refusal() {
       printf 'shape-outside-slice\t-\n' ;;
     "native world contains a Text or Keyword literal outside the QBE literal slice")
       printf 'literal-outside-slice\t-\n' ;;
-    "native world is not sealed: validation obligations failed")
-      printf 'world-not-sealed\t-\n' ;;
+    "native world is not frozen: validation obligations failed")
+      printf 'world-not-frozen\t-\n' ;;
     "module index must be nonnegative") printf 'module-index\t-\n' ;;
     # Unrecognised refusals key on their own text so they fail the ratchet.
     *) printf 'unclassified\t%s\n' "$detail" ;;

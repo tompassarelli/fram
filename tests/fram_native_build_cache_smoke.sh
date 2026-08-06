@@ -50,7 +50,7 @@ if [[ "$command" == "build" ]]; then
     "$out/native_shim.h" "$out/native_shim.c" "$out/report.txt" \
     "$out/native_unicode15_data.h" "$out/UNICODE-LICENSE.txt"
   printf '%s\n' 'fake source facts' >"$out/source.facts"
-  printf '%s\n' 'fake sealed Native World' >"$out/module.native-world"
+  printf '%s\n' 'fake frozen Native World' >"$out/module.native-world"
   sha256sum "$out/module.native-world" | sed 's/ .*//' \
     >"$out/module.native-world.sha256"
   cat >"$out/module_0.h" <<'C'
@@ -199,7 +199,7 @@ C
   fi
   {
     printf '%s\n' \
-      'stage source-seal ACCEPTED' \
+      'stage source-freeze ACCEPTED' \
       'stage source-to-typed ACCEPTED' \
       'stage typed-to-native COMPLETE' \
       'native-lowering-result NativeLoweringCompleteV0'
