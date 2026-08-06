@@ -519,6 +519,32 @@ embed_hit="$("${build_env[@]}" "$builder" --host embed \
   -name READY | wc -l)" == "1" ]] ||
   fail "server and embed did not share exactly one Native World"
 
+# The wasm-embed host is refusal-visible without its toolchain: it names the
+# missing tool instead of degrading to the native compiler. Its positive path
+# needs a real wasi link and lives in tests/fram_wasm_embed_smoke.sh.
+if env -u FRAM_WASI_CC -u WASI_CC "${build_env[@]}" "$builder" \
+    --host wasm-embed --abi wasm32 "$scratch/sources/good.bgl" \
+    >"$scratch/wasm-no-cc.out" 2>"$scratch/wasm-no-cc.err"; then
+  fail "wasm-embed host built without a wasi compiler"
+fi
+grep -Fq 'set FRAM_WASI_CC to an executable wasi C17 compiler' \
+  "$scratch/wasm-no-cc.err" ||
+  fail "wasm-embed host did not name the missing FRAM_WASI_CC"
+if "${build_env[@]}" "$builder" --host wasm-embed \
+    "$scratch/sources/good.bgl" \
+    >"$scratch/wasm-no-abi.out" 2>"$scratch/wasm-no-abi.err"; then
+  fail "wasm-embed host built at the default ABI"
+fi
+grep -Fq -- '--host wasm-embed needs --abi wasm32' "$scratch/wasm-no-abi.err" ||
+  fail "wasm-embed host did not name its ABI coupling"
+if "${build_env[@]}" "$builder" --host embed --abi wasm32 \
+    "$scratch/sources/good.bgl" \
+    >"$scratch/embed-wasm-abi.out" 2>"$scratch/embed-wasm-abi.err"; then
+  fail "embed host accepted a non-native ABI"
+fi
+grep -Fq -- '--abi wasm32 needs --host world' "$scratch/embed-wasm-abi.err" ||
+  fail "embed host did not refuse a non-native ABI by name"
+
 printf '%s\n' '#lang beagle' '(ns demo.missing-symbol)' \
   ';; MISSING_SERVER_SYMBOL' >"$scratch/sources/missing-symbol.bgl"
 if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
