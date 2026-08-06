@@ -104,6 +104,7 @@ FRAM_API uint32_t fram_abi_version(void);
  * host, every callback is required; LOG_PATH is then only a stable diagnostic
  * label. A successful open transfers storage-close responsibility to Fram.
  * Allocation context must remain valid until every returned buffer is freed.
+ * A wasi build cannot flock, so there the embedder owns FRAMLOG exclusivity.
  */
 FRAM_API fram_status fram_open(const fram_open_options_v1 *options,
                                fram_database **database_out,

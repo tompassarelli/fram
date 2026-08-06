@@ -405,6 +405,9 @@ static int posix_storage_open(const char *path, posix_storage **storage_out,
     free(storage);
     return FRAM_SERVER_HOST_ERROR;
   }
+  // wasip1 links no flock, so on wasm sole writer authority is the embedder's
+  // grant — the same obligation fram.h already places on a host storage table.
+#ifndef __wasi__
   if (flock(storage->fd, LOCK_EX | LOCK_NB) != 0) {
     copy_error(error, error_capacity,
                "canonical FRAMLOG writer authority is unavailable");
@@ -412,6 +415,7 @@ static int posix_storage_open(const char *path, posix_storage **storage_out,
     free(storage);
     return FRAM_SERVER_HOST_ERROR;
   }
+#endif
   *storage_out = storage;
   return FRAM_SERVER_OK;
 }
