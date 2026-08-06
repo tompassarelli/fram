@@ -98,7 +98,9 @@ loopback inside the container network namespace is unreachable through any port
 mapping — publication stays governed by Docker networking, and port 7977 stays
 private. That privacy guarantee rests entirely on the `docker -p` binding:
 publishing with `-p 0.0.0.0:7977:7977` exposes unauthenticated plaintext
-FRAMRPC, so bind loopback or a private network only.
+FRAMRPC, so bind loopback or a private network only. The server process runs
+as numeric uid/gid `65534:65534`, so a bind-mounted (rather than named) `/data`
+must be pre-owned by that uid on the host.
 
 ## Smoke the shim
 
