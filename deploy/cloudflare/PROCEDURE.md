@@ -71,7 +71,7 @@ Do not retain a dual-serving fallback after migration.
 The current compose file deliberately continues to build `Dockerfile`, the
 Graal release route. The additive Native image is packaged only from a completed
 content-addressed `fram-native-build` artifact; it neither invokes Graal nor
-carries a JVM:
+carries a JVM.
 
 A `scratch` image has no dynamic loader, so the artifact must be linked static.
 `FRAM_NATIVE_STATIC=1` is what does that: it appends `-static` to the server
@@ -98,6 +98,9 @@ context. `Dockerfile.native` checks the same receipt before producing a
 `scratch` runtime image, and sets `FRAM_BIND=0.0.0.0` because loopback inside
 the container network namespace is unreachable through any port mapping —
 publication stays governed by Docker networking, and port 7977 stays private.
+That privacy guarantee now rests entirely on the `docker -p` binding: publishing
+with `-p 0.0.0.0:7977:7977` exposes unauthenticated plaintext FRAMRPC, so bind
+loopback or a private network only.
 
 `FRAM_NATIVE_STATIC` is unset by default, so an ordinary checkout build is
 still a dynamic host-libc link. This stages the release-image seam only; it
