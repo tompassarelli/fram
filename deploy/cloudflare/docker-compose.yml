@@ -1,5 +1,6 @@
 # Fram server + auth shim for Cloudflare Workers clients.
-# Run from THIS directory (build contexts point at the repo root ../..):
+# Run from THIS directory (the shim build context points at the repo root ../..):
+#   export FRAM_SERVER_IMAGE="$(./build-native-image.sh)"
 #   SHIM_TOKEN=$(openssl rand -hex 32) docker compose up -d --build
 #
 # Topology: the Worker fetches the shim (bearer token, HTTP); the shim speaks
@@ -8,9 +9,8 @@
 # unauthenticated by design and must stay behind the shim.
 services:
   server:
-    build:
-      context: ../..
-      dockerfile: deploy/cloudflare/Dockerfile
+    # Content-addressed by its native artifact: compose consumes a tag, never builds one.
+    image: ${FRAM_SERVER_IMAGE:?set FRAM_SERVER_IMAGE from ./build-native-image.sh}
     volumes:
       - fram-data:/data              # the durable fact log survives restarts
     networks: [framnet]

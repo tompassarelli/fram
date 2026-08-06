@@ -8,8 +8,8 @@ Fram has no engine accounts, authorization, or tenant policy. One [SpaceId](glos
 
 `bin/fram-server` launches native by default and fails closed unless `FRAM_NATIVE_ARTIFACT_DIR` names a READY artifact containing `bin/fram-server-native`. `FRAM_SERVER_RUNTIME=graal` selects the transitional self-contained server at the absolute `FRAM_GRAAL_ARTIFACT` path without presenting it as a Native World artifact. `jvm-oracle` selects the sealed packaged JVM differential oracle; `jvm-dev` selects the checkout-only Clojure development route. None is an automatic fallback. The server binds `127.0.0.1` by default. `FRAM_BIND` changes the listener intentionally, `FRAM_SERVER_PORT` selects its port, and `FRAM_SERVER_CONNECT` selects the client host. New databases require `FRAM_SPACE_ID`; every request carries the same identity or is rejected. `FRAM_LISTEN_FD` may pass an operator-owned INET listener without changing codec, operations, or writer authority.
 
-The Cloudflare server image builds the Graal route as a fully static musl
-release artifact. Graal compilation is not part of the JVM development loop;
+The Cloudflare server image carries one statically linked musl native artifact
+on `scratch`, packaged from its READY receipt rather than compiled in the image;
 the authenticated HTTP shim remains a separate Babashka container.
 
 The listener is plaintext. Remote deployments keep it private and terminate TLS, authentication, tenant routing, request limits, and public audit policy at a gateway or sidecar.

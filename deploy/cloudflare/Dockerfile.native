@@ -1,7 +1,6 @@
-# Native Fram server runtime image. Its build context is one READY
+# The Fram server deployment image. Its build context is one READY
 # fram-native-build artifact directory, never the Fram checkout:
-#   bin/fram-cloudflare-native-image --artifact /abs/<closure-hash> --tag fram-native .
-# This is additive while Dockerfile remains the Graal release route.
+#   bin/fram-cloudflare-native-image --artifact /abs/<closure-hash> --tag fram-native
 
 FROM alpine:3.22 AS verify
 

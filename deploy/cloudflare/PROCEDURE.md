@@ -42,19 +42,25 @@ Neither the Worker nor the shim accepts EDN or an untyped raw escape hatch.
 
 ## Start the backend
 
-The Fram server image compiles the Beagle-emitted JVM closure into one static
-Graal executable. This is a release/deployment build; normal Fram server
-development stays on `FRAM_SERVER_RUNTIME=jvm-dev` and does not run Graal.
-The separate shim image remains Babashka.
+The Fram server image is one static native executable on `scratch` — no JVM, no
+dynamic loader, no shell. It is packaged from a completed content-addressed
+`fram-native-build` artifact, so the image tag names the exact artifact it
+carries. The separate shim image remains Babashka.
 
 From `fram:deploy/cloudflare`:
 
 ```sh
+export FRAM_SERVER_IMAGE="$(./build-native-image.sh)"
 export SHIM_TOKEN=$(openssl rand -hex 32)
 export FRAM_SPACE_ID=my-production-space
 docker compose up -d --build
 docker compose ps
 ```
+
+`build-native-image.sh` compiles the artifact from this checkout and prints its
+image tag; compose consumes that tag and never builds the server itself.
+Deploying a different revision means re-running the script and exporting the new
+tag, so a running deployment is always traceable to one artifact hash.
 
 The Fram server persists database history at `/data/history.framlog`. If this deployment has an old
 flat `facts.log`, stop the old server and migrate it once before starting the new
@@ -66,47 +72,33 @@ bin/fram-migrate-triple-log /path/to/facts.log my-production-space /path/to/hist
 
 Do not retain a dual-serving fallback after migration.
 
-## Staged Native image
-
-The current compose file deliberately continues to build `Dockerfile`, the
-Graal release route. The additive Native image is packaged only from a completed
-content-addressed `fram-native-build` artifact; it neither invokes Graal nor
-carries a JVM.
+## How the server image is built
 
 A `scratch` image has no dynamic loader, so the artifact must be linked static.
 `FRAM_NATIVE_STATIC=1` is what does that: it appends `-static` to the server
 link line and records `link=static` in the artifact's input manifest, so a
-static and a dynamic build are different cache entries. The compiler is a
-static musl toolchain realized from the nixpkgs revision this repo's
-`flake.lock` already pins:
+static and a dynamic build are different cache entries. It is unset by default,
+so an ordinary checkout build is still a dynamic host-libc link. The compiler is
+a static musl toolchain realized from the nixpkgs revision this repo's
+`flake.lock` already pins, rooted by `--out-link` so nix GC cannot orphan it
+between builds. Those are the two steps `build-native-image.sh` performs:
 
 ```sh
-rev="$(nix flake metadata --json . | jq -r '.locks.nodes.nixpkgs.locked.rev')"
-cc="$(nix build --out-link /home/tom/.cache/fram/native-build/.musl-cc --print-out-paths \
-  "github:NixOS/nixpkgs/$rev#pkgsStatic.stdenv.cc" | grep -v -- '-man$'
-)/bin/x86_64-unknown-linux-musl-cc"
-mapfile -t sources < <(sed "s#^#$PWD/#" native/core_closure_sources.txt)
 artifact="$(FRAM_NATIVE_CC="$cc" FRAM_NATIVE_STATIC=1 \
   bin/fram-native-build --host server "${sources[@]}")"
-bin/fram-cloudflare-native-image --artifact "$artifact" --tag fram-server-native:local
+bin/fram-cloudflare-native-image --artifact "$artifact" --tag "fram-server-native:${artifact##*/}"
 ```
 
-The `--out-link` roots the musl toolchain so nix GC cannot orphan it between builds.
-
-The helper requires an absolute artifact path, verifies that its directory hash
-and `READY` receipt agree, rejects any executable that still requests a program
-interpreter, and uses that artifact directory as the complete Docker build
-context. `Dockerfile.native` checks the same receipt before producing a
-`scratch` runtime image, and sets `FRAM_BIND=0.0.0.0` because loopback inside
-the container network namespace is unreachable through any port mapping —
-publication stays governed by Docker networking, and port 7977 stays private.
-That privacy guarantee now rests entirely on the `docker -p` binding: publishing
-with `-p 0.0.0.0:7977:7977` exposes unauthenticated plaintext FRAMRPC, so bind
-loopback or a private network only.
-
-`FRAM_NATIVE_STATIC` is unset by default, so an ordinary checkout build is
-still a dynamic host-libc link. This stages the release-image seam only; it
-does not change compose, defaults, or the Graal deployment route.
+The packaging helper requires an absolute artifact path, verifies that its
+directory hash and `READY` receipt agree, rejects any executable that still
+requests a program interpreter, and uses that artifact directory as the complete
+Docker build context. `Dockerfile.native` checks the same receipt before
+producing the `scratch` runtime image, and sets `FRAM_BIND=0.0.0.0` because
+loopback inside the container network namespace is unreachable through any port
+mapping — publication stays governed by Docker networking, and port 7977 stays
+private. That privacy guarantee rests entirely on the `docker -p` binding:
+publishing with `-p 0.0.0.0:7977:7977` exposes unauthenticated plaintext
+FRAMRPC, so bind loopback or a private network only.
 
 ## Smoke the shim
 
