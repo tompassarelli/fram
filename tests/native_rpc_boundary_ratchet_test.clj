@@ -15,7 +15,7 @@
 (let [shim (file-source "deploy/cloudflare/shim.clj")
       worker (file-source "deploy/cloudflare/worker-client.js")
       example (file-source "deploy/cloudflare/worker-example.js")
-      docker (file-source "deploy/cloudflare/Dockerfile")
+      docker (file-source "deploy/cloudflare/Dockerfile.native")
       compose (file-source "deploy/cloudflare/docker-compose.yml")]
   (check! "Cloudflare runtime contains no EDN codec or negotiation"
           (every? #(absent? % ["clojure.edn" "edn/read" "application/edn"

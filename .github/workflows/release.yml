@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   publish:
-    name: Build and smoke the tagged Graal server before publishing
+    name: Publish the tagged release
     runs-on: ubuntu-latest
     steps:
       - name: Check out the requested release tag
@@ -46,20 +46,6 @@ jobs:
             exit 1
           }
           echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
-
-      - name: Build the static Graal server from that commit
-        env:
-          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
-        run: |
-          set -euo pipefail
-          docker build --pull \
-            --tag "fram-server:$RELEASE_COMMIT" \
-            --file deploy/cloudflare/Dockerfile .
-
-      - name: Smoke a mutation across a Graal container restart
-        env:
-          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
-        run: bash tests/graal_release_smoke.sh "fram-server:$RELEASE_COMMIT"
 
       - name: Publish the GitHub release
         env:

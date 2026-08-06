@@ -1,15 +1,15 @@
-;; The container and Nix package must carry every repo-root file the server
-;; load-files; out/ is copied as one generated namespace closure.
-(require '[clojure.set :as set]
-         '[clojure.string :as str])
+;; The Nix package must carry every repo-root file the server load-files; the
+;; container carries only the static native artifact.
+(require '[clojure.string :as str])
 
 (def server-source
   (->> (str/split-lines (slurp "server.clj"))
        (map #(str/replace % #";.*$" ""))
        (str/join "\n")))
-(def docker-source (slurp "deploy/cloudflare/Dockerfile"))
 (def native-docker-source (slurp "deploy/cloudflare/Dockerfile.native"))
 (def native-image-builder-source (slurp "bin/fram-cloudflare-native-image"))
+(def compose-source (slurp "deploy/cloudflare/docker-compose.yml"))
+(def image-build-source (slurp "deploy/cloudflare/build-native-image.sh"))
 (def flake-source (slurp "flake.nix"))
 (def package-smoke-source (slurp "tests/package_server_smoke.sh"))
 
@@ -25,17 +25,6 @@
   (conj (set (remove #(str/starts-with? % "out/") load-assets))
         "server.clj"))
 
-(def docker-copy-sources
-  (->> (str/split-lines docker-source)
-       (remove #(str/includes? % "--from="))
-       (keep #(second (re-matches #"\s*COPY\s+(.+?)\s*" %)))
-       (mapcat #(drop-last (str/split % #"\s+")))
-       set))
-(def expected-docker-sources
-  (set/union root-assets
-             #{"deps.edn" "out/" "native/deps.edn" "native/build.sh"
-               "native/reachability-metadata.json" "native/src/"}))
-
 (def checks (atom []))
 (defn chk [label ok detail]
   (swap! checks conj [label ok detail]))
@@ -43,10 +32,7 @@
 (chk "server load-file closure is recognized"
      (= #{"database.clj" "writer_authority.clj"} load-assets)
      load-assets)
-(chk "Docker source COPYs equal the Graal build closure"
-     (= expected-docker-sources docker-copy-sources)
-     {:expected expected-docker-sources :actual docker-copy-sources})
-(chk "native Cloudflare image accepts only a matching static READY artifact"
+(chk "Cloudflare image accepts only a matching static READY artifact"
      (and (str/includes? native-docker-source "FROM scratch")
           (str/includes? native-docker-source "FRAM_NATIVE_ARTIFACT_HASH")
           (str/includes? native-docker-source "fram-native-build/v1")
@@ -57,6 +43,13 @@
           (not (str/includes? native-docker-source "native/build.sh"))
           (not (str/includes? native-docker-source "graalvm"))
           (not (str/includes? native-docker-source "clojure:")))
+     nil)
+(chk "compose consumes one built server image and never builds the server"
+     (and (str/includes? compose-source "image: ${FRAM_SERVER_IMAGE:?")
+          (= 1 (count (re-seq #"(?m)^\s+dockerfile:" compose-source)))
+          (str/includes? compose-source "deploy/cloudflare/Dockerfile.shim")
+          (str/includes? image-build-source "FRAM_NATIVE_STATIC=1")
+          (str/includes? image-build-source "bin/fram-cloudflare-native-image"))
      nil)
 (chk "Nix package includes every root runtime asset"
      (every? #(str/includes? flake-source %) root-assets)
