@@ -1,20 +1,16 @@
 #lang beagle/clj
 
-;; GENERATED. Author via the fram MCP graph-edit verbs (add-def / set-body /
-;; rename-def / insert-after / replace-in-body), never Edit/Write — a text edit
-;; would desync the graph. De-adopt (drop sentinel + registry entry) to edit as
-;; text; that is a deliberate workflow change. SEEDED 2026-07-26 (engine
-;; migration: the hand-Clojure rename.clj becomes a graph-authored Beagle
-;; module) — seed only: the ns/require header, no substantive forms.
 ;; ============================================================================
-;; Turtle #4 — graph-native authoring: a SCOPE-CORRECT rename as a fact edit.
+;; Turtle #4 — graph-native authoring: a SCOPE-CORRECT rename as a graph edit.
 ;; ============================================================================
 ;; Loads two modules' reader-facts into ONE Fram store, then renames a symbol
-;; in ONE module by SUPERSEDING its `v` facts (fact-native: nothing is
-;; overwritten — the old facts stay, marked not-live, fully recoverable). The
-;; other module's identically-named symbol is untouched. Re-projects each file's
-;; (mutated) source. A text `sed` rename would corrupt both files; the graph
-;; edit is correct by construction because scope is structural, not lexical.
+;; in ONE module by RETRACTING its `v` propositions and asserting the renamed
+;; ones (occurrence-native: nothing is overwritten — the old assertions stay in
+;; the store's history, marked not-live, linked to the retraction that withdrew
+;; them, fully recoverable). The other module's identically-named symbol is
+;; untouched. Re-projects each file's (mutated) source. A text `sed` rename
+;; would corrupt both files; the graph edit is correct by construction because
+;; scope is structural, not lexical.
 ;;
 ;;   bb -cp ~/code/fram/out -m rename <old> <new> <target-substr> <edn>...
 ;; ============================================================================
@@ -22,128 +18,149 @@
 
 (require fram.store :as c)
 
+(require fram.types :as t)
+
 (require clojure.edn :as edn)
 
 (require clojure.string :as str)
 
-(defn fact-l [ctx: Any cid: Int] -> Int (int (get (c/fact-of ctx cid) :l)))
+(def space-id: String "codegraph")
 
-(defn fact-p [ctx: Any cid: Int] -> Int (int (get (c/fact-of ctx cid) :p)))
+(def value-pred: String "v")
 
-(defn fact-r [ctx: Any cid: Int] -> Int (int (get (c/fact-of ctx cid) :r)))
+(def kind-pred: String "kind")
 
-(defn ent!
-  [ctx: Any
-   local: (Atom (Map Any Any))
-   file->ents: (Atom (Map Any Any))
-   src: String
-   lid: Any] -> Int
-  (let [hit (get (deref local) lid)]
-    (if (nil? hit)
-      (let [e (c/entity! ctx)]
-        (swap! local assoc lid e)
-        (swap! file->ents assoc src (conj (get (deref file->ents) src []) e))
-        e)
-      (int hit))))
+(def symbol-kind: String "symbol")
+
+(def binding-heads: (Set Any)
+  #{"defn" "definline" "def-" "defonce" "defn-" "def"})
+
+;; Node terms are the fact stream's own ids shifted by a per-file offset: the
+;; kernel accepts any Atom, so nothing is minted, and the shift is what keeps
+;; two files' node ids from colliding inside one store.
+(defn seen-node [state: (Map Keyword Any) node: Int] -> (Map Keyword Any)
+  (if (contains? (get state :seen) node)
+    state
+    (assoc state
+      :seen (conj (get state :seen) node)
+      :nodes (conj (vec (get state :nodes)) node))))
+
+(defn load-lines
+  [offset: Int
+   lines: (Vec String)] -> (Map Keyword Any)
+  (reduce (fn [state: (Map Keyword Any) line: String] -> (Map Keyword Any)
+            (if (str/starts-with? line "[")
+              (let [trip (edn/read-string line)
+                    l (+ offset (int (nth trip 0)))
+                    p (nth trip 1)
+                    o (nth trip 2)
+                    node-ref? (integer? o)
+                    r (if node-ref? (+ offset (int o)) o)
+                    with-l (seen-node state l)
+                    with-r (if node-ref? (seen-node with-l r) with-l)]
+                (assoc with-r
+                  :operations (conj (vec (get with-r :operations))
+                                (c/assert-operation (t/triple l p r)))
+                  :top (max (int (get with-r :top)) l (if node-ref? (int r) 0))))
+              state))
+    {:seen #{} :nodes [] :operations [] :top 0}
+    lines))
 
 (defn load-edn!
   [ctx: Any
-   tx: Int
-   file->ents: (Atom (Map Any Any))
+   file->nodes: (Atom (Map Any Any))
+   next-offset: (Atom Int)
    path: String] -> String
-  (let [lines: (Vec String) (str/split-lines (slurp path)) heads: (Vec String) (filterv (fn
-                                                              [l: String] -> Bool (str/starts-with? l "@file")) lines) src: String (subs (nth heads 0) 6) local: (Atom (Map Any Any)) (atom {})]
-    (doseq [line lines]
-      (if (str/starts-with? line "[")
-        (let [trip (edn/read-string line) s (nth trip 0) p (nth trip 1) o (nth trip 2) L (ent! ctx local file->ents src s) P (c/value! ctx p) R (if (integer? o) (ent! ctx local file->ents src o) (c/value! ctx o))]
-          (c/fact! ctx L P R tx)
-          nil)
-        nil))
+  (let [lines: (Vec String) (str/split-lines (slurp path))
+        heads: (Vec String) (filterv (fn [l: String] -> Bool (str/starts-with? l "@file")) lines)
+        src: String (subs (nth heads 0) 6)
+        loaded: (Map Keyword Any) (load-lines (deref next-offset) lines)]
+    (swap! file->nodes assoc src (vec (get loaded :nodes)))
+    (reset! next-offset (inc (int (get loaded :top))))
+    (when (pos? (count (vec (get loaded :operations))))
+      (c/commit-transaction! ctx (vec (get loaded :operations))))
     src))
 
-(defn symbol-leaf?
-  [ctx: Any
-   kindp: Int
-   symv: Int
-   e: Int] -> Bool
-  (pos? (count (filterv (fn [cid: Int] -> Bool (= symv (fact-r ctx cid))) (c/by-lp ctx e kindp)))))
+;; Every read below goes through this index so the queries stay one pass over
+;; the live propositions rather than one pass per node.
+(defn live-index [ctx: Any] -> (Map Any Any)
+  (group-by (fn [p: Any] -> Any (t/triple-t1 p)) (c/live-propositions ctx)))
+
+(defn propositions-of [index: (Map Any Any) node: Any] -> (Vec Any)
+  (vec (get index node [])))
+
+(defn symbol-leaf? [index: (Map Any Any) node: Any] -> Bool
+  (pos? (count (filterv (fn [p: Any] -> Bool
+                          (and (= kind-pred (t/triple-t2 p)) (= symbol-kind (t/triple-t3 p))))
+                 (propositions-of index node)))))
 
 (defn field-child
-  [ctx: Any
-   e: Int
+  [index: (Map Any Any)
+   node: Any
    fname: String] -> Int
-  (let [P (c/value-id ctx fname)]
-    (if (nil? P)
+  (let [hits (filterv (fn [p: Any] -> Bool (= fname (t/triple-t2 p)))
+               (propositions-of index node))]
+    (if (empty? hits)
       0
-      (let [cids (c/by-lp ctx e (int P))]
-        (if (empty? cids) 0 (fact-r ctx (nth cids 0)))))))
+      (let [child (t/triple-t3 (nth hits 0))]
+        (if (integer? child) (int child) 0)))))
 
-(defn sym-val
-  [ctx: Any
-   vp: Int
-   kindp: Int
-   symv: Int
-   e: Int] -> Any
-  (if (and (> e 0) (symbol-leaf? ctx kindp symv e))
-    (let [vc (filterv (fn [cid: Int] -> Bool (= vp (fact-p ctx cid))) (c/by-l ctx e))]
-      (if (empty? vc) nil (c/literal ctx (fact-r ctx (nth vc 0)))))
+(defn sym-val [index: (Map Any Any) node: Any] -> Any
+  (if (and (> (int node) 0) (symbol-leaf? index node))
+    (let [hits (filterv (fn [p: Any] -> Bool (= value-pred (t/triple-t2 p)))
+                 (propositions-of index node))]
+      (if (empty? hits) nil (t/triple-t3 (nth hits 0))))
     nil))
 
-(defn binding-name
-  [ctx: Any
-   vp: Int
-   kindp: Int
-   symv: Int
-   e: Int] -> Any
-  (let [h (sym-val ctx vp kindp symv (field-child ctx e "f0"))]
-    (if (and (not (nil? h)) (contains? #{"defn" "definline" "def-" "defonce" "defn-" "def"} h))
-      (sym-val ctx vp kindp symv (field-child ctx e "f1"))
+(defn binding-name [index: (Map Any Any) node: Any] -> Any
+  (let [h (sym-val index (field-child index node "f0"))]
+    (if (and (not (nil? h)) (contains? binding-heads h))
+      (sym-val index (field-child index node "f1"))
       nil)))
 
 (defn module-bindings
-  [ctx: Any
-   vp: Int
-   kindp: Int
-   symv: Int
-   file->ents: (Atom (Map Any Any))
+  [index: (Map Any Any)
+   file->nodes: (Atom (Map Any Any))
    src: String] -> (Set Any)
-  (set (filterv (fn [nm: Any] -> Bool (not (nil? nm))) (mapv (fn [e: Any] -> Any (binding-name ctx vp kindp symv (int e))) (vec (get (deref file->ents) src []))))))
+  (set (filterv (fn [nm: Any] -> Bool (not (nil? nm)))
+         (mapv (fn [node: Any] -> Any (binding-name index node))
+           (vec (get (deref file->nodes) src []))))))
 
-(defn rename-facts!
-  [ctx: Any
-   tx: Int
-   vp: Int
-   kindp: Int
-   symv: Int
-   sup: Int
-   newv: Int
-   target-ents: (Set Any)
-   cids: (Vec Int)] -> Int
-  (reduce (fn [acc: Int cid: Int] -> Int (let [e (fact-l ctx cid)] (if (and (contains? target-ents e) (symbol-leaf? ctx kindp symv e)) (let [ncid (c/fact! ctx e vp newv tx)] (c/fact! ctx ncid sup cid tx) (inc acc)) acc)))
-    0
-    cids))
+;; The rename is a retraction plus an assertion in one transaction: the kernel
+;; records the withdrawal link itself, so no "supersedes" predicate is asserted.
+(defn rename-operations
+  [index: (Map Any Any)
+   new-name: String
+   target-nodes: (Set Any)
+   propositions: (Vec Any)] -> (Vec Any)
+  (vec (mapcat (fn [p: Any] -> (Vec Any)
+                 (let [node (t/triple-t1 p)]
+                   (if (and (contains? target-nodes node) (symbol-leaf? index node))
+                     [(c/retract-operation p)
+                      (c/assert-operation (t/triple node (t/triple-t2 p) new-name))]
+                     [])))
+         propositions)))
 
-(defn project-line
-  [ctx: Any
-   e: Int
-   cid: Int] -> String
-  (let [p (fact-p ctx cid) r (fact-r ctx cid) ps (c/literal ctx p)]
-    (if (= ps "supersedes")
-      ""
-      (if (c/value-object? ctx r)
-        (str "[" e " " (pr-str ps) " " (pr-str (c/literal ctx r)) "]\n")
-        (str "[" e " " (pr-str ps) " " r "]\n")))))
+(defn project-line [proposition: Any] -> String
+  (let [node (t/triple-t1 proposition)
+        p (t/triple-t2 proposition)
+        r (t/triple-t3 proposition)]
+    (if (integer? r)
+      (str "[" node " " (pr-str p) " " r "]\n")
+      (str "[" node " " (pr-str p) " " (pr-str r) "]\n"))))
 
 (defn project-file!
-  [ctx: Any
-   file->ents: (Atom (Map Any Any))
+  [index: (Map Any Any)
+   file->nodes: (Atom (Map Any Any))
    src: String
    out-path: String] -> Nil
   (spit out-path
     (str (str "@file " src "\n")
       (str/join ""
-        (mapv (fn [e: Any] -> String (str/join "" (mapv (fn [cid: Int] -> String (project-line ctx (int e) cid)) (c/by-l ctx (int e)))))
-          (vec (get (deref file->ents) src []))))))
+        (mapv (fn [node: Any] -> String
+                (str/join "" (mapv (fn [p: Any] -> String (project-line p))
+                               (propositions-of index node))))
+          (vec (get (deref file->nodes) src []))))))
   nil)
 
 (defn out-path [src: String] -> String
@@ -151,28 +168,54 @@
     (str "/tmp/mutated-" (nth parts (dec (count parts))) ".edn")))
 
 (defn -main [& args] -> Nil
-  (let [argv: (Vec Any) (vec args) old-name: String (str (nth argv 0)) new-name: String (str (nth argv 1)) target-substr: String (str (nth argv 2)) edn-files: (Vec Any) (vec (drop 3 argv)) ctx: Any (c/new-store) tx: Int (c/begin-tx! ctx "author") SUP: Int (c/value! ctx "supersedes") _: Any (c/set-supersedes-pred! ctx SUP) file->ents: (Atom (Map Any Any)) (atom {}) srcs: (Vec String) (mapv (fn
-                                                                                                                                                                                                                                                                                                                          [p: Any] -> String (load-edn! ctx tx file->ents (str p))) edn-files) Vp: Int (c/value! ctx "v") KIND: Int (c/value! ctx "kind") SYM: Int (c/value! ctx "symbol") OLDv: Any (c/value-id ctx old-name) NEWv: Int (c/value! ctx new-name) target-modules: (Vec String) (filterv (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  [s: String] -> Bool (str/includes? s target-substr)) srcs) target-ents: (Set Any) (set (vec (mapcat (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             [s: String] -> (Vec Any) (vec (get (deref file->ents) s []))) target-modules))) collisions: (Vec String) (filterv (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   [m: String] -> Bool (contains? (module-bindings ctx Vp KIND SYM file->ents m) new-name)) target-modules)]
-    (if (pos? (count collisions))
+  (let [argv: (Vec Any) (vec args)
+        old-name: String (str (nth argv 0))
+        new-name: String (str (nth argv 1))
+        target-substr: String (str (nth argv 2))
+        edn-files: (Vec Any) (vec (drop 3 argv))
+        ctx: Any (c/new-term-store space-id)
+        file->nodes: (Atom (Map Any Any)) (atom {})
+        next-offset: (Atom Int) (atom 0)
+        srcs: (Vec String) (mapv (fn [p: Any] -> String
+                                   (load-edn! ctx file->nodes next-offset (str p)))
+                             edn-files)
+        index: (Map Any Any) (live-index ctx)
+        target-modules: (Vec String) (filterv (fn [s: String] -> Bool
+                                                (str/includes? s target-substr))
+                                       srcs)
+        target-nodes: (Set Any) (set (vec (mapcat (fn [s: String] -> (Vec Any)
+                                                    (vec (get (deref file->nodes) s [])))
+                                            target-modules)))
+        collisions: (Vec String) (filterv (fn [m: String] -> Bool
+                                            (contains? (module-bindings index file->nodes m)
+                                              new-name))
+                                   target-modules)]
+    (when (pos? (count collisions))
       (let [m (nth collisions 0)]
         (binding [*out* *err*]
-          (println (str "REJECTED — `" new-name "` is already a binding in " m ".\n" "  A rename onto an existing binding would shadow/collide; the store refuses the write.\n" "  (Turtle #5 invariant: rename-doesn't-collide. No facts were mutated.)")))
-        (System/exit 3))
-      nil)
-    (let [cids (if (nil? OLDv) [] (vec (c/by-pr ctx Vp (int OLDv)))) renamed (rename-facts! ctx tx Vp KIND SYM SUP NEWv target-ents cids) preserved (count (filterv (fn
-                                                                                                                                                                      [cid: Int] -> Bool (let [e (fact-l ctx cid)] (and (not (contains? target-ents e)) (symbol-leaf? ctx KIND SYM e)))) cids)) outs (mapv (fn
-                                                                                                                                                                                                                                                                                                             [s: String] -> String (out-path s)) srcs)]
+          (println (str "REJECTED — `" new-name "` is already a binding in " m ".\n" "  A rename onto an existing binding would shadow/collide; the store refuses the write.\n" "  (Turtle #5 invariant: rename-doesn't-collide. No propositions were mutated.)")))
+        (System/exit 3)))
+    (let [targets (filterv (fn [p: Any] -> Bool
+                             (and (= value-pred (t/triple-t2 p)) (= old-name (t/triple-t3 p))))
+                    (c/live-propositions ctx))
+          operations (rename-operations index new-name target-nodes targets)
+          renamed (quot (count operations) 2)
+          preserved (count (filterv (fn [p: Any] -> Bool
+                                      (let [node (t/triple-t1 p)]
+                                        (and (not (contains? target-nodes node))
+                                          (symbol-leaf? index node))))
+                             targets))
+          _edit (when (pos? (count operations)) (c/commit-transaction! ctx operations))
+          projected (live-index ctx)
+          outs (mapv (fn [s: String] -> String (out-path s)) srcs)]
       (doseq [i (range (count srcs))]
-        (project-file! ctx file->ents (nth srcs i) (nth outs i)))
+        (project-file! projected file->nodes (nth srcs i) (nth outs i)))
       (binding [*out* *err*]
         (println "================ TURTLE #4 — graph-native rename ================")
         (println (str "edit: rename symbol `" old-name "` -> `" new-name "` in files matching \"" target-substr "\""))
         (println (str "renamed (target file): " renamed " symbol occurrences"))
         (println (str "preserved (other files, same name, untouched): " preserved " occurrences"))
-        (println (str "superseded facts (recoverable, nothing deleted): " renamed))
-        (println (str "live facts in store: " (count (c/current-facts ctx))))
+        (println (str "superseded assertions (recoverable, nothing deleted): " renamed))
+        (println (str "live propositions in store: " (count (c/live-propositions ctx))))
         (doseq [i (range (count srcs))]
           (println (str "projected -> " (nth outs i) "   <- " (nth srcs i))))))))

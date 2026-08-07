@@ -1,9 +1,20 @@
 (ns rep-jurisdiction
   (:require [fram.store :as c]
             [fram.datalog :as d]
+            [fram.types :as t]
             [callgraph :as cg]
             [clojure.edn :as edn]
             [clojure.string :as str]))
+
+(def ^String space-id "codegraph")
+
+(def ^String regime-pred "rep-regime")
+
+(def ^String calls-pred "calls")
+
+(def ^String hamt-pred "ships-hamt")
+
+(def ^String hamt-mark "yes")
 
 (defn parse-rep-blocks [^String path]
   (let [lines (str/split-lines (slurp path))
@@ -16,18 +27,11 @@
    ms (mapv (fn [s] (into {} (mapv (fn [t] [(nth t 1) (nth t 2)]) (vec (get by-subj s))))) (vec (keys by-subj)))]
   (mapv (fn [m] {:name (get m "name") :regime (get m "rep-regime") :native (get m "native-sites") :hamt (get m "hamt-sites") :module (get m "module")}) (filterv (fn [m] (= "rep-def" (get m "form-kind"))) ms))))
 
-(defn ent! [ctx cache nm]
-  (let [hit (get (deref cache) nm)]
-  (if (nil? hit) (let [e (c/entity! ctx)]
-  (swap! cache assoc nm e)
-  e) (int hit))))
+(defn regime-operations [rep-defs]
+  (mapv (fn [dd] (c/assert-operation (t/triple (:name dd) regime-pred (:regime dd)))) (filterv (fn [dd] (and (not (nil? (:name dd))) (not (nil? (:regime dd))))) rep-defs)))
 
-(defn reverse-cache [cache]
-  (into {} (mapv (fn [kv] [(nth kv 1) (nth kv 0)]) (vec (deref cache)))))
-
-(defn defs-with-regime [ctx regime ent->n ^String reg]
-  (let [R (c/value! ctx reg)]
-  (vec (sort (mapv (fn [cid] (get ent->n (int (:l (c/fact-of ctx cid))))) (vec (c/by-pr ctx regime R)))))))
+(defn defs-with-regime [ctx ^String reg]
+  (vec (sort (mapv (fn [p] (t/triple-t1 p)) (filterv (fn [p] (and (= regime-pred (t/triple-t2 p)) (= reg (t/triple-t3 p)))) (c/live-propositions ctx))))))
 
 (defn q4! [rep-defs ^String cg-path]
   (let [cg-blocks (cg/parse-corpus cg-path)
@@ -38,23 +42,13 @@
    name-edges (vec (distinct (filterv (fn [x] (not (nil? x))) (mapv (fn [e] (let [an (get key->name (nth e 0))
    bn (get key->name (nth e 1))]
   (if (and (not (nil? an)) (not (nil? bn))) [an bn] nil))) edges))))
-   hamt-names (set (mapv (fn [dd] (:name dd)) (filterv (fn [dd] (contains? #{"mixed" "hamt"} (:regime dd))) rep-defs)))
-   gctx (c/new-store)
-   gtx (c/begin-tx! gctx "cg")
-   CALLS (c/value! gctx "calls")
-   HAMT (c/value! gctx "ships-hamt")
-   MARK (c/value! gctx "yes")
-   cache (atom {})
-   _seed (doseq [dd defns]
-  (if (nil? (:name dd)) nil (let [e (ent! gctx cache (:name dd))]
-  nil)))
-   _edges (doseq [e name-edges]
-  (c/fact! gctx (ent! gctx cache (nth e 0)) CALLS (ent! gctx cache (nth e 1)) gtx))
-   _marks (doseq [nm (vec hamt-names)]
-  (c/fact! gctx (ent! gctx cache nm) HAMT MARK gtx))
-   ent->name (reverse-cache cache)
-   db (d/run-rules gctx [(d/rule "forces" [(d/v :x)] [(d/lit "triple" [(d/v :x) CALLS (d/v :y)]) (d/lit "triple" [(d/v :y) HAMT MARK])]) (d/rule "forces" [(d/v :x)] [(d/lit "triple" [(d/v :x) CALLS (d/v :y)]) (d/lit "forces" [(d/v :y)])])])
-   forced (vec (distinct (vec (sort (filterv (fn [x] (not (nil? x))) (mapv (fn [row] (get ent->name (nth row 0))) (d/facts db "forces")))))))]
+   hamt-names (set (mapv (fn [dd] (:name dd)) (filterv (fn [dd] (and (not (nil? (:name dd))) (contains? #{"mixed" "hamt"} (:regime dd)))) rep-defs)))
+   gctx (c/new-term-store space-id)
+   operations (vec (concat (mapv (fn [e] (c/assert-operation (t/triple (nth e 0) calls-pred (nth e 1)))) name-edges) (mapv (fn [nm] (c/assert-operation (t/triple nm hamt-pred hamt-mark))) (vec hamt-names))))
+   _load (if (pos? (count operations)) (do
+  (c/commit-transaction! gctx operations)))
+   db (d/run-rules! (c/live-propositions gctx) [(d/rule "forces" [(d/variable "x")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant calls-pred) (d/variable "y")]) (d/relation-literal d/triple-relation [(d/variable "y") (d/constant hamt-pred) (d/constant hamt-mark)])]) (d/rule "forces" [(d/variable "x")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant calls-pred) (d/variable "y")]) (d/relation-literal "forces" [(d/variable "y")])])])
+   forced (vec (distinct (vec (sort (filterv (fn [x] (not (nil? x))) (mapv (fn [row] (nth row 0)) (d/facts db "forces")))))))]
   (if (pos? (count forced)) (doseq [nm forced]
   (println "  forces-HAMT" nm)) (println "  (no caller transitively reaches a HAMT def in this corpus)"))
   (println (format "\nHAMT-shipping defs: %d ; defs that FORCE a HAMT downstream: %d" (count hamt-names) (count forced)))
@@ -72,21 +66,18 @@
   (println "================ REP JURISDICTION — compiler judgment as facts =================")
   (println "rep corpus:" rep-path)
   (println "rep-def facts:" (count rep-defs) " across" (count (distinct (mapv (fn [dd] (:module dd)) rep-defs))) "module(s)")
-  (let [ctx (c/new-store)
-   tx (c/begin-tx! ctx "rep")
-   REGIME (c/value! ctx "rep-regime")
-   cache (atom {})
-   _load (doseq [dd rep-defs]
-  (c/fact! ctx (ent! ctx cache (:name dd)) REGIME (c/value! ctx (:regime dd)) tx))
-   ent->n (reverse-cache cache)]
+  (let [ctx (c/new-term-store space-id)
+   operations (regime-operations rep-defs)
+   _load (if (pos? (count operations)) (do
+  (c/commit-transaction! ctx operations)))]
   (println "\n---- Q1. defs that SHIP THE HAMT (pull persistent runtime) ----")
-  (doseq [nm (defs-with-regime ctx REGIME ent->n "hamt")]
+  (doseq [nm (defs-with-regime ctx "hamt")]
   (println "  HAMT  " nm))
   (println "\n---- Q2. defs that are 100% NATIVE (zero persistent runtime) ----")
-  (doseq [nm (defs-with-regime ctx REGIME ent->n "native")]
+  (doseq [nm (defs-with-regime ctx "native")]
   (println "  native" nm))
   (println "\n---- Q3. defs that are MIXED (a rep boundary lives inside) ----")
-  (doseq [nm (defs-with-regime ctx REGIME ent->n "mixed")]
+  (doseq [nm (defs-with-regime ctx "mixed")]
   (println "  mixed " nm)))
   (if (nil? cg-path) nil (let [_h1 (println "\n---- Q4. transitive HAMT blast: defs DOWNSTREAM of any HAMT/mixed def ----")
    _h2 (println "(scope-correct call graph; a caller \"forces\" a HAMT if it reaches one)")]

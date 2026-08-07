@@ -1,62 +1,65 @@
 (ns supersession-check
   (:require [fram.store :as c]
+            [fram.types :as t]
             [clojure.edn :as edn]
             [clojure.string :as str]))
 
-(defn ent! [ctx cache lid]
-  (let [hit (get (deref cache) lid)]
-  (if (nil? hit) (let [e (c/entity! ctx)]
-  (swap! cache assoc lid e)
-  e) (int hit))))
+(def ^String space-id "codegraph")
 
-(defn load-line! [ctx tx cache ^String line]
-  (let [trip (edn/read-string line)
-   s (nth trip 0)
-   p (nth trip 1)
-   o (nth trip 2)
-   L (ent! ctx cache s)
-   P (c/value! ctx p)
-   R (if (integer? o) (ent! ctx cache o) (c/value! ctx o))]
-  (c/fact! ctx L P R tx)
-  nil))
+(defn line->operation [^String line]
+  (let [trip (edn/read-string line)]
+  (c/assert-operation (t/triple (nth trip 0) (nth trip 1) (nth trip 2)))))
 
-(defn ^Boolean sym? [ctx kindp symv e]
-  (pos? (count (filterv (fn [cid] (= symv (:r (c/fact-of ctx cid)))) (c/by-lp ctx e kindp)))))
+(defn propositions-of [ctx node]
+  (filterv (fn [p] (= node (t/triple-t1 p))) (c/live-propositions ctx)))
 
-(defn fact-l [ctx cid]
-  (int (:l (c/fact-of ctx cid))))
+(defn ^Boolean sym? [ctx node]
+  (pos? (count (filterv (fn [p] (and (= "kind" (t/triple-t2 p)) (= "symbol" (t/triple-t3 p)))) (propositions-of ctx node)))))
 
-(defn fact-r [ctx cid]
-  (int (:r (c/fact-of ctx cid))))
+(defn first-sym-value-proposition [ctx ^String old-name]
+  (let [hits (filterv (fn [p] (and (= "v" (t/triple-t2 p)) (and (= old-name (t/triple-t3 p)) (sym? ctx (t/triple-t1 p))))) (c/live-propositions ctx))]
+  (if (empty? hits) nil (nth hits 0))))
 
-(defn first-sym-fact [ctx vp kindp symv oldv]
-  (let [hits (filterv (fn [cid] (sym? ctx kindp symv (fact-l ctx cid))) (vec (c/by-pr ctx vp oldv)))]
-  (if (empty? hits) 0 (nth hits 0))))
+(defn ^String occurrence-label [occurrence]
+  (let [transaction (t/triple-t1 occurrence)]
+  (str (t/triple-t1 transaction) "/" (t/triple-t3 transaction) "#" (t/triple-t3 occurrence))))
+
+(defn ^String proposition-label [proposition]
+  (str "(" (t/triple-t1 proposition) " " (pr-str (t/triple-t2 proposition)) " " (pr-str (t/triple-t3 proposition)) ")"))
+
+(defn assertion-occurrence-of [events proposition]
+  (let [hits (filterv (fn [e] (and (= t/asserts (t/triple-t2 e)) (= proposition (t/triple-t3 e)))) events)]
+  (if (empty? hits) nil (t/triple-t1 (nth hits 0)))))
+
+(defn withdrawal-of [ctx occurrence]
+  (let [hits (filterv (fn [w] (= occurrence (t/triple-t3 w))) (c/withdrawal-triples ctx))]
+  (if (empty? hits) nil (nth hits 0))))
+
+(defn ^Boolean live-occurrence? [ctx occurrence]
+  (pos? (count (filterv (fn [e] (= occurrence (t/triple-t1 e))) (c/live-occurrences ctx)))))
 
 (defn -main [& args]
-  (let [ctx (c/new-store)
-   tx (c/begin-tx! ctx "author")
-   SUP (c/value! ctx "supersedes")
-   _ (c/set-supersedes-pred! ctx SUP)
-   cache (atom {})
-   _ (doseq [line (str/split-lines (slurp "/tmp/trap.edn"))]
-  (if (str/starts-with? line "[") (load-line! ctx tx cache line) nil))
-   Vp (c/value! ctx "v")
-   KIND (c/value! ctx "kind")
-   SYM (c/value! ctx "symbol")
-   OLDv (c/value-id ctx "red")
-   NEWv (c/value! ctx "crimson")
-   old (first-sym-fact ctx Vp KIND SYM (if (nil? OLDv) 0 (int OLDv)))
-   e (fact-l ctx old)
-   new (c/fact! ctx e Vp NEWv tx)
-   sup (c/fact! ctx new SUP old tx)]
-  (println "entity (the symbol node):" e)
+  (let [ctx (c/new-term-store space-id)
+   lines (str/split-lines (slurp "/tmp/trap.edn"))
+   operations (mapv (fn [line] (line->operation line)) (filterv (fn [line] (str/starts-with? line "[")) lines))
+   _load (if (pos? (count operations)) (do
+  (c/commit-transaction! ctx operations)))
+   old-proposition (first-sym-value-proposition ctx "red")
+   node (t/triple-t1 old-proposition)
+   new-proposition (t/triple node "v" "crimson")
+   history-before (c/semantic-history ctx)
+   old-occurrence (assertion-occurrence-of history-before old-proposition)
+   _edit (c/commit-transaction! ctx [(c/retract-operation old-proposition) (c/assert-operation new-proposition)])
+   history (c/semantic-history ctx)
+   new-occurrence (assertion-occurrence-of history new-proposition)
+   withdrawal (withdrawal-of ctx old-occurrence)]
+  (println "node (the symbol node):" node)
   (println)
-  (println "OLD value-fact  cid=" old "  ->" (c/fact-of ctx old) "  value=" (pr-str (c/literal ctx (fact-r ctx old))) "  LIVE?=" (c/live? ctx old))
-  (println "NEW value-fact  cid=" new "  ->" (c/fact-of ctx new) "  value=" (pr-str (c/literal ctx (fact-r ctx new))) "  LIVE?=" (c/live? ctx new))
-  (println "SUPERSEDES fact cid=" sup "  ->" (c/fact-of ctx sup) "  (l=new-fact, p=supersedes, r=old-fact)")
+  (println "OLD value-assertion  at=" (occurrence-label old-occurrence) "  ->" (proposition-label old-proposition) "  value=" (pr-str (t/triple-t3 old-proposition)) "  LIVE?=" (live-occurrence? ctx old-occurrence))
+  (println "NEW value-assertion  at=" (occurrence-label new-occurrence) "  ->" (proposition-label new-proposition) "  value=" (pr-str (t/triple-t3 new-proposition)) "  LIVE?=" (live-occurrence? ctx new-occurrence))
+  (println "WITHDRAWAL           at=" (occurrence-label (t/triple-t1 withdrawal)) " withdraws=" (occurrence-label (t/triple-t3 withdrawal)) "  (the retraction that supersedes the old assertion)")
   (println)
-  (println "same entity for old & new?   " (and (= (fact-l ctx old) (fact-l ctx new)) (= (fact-l ctx new) e)))
-  (println "old still retrievable (history preserved)? " (some? (c/fact-of ctx old)))
-  (println "live view of entity's v-facts (by-l is live-only):" (mapv (fn [cid] (pr-str (c/literal ctx (fact-r ctx cid)))) (filterv (fn [cid] (= Vp (:p (c/fact-of ctx cid)))) (c/by-l ctx e))))
-  (println "=> old red fact EXISTS, marked not-live; new crimson fact is live; same node. Supersession is real:" (and (some? (c/fact-of ctx old)) (not (c/live? ctx old)) (c/live? ctx new) (and (= e (fact-l ctx old)) (= (fact-l ctx old) (fact-l ctx new)))))))
+  (println "same node for old & new?   " (= (t/triple-t1 old-proposition) (t/triple-t1 new-proposition)))
+  (println "old still retrievable (history preserved)? " (some? (assertion-occurrence-of history old-proposition)))
+  (println "live view of the node's v-propositions (live-propositions is live-only):" (mapv (fn [p] (pr-str (t/triple-t3 p))) (filterv (fn [p] (= "v" (t/triple-t2 p))) (propositions-of ctx node))))
+  (println "=> old red assertion EXISTS, marked not-live; new crimson assertion is live; same node. Supersession is real:" (and (some? (assertion-occurrence-of history old-proposition)) (not (live-occurrence? ctx old-occurrence)) (live-occurrence? ctx new-occurrence) (= (t/triple-t1 old-proposition) (t/triple-t1 new-proposition))))))

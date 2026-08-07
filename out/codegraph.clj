@@ -1,6 +1,7 @@
 (ns codegraph
   (:require [fram.store :as c]
             [fram.datalog :as d]
+            [fram.types :as t]
             [callgraph :as cg]
             [clojure.string :as str]))
 
@@ -90,16 +91,17 @@
   (if (pos? (count incumbent)) (mapv (fn [dd] (let [g (get radj (:key dd) #{})]
   (Row. nm (short-file (:key dd)) 1.0 (/ (count g) (double (count incumbent))) (count g) (count incumbent)))) ds) []))) collisions))))
 
+(defn ^String node-term [k]
+  (str (nth k 0) "#" (nth k 1)))
+
 (defn closure-line! [edges defn-keys fadj]
-  (let [ctx (c/new-store)
-   tx (c/begin-tx! ctx "code")
-   EDGE (c/value! ctx "calls-defn")
-   nodes (vec (distinct (vec (mapcat (fn [e] e) edges))))
-   k->id (reduce (fn [m k] (assoc m k (c/entity! ctx))) {} nodes)
-   _ (doseq [e edges]
-  (c/fact! ctx (get k->id (nth e 0) 0) EDGE (get k->id (nth e 1) 0) tx))
+  (let [ctx (c/new-term-store "codegraph")
+   edge-pred "calls-defn"
+   operations (mapv (fn [e] (c/assert-operation (t/triple (node-term (nth e 0)) edge-pred (node-term (nth e 1))))) edges)
+   _load (if (pos? (count operations)) (do
+  (c/commit-transaction! ctx operations)))
    t0 (System/currentTimeMillis)
-   db (d/run-rules ctx [(d/rule "reaches" [(d/v :x) (d/v :y)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])]) (d/rule "reaches" [(d/v :x) (d/v :z)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)]) (d/lit "reaches" [(d/v :y) (d/v :z)])])])
+   db (d/run-rules! (c/live-propositions ctx) [(d/rule "reaches" [(d/variable "x") (d/variable "y")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant edge-pred) (d/variable "y")])]) (d/rule "reaches" [(d/variable "x") (d/variable "z")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant edge-pred) (d/variable "y")]) (d/relation-literal "reaches" [(d/variable "y") (d/variable "z")])])])
    dl-reaches (set (d/facts db "reaches"))
    t1 (System/currentTimeMillis)
    truth (reduce + (mapv (fn [k] (count (transitive fadj k))) defn-keys))]
