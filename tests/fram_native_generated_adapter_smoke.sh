@@ -70,6 +70,15 @@ const void *native_vec_at(const native_vec *vector, int64_t index,
 native_vec *native_vec_push(native_arena *arena, native_vec *vector,
                             const void *value, int64_t stride,
                             size_t alignment);
+
+#define NATIVE_TRAP_INVALID_ARGUMENT UINT32_C(1)
+#define NATIVE_TRAP_OVERFLOW UINT32_C(2)
+#define NATIVE_TRAP_ARENA_EXHAUSTED UINT32_C(3)
+#define NATIVE_TRAP_OUT_OF_RANGE UINT32_C(4)
+#define NATIVE_TRAP_IO UINT32_C(5)
+
+typedef void (*native_trap_reporter)(uint32_t code);
+void native_set_trap_reporter(native_trap_reporter reporter);
 #endif
 HEADER
 
@@ -340,6 +349,10 @@ const void *native_vec_at(const native_vec *vector, int64_t index,
     abort();
   }
   return (const uint8_t *)vector->elements + (size_t)(index * stride);
+}
+
+void native_set_trap_reporter(native_trap_reporter reporter) {
+  (void)reporter;
 }
 
 native_vec *native_vec_push(native_arena *arena, native_vec *vector,
