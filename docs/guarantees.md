@@ -26,6 +26,23 @@ and FRAMRPC v1 in this source tree.
 
 ## Durability
 
+Durability is stated per **storage regime**, because what "the bytes are down"
+means is the storage owner's answer, not the engine's:
+
+- **POSIX storage** — the engine owns the file. `storage_sync` is `fsync` on
+  the log descriptor, and the barrier completes inside the commit path before
+  any acknowledgement leaves.
+- **Host storage table** — an embedder supplies the storage hooks
+  ([isolation and deployment](isolation-and-deployment.md#the-wasm-embed-contract)).
+  `storage_sync` returning zero means only that the host accepted the bytes.
+  Where the host's own commit is asynchronous — a Durable Object's storage is
+  the case in hand — durability lands after the guest call unwinds, so **the
+  embedder must await its store's commit before acknowledging the write**. An
+  embedder that answers the caller first has moved the barrier, not removed it.
+
+D1-D5 below are the POSIX regime. D6 states what the engine still guarantees
+when the barrier belongs to a host.
+
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
 | D1 | An acked commit is durable: its FRAMLOG frame is covered by a successful `force(true)` barrier before the cohort's immutable head is published | BACKED | `database_test.clj` asserts two frames/one barrier and no publication on an injected barrier failure; concurrent gate verifies ack/frame identity |
@@ -33,6 +50,14 @@ and FRAMRPC v1 in this source tree.
 | D3 | A passive recovery open (no writer authority) reports a torn tail and never rewrites the log | BACKED | sweep passive arm asserts byte-identical file at every cut; plus `database_test.clj` |
 | D4 | An append-path failure fences the writer (`:durability-ambiguous` / `:recovery-required` / `:database-corrupt` / `:database-state-invalid`); every waiter in a failed cohort is refused and writes stay fenced until restart | BACKED | `database_test.clj` fault injection covers singleton and cohort barriers before append, after force, and corrupt replay |
 | D5 | Damaged committed bytes are detected loudly on replay; replay never silently produces a divergent image | BACKED | sweep flip arm — 3,968 single-bit/high-bit flips: every one detected by CRC or repaired-to-prefix, zero divergent images. Residual (named, unswept): multi-byte garbage tails; header-region corruption is gated separately in `database_test.clj` |
+| D6 | Under a host storage table the engine appends whole frames in commit order and never rewrites committed bytes. An isolate that dies before its host's commit lands therefore loses a suffix and never a prefix: the durable image is exactly what the last landed commit left, and a fresh instance opens it and serves | PARTIAL | [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh) — the FRAMLOG written through the import hooks is byte-identical to the native oracle's over the whole frame matrix. The isolate-death arm is an out-of-tree adapter probe (one transaction whose host commit never landed: the durable image stayed byte-identical to the prior commit, the guest's uncommitted tail died with the instance, and a fresh instance reopened that image and served) and does not gate |
+
+D6 places two obligations on the host, and neither is checkable by the engine.
+One commit must land **atomically** and commits must land **in order**: replay
+reads from byte zero, so a host that applies half of one commit, or overtakes an
+earlier one, damages the middle of the image rather than its tail — which is
+detected loudly (D5) but is not repairable by truncation the way a torn tail is
+(D2). Serialize commits, one in flight.
 
 ## Atomicity
 
@@ -44,7 +69,7 @@ and FRAMRPC v1 in this source tree.
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
-| I1 | One active server per `SpaceId`; its singleton FIFO commit sequencer orders every mutation, while readers take only immutable published snapshots | BACKED | [`../tests/writer_authority_test.clj`](../tests/writer_authority_test.clj), [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) |
+| I1 | One active writer per `SpaceId`; its singleton FIFO commit sequencer orders every mutation, while readers take only immutable published snapshots. Under POSIX storage the engine enforces this with a `flock` on the log and fails a second server closed; under a host storage table the exclusivity is the embedder's grant and the engine cannot check it | BACKED for the POSIX regime | [`../tests/writer_authority_test.clj`](../tests/writer_authority_test.clj), [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj); the host-storage clause is an obligation, not a guarantee — see [isolation and deployment](isolation-and-deployment.md#deployment-shapes) |
 | I2 | OCC: a stale or future `expected-version` returns `:rpc/conflict` without moving the version | BACKED | `native_rpc_server_test.clj`; race shape in `database_test.clj` (24 racers → exactly 1 ok) |
 | I3 | K concurrent socket writers: every acked proposition is durable exactly once, per-writer issue order is preserved, tx-sequence strictly rises, each ack's version equals its frame's tx-seq, and the published root contains that transaction before its ack | BACKED | [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) — 8 writers × 25 + 80 OCC racers, durable-frame/barrier/publication verification |
 | I4 | Reads do not convoy writes: validate is a non-convoying read; during a 2 s slow query or validate, a lone write acks ≤ 250 ms and ten concurrent writes ack ≤ 1 s (mutations share cohort barriers — see capacity notes) | BACKED | [`../tests/framrpc_latency_convoy_test.clj`](../tests/framrpc_latency_convoy_test.clj) — injected-delay convoy + disconnect-cancels-work |
@@ -54,16 +79,17 @@ and FRAMRPC v1 in this source tree.
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
 | O1 | `tx-sequence` + `op-ordinal` define exact logical order; mutation receipts return occurrence coordinates | BACKED | [`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj), `database_test.clj`, [`../tests/model_generative_test.clj`](../tests/model_generative_test.clj) — seeded op sequences compared against a pure model after every op |
-| R1 | Replay restores logical order and occurrence liveness; restart resumes at the next tx without duplication | PARTIAL | `native_rpc_server_test.clj` restart — idle server, tiny corpus; `model_generative_test.clj` cold-restart arm compares the model and a byte-exact store dump per generated sequence; no restart-under-load, no at-scale replay bound |
+| R1 | Replay restores logical order and occurrence liveness; restart resumes at the next tx without duplication | PARTIAL | `native_rpc_server_test.clj` restart — idle server, tiny corpus; `model_generative_test.clj` cold-restart arm compares the model and a byte-exact store dump per generated sequence; no restart-under-load. At-scale boot cost is measured but ungated — see the capacity section |
 | R2 | Old flat logs are accepted only by the one-shot migration command | BACKED | [`../tests/triple_log_migration_test.clj`](../tests/triple_log_migration_test.clj) |
+| R3 | A snapshot image is an accelerator that cannot change an answer: with a valid image the boot installs it and replays only the FRAMLOG tail past its watermark; an image that fails to install, or whose tail does not continue, degrades to the full fold and reports it instead of failing the boot. `rpc/checkpoint` appends nothing to the log, so history stays authoritative | BACKED | [`../tests/fram_snapshot_boot_test.sh`](../tests/fram_snapshot_boot_test.sh) — fold, image, and damaged-image boots answer byte-identically, and the damaged arm reports `degraded to full fold`; [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh) runs the same route through host storage |
 
 ## Wire
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
-| N1 | Closed 13-operation FRAMRPC v1; unknown tags, fields, or trailing bytes are rejected; EDN is refused on the wire | BACKED | [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj), `native_rpc_server_test.clj`, boundary ratchet |
+| N1 | Closed 13-operation FRAMRPC v1 data surface — plus `rpc/checkpoint` on the native engine, which no shipped client can send; unknown tags, fields, or trailing bytes are rejected; EDN is refused on the wire | BACKED | [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj), `native_rpc_server_test.clj`, boundary ratchet |
 | N2 | Limits: body ≤ 1,048,576 B; frame ≤ 1,048,602 B; string ≤ 1 MiB; term nodes ≤ 65,536; depth ≤ 256 | PARTIAL | decode-side truncation and oversize gated; encode-side enforcement untested |
-| N3 | `:rpc/scan` and `:rpc/occurrences` accept the `:rpc/query` page cursor; an unpaged reply past ~250 rows (TermCodecV1 depth bound 256, measured 2026-08-02) still fails typed `:term-depth-exceeded`, now from a bounded fold instead of the full corpus. The depth cliff binds EVERY paged response: any `:rpc/query` page near 250–300 rows hits it too, so the contract's 4096-row page ceiling is unusable — the effective page bound is ~200 rows (bench-measured) | PARTIAL | [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) paged reassembly, cursor pinning, bounded unpaged fold; no at-scale (350k-Triple) gate |
+| N3 | `:rpc/scan`, `:rpc/query`, and `:rpc/occurrences` accept the same page cursor. Both list bounds are now derived from the TermCodecV1 depth budget of 256 rather than guessed: a request list is capped at **250** values (256 less a six-deep request envelope) and refuses typed `:term-depth-exceeded` at encode time, and an unpaged reply is capped at **248** rows (256 less an eight-deep response envelope) and refuses with the same code from a bounded fold. Paging is the escape and answers the same relation. The cliff binds every response, so the contract's 4096-row page ceiling is unusable; keep pages well under 248 rows | PARTIAL | [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) paged reassembly, cursor pinning, bounded unpaged fold; [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh) pins the unpaged bound as its own frame matrix (at the limit answers, one over refuses, paged answers). The v0.5.0 certification measured 247 actions as the largest batch that round-trips: 248-250 commit, then fail to encode their answer — the embed call returns `FRAM_ENGINE_ERROR` with `generated response encode failed` and the instance survives. No at-scale (350k-Triple) gate |
 
 ## Query
 
@@ -71,7 +97,8 @@ and FRAMRPC v1 in this source tree.
 |---|---|---|---|
 | Q1 | Query semantics per [`query-reference.md`](query-reference.md) | BACKED | [`../tests/triple_query_test.clj`](../tests/triple_query_test.clj), aggregate/projection tests |
 | Q2 | A page cursor pins its resolved upper sequence and lower-exclusive occurrence bound across intervening commits; eviction may recompute from the pinned immutable root without changing rows | PARTIAL | gated for query, scan, and occurrence loops; retained-root and ordered-result envelopes each cover four versions |
-| Q3 | Positive `text-match(entity, attribute, needle)` uses Unicode word/case-folded conjunction semantics over live string values; its index is exact-snapshot keyed, single-flight, and bounded to four versions/64 MiB | BACKED | [`../tests/text_match_test.clj`](../tests/text_match_test.clj), [`../tests/text_index_cache_test.clj`](../tests/text_index_cache_test.clj), differential and performance gates |
+| Q3 | Five positive text relations read live String values through one shared index: `text-match` (unordered token conjunction), `text-phrase` (token order preserved), `text-substring` (case-folded, punctuation kept), `text-stem` (English stemming), and 4-arity `text-search` (ranked, exact before stem before substring). All are positive-only, need a bound String needle, and reject empty or punctuation-only needles. One index build is bounded at 64 MiB and fails typed `:query-text-index-limit`; the analyzers behind phrase, substring, stem, and search realize on first use, so a `text-match` query pays nothing for them | BACKED | [`../tests/text_match_test.clj`](../tests/text_match_test.clj), [`../tests/text_index_cache_test.clj`](../tests/text_index_cache_test.clj), differential and performance gates |
+| Q3a | The text index is exact-snapshot keyed, single-flight, and retained across requests for four versions — **JVM route only**. The native route builds the source per query, plan-gated so an unqueried text relation costs nothing, and leans on the ordered-result cache (Q5) for repeats | PARTIAL | `text_index_cache_test.clj` covers the JVM cache; native rebuild cost is unmeasured |
 | Q4 | Budgets: step budget 10,000,000; timeout `min(60000, requested else 5000)` ms | UNBACKED | numbers live in source only; no gate exercises the limits |
 | Q5 | Complete deterministically ordered results are reused by snapshot generation, SpaceId, resolved `{lower-exclusive, upper-inclusive}` view, operation, and canonical request digest; concurrent misses share one computation | PARTIAL | `native_rpc_server_test.clj` exercises one evaluator run for two concurrent misses, selector-equivalent historical reuse, lower-bound separation, bounds, counters, and restart reset |
 | Q6 | `current`, inclusive `as-of U`, and `since L upper` compose transaction-exact state plus occurrence history; `(L,U]` never materializes the full occurrence relation | BACKED | `datalog_diff_test.clj` 7/7 including temporal and text-match source arms; `model_generative_test.clj` compares as-of state and since events after every generated operation; `native_rpc_server_test.clj` covers composition and cursors |
@@ -111,7 +138,7 @@ Reference workload NW-1 is a coordination substrate observed near 350k live Trip
 
 | Dimension | Contract |
 |---|---|
-| Request/response | body ≤ 1 MiB; frame ≤ 1 MiB; bulk reads paginate; the effective page bound remains ~200 rows under N3 |
+| Request/response | body ≤ 1 MiB; frame ≤ 1 MiB; bulk reads paginate; a request list is bounded at 250 values and an unpaged reply at 248 rows under N3 |
 | Latency | targeted read p95 at 500k Triples and ≤8 clients is TBD and may not be cited |
 | Writes | sustained single-transaction throughput and restart cost per 100k Triples are TBD and may not be cited |
 | Contention | `:rpc/conflict` is normal contract behavior; retry from a fresh base |
@@ -144,7 +171,7 @@ writes/s) must not be quoted for head. Remaining envelope work:
 
 - the 30k-scale arm was deliberately skipped (extrapolated hours per run —
   evidence in the receipt); it remains open for indexed evaluation;
-- restart cost is O(full log) at head (no checkpoint); the bound is unmeasured;
+- restart cost is bounded by store materialization, not by log length. `rpc/checkpoint` writes a snapshot image and a restart installs it and replays only the tail past its watermark, but on assert-heavy stores that costs the same as folding the whole log, because rebuilding the in-memory store dominates both. Measured on the v0.5.0 certification (fold / snapshot+tail, one store per size): 300 triples — native 128/134 ms, wasm 37/40 ms; 1,000 triples — native 974/957 ms, wasm 353/364 ms; 5,000 triples — native 32.4/33.7 s, wasm 12.0/13.0 s. Memory grows as roughly the square of live triples (wasm linear memory n^1.97, native RSS n^1.99) and boot time as n^2.17-2.18; the 5,000-triple store opens at 2,872 MiB of wasm linear memory and 3.94 GB native RSS. **This superlinearity is the named scale limit of the release**, and it, not the log, is what bounds a store size. The 2026-08-02 rows above are the JVM route at a different revision and do not compare;
 - committing or projecting a deeply nested recursive Term costs O(depth²)
   (measured via the generative harness: seed runtime 5.1 s at depth 8, 7.9 s
   at 60, 46.2 s at 240) — functional to the 256 depth bound but

@@ -1,7 +1,7 @@
 # Fram
 
 *Fram is a persistent engine for recursive, typed triples with neutral,
-slot-addressable structure.*
+position-addressed structure.*
 
 [![license](https://img.shields.io/badge/license-MIT_OR_Apache--2.0-blue.svg)](LICENSE)
 
@@ -55,7 +55,7 @@ type. See the [naming ledger](docs/naming.md).
 - [Guarantees](docs/guarantees.md) — guarantees, concurrency, workload envelope, and client obligations.
 - [Naming ledger](docs/naming.md) — durable naming verdicts and rejected alternatives.
 - [Node FRAMRPC client](clients/node/README.md) — the complete direct builder and application data plane.
-- [Isolation and deployment](docs/isolation-and-deployment.md) — trust domains and the Cloudflare edge shape.
+- [Isolation and deployment](docs/isolation-and-deployment.md) — trust domains, the three deployment shapes, and the wasm embed contract.
 - [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
 
 The rationale and positioning essays, plus the old pull, claims, and Codegraph documents, live under
@@ -109,17 +109,23 @@ engine wire is binary FRAMRPC.
   and leases across all thirteen FRAMRPC v1 operations.
 - The Cloudflare shim accepts closed JSON with tagged recursive Terms and lowers
   it to FRAMRPC. It does not accept EDN or an untyped escape hatch.
+- The engine also links as a library: `native/fram.h` publishes embedding ABI
+  v1 (`libfram.a`, `libfram.so`), and `--host wasm-embed` links the same ABI
+  into a wasm32 module an isolate embeds with no server and no socket. Both
+  take one canonical FRAMRPC v1 frame in and give one out, and the wasm engine
+  answers byte-for-byte what the native library answers. See
+  [isolation and deployment](docs/isolation-and-deployment.md#the-wasm-embed-contract).
 
 ## Why own the engine?
 
 Fram's differentiator is not “a triple plus an id.” It is the uniform recursive
 term model: a Triple is itself a Term, so a relationship, an identity
 coordinate, an assertion occurrence, and metadata can all use the same three
-slots without a privileged attribute position or bolt-on statement entity.
+positions without a privileged attribute position or bolt-on statement entity.
 
 The storage implementation interns Atoms and Triples and keeps compact
 `TripleRow`/operation tables, but those handles are deliberately not semantic
-identity. Querying is slot-neutral and history remains addressable after a
+identity. Querying is position-neutral and history remains addressable after a
 withdrawal. The exact executable contracts live in
 [`tests/triple_kernel_test.clj`](tests/triple_kernel_test.clj),
 [`tests/database_test.clj`](tests/database_test.clj), and

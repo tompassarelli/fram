@@ -121,6 +121,8 @@ grep -Fq 'occurrence(coordinate, action, proposition)' docs/query-reference.md |
   fail 'query reference lacks the occurrence base relation'
 grep -Fq 'FRAMRPC v1' docs/isolation-and-deployment.md ||
   fail 'wire reference lacks FRAMRPC v1'
+grep -Fq '../native/wasm-embed.seams' docs/isolation-and-deployment.md ||
+  fail 'the embed contract does not point at the seam fixture that pins it'
 grep -Fq 'does not implement `rpc/pull`' docs/archive/pull-reference.md ||
   fail 'legacy pull reference does not state the missing runtime surface'
 grep -Fq 'architecture prior, never a primitive' docs/naming.md ||

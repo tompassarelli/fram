@@ -11,6 +11,14 @@ Worker -- HTTPS + bearer + JSON --> shim -- private FRAMRPC --> Fram server
 Only the shim is public. Never publish the Fram server port 7977: FRAMRPC delegates
 authentication to the gateway.
 
+This procedure is the **container route**: the engine is a server process the
+Worker talks to over the network. Fram also links as a wasm module an isolate
+embeds directly, with no server and no socket; that shape and its host contract
+are in
+[`../../docs/isolation-and-deployment.md`](../../docs/isolation-and-deployment.md).
+The two are alternatives, not layers — nothing here applies to the embedded
+shape except the closed JSON boundary an edge chooses to keep.
+
 ## Boundary
 
 There is one edge format: `application/json`. Configure the client with the
