@@ -114,6 +114,15 @@ Certified against `9f00313` with the Beagle pin the flake declares. Toolchain:
 wasi clang 21.1.8, wasm-tools 1.249.0, python-wasmtime 45.0.0. Wasm timings
 ride wasmtime host calls from Python; in-isolate numbers are lower.
 
+**Read this section's provenance before quoting it.** The budget and limits
+matrix below was certified on the pre-fix engine, before the store
+materialization fix (`5721164`, `3df8efe`) landed. Boot cost *was* re-measured
+after that fix, and the **Boot** table carries the new numbers. Every other row
+here still describes the pre-fix engine, which makes each of them conservative:
+the shipped engine boots faster and holds less memory at the same store size,
+so the store sizes named below are floors rather than ceilings. Re-certifying
+the full matrix on the fixed engine is queued and not done.
+
 **Write lifecycle** — one wasm instance, single-triple commits from empty,
 uncapped:
 
@@ -142,18 +151,57 @@ Page limit is not free: at a limit of 64 the first page cost +139 MiB at 300
 triples and trapped at a 128 MiB cap. A page limit of 16 is the certified read
 shape.
 
-**Boot** — fold / snapshot+tail, one store per size:
+**Boot** — re-measured after the store materialization fix, so this table,
+unlike the rest of this section, describes the engine that ships. Fold /
+snapshot+tail, one store per size:
 
-| Live triples | Native | Wasm |
-|---:|---|---|
-| 300 | 128 / 134 ms, 18.7 MB RSS | 37 / 40 ms |
-| 1,000 | 974 / 957 ms, 154 MB RSS | 353 / 364 ms, 131 MiB |
-| 5,000 | 32.4 / 33.7 s, 3.94 GB RSS | 12.0 / 13.0 s, 2,872 MiB |
+| Live triples | Native fold | Native snap | Wasm fold | Wasm snap | Wasm pages, fold | Native RSS, fold |
+|---:|---|---|---|---|---:|---|
+| 300 | 19.5 ms | 21.0 ms | 8.7 ms | 11.2 ms | 29 | 4.7 MB |
+| 1,000 | 71.6 ms | 79.9 ms | 28.6 ms | 43.6 ms | 94 | 8.6 MB |
+| 3,000 | 230.0 ms | 242.1 ms | 107.7 ms | 121.5 ms | 289 | 20.6 MB |
+| 5,000 | 380.4 ms | 404.3 ms | 176.7 ms | 207.5 ms | 475 | 31.5 MB |
 
-Snapshot+tail equals fold at every measured size on these assert-heavy stores,
-because boot cost *is* store materialization. Memory grows as roughly the
-square of live triples (wasm n^1.97, native RSS n^1.99) and boot time as
-n^2.17-2.18, so the wasm32 4 GiB ceiling extrapolates to about 6,100 triples.
+The fix moved the shape, not only the constant. Fitting log(y) on log(n) over
+all four sizes, pre-fix against shipped:
+
+| Quantity | Path | Before | After |
+|---|---|---:|---:|
+| Native time | fold | 2.05 | 1.06 |
+| Native time | snap | 2.01 | 1.05 |
+| Wasm time | fold | 2.04 | 1.09 |
+| Wasm time | snap | 2.06 | 1.03 |
+| Wasm pages | fold | 1.95 | 1.00 |
+| Wasm pages | snap | 1.96 | 1.00 |
+| Native RSS | fold | 1.90 | 0.68 |
+| Native RSS | snap | 1.89 | 0.61 |
+
+Both boot paths and both targets move from about n^2 to about n^1 in time, and
+to n^1 or below in memory. The sub-linear memory exponents are the engine's
+fixed floor — roughly 3 MB native, 322 wasm pages — still dominating at 300
+triples. At 5,000 triples the shipped engine folds in 380 ms against 28.1 s,
+in 31.5 MB of RSS against 3.85 GB, and in 475 wasm pages against 45,627.
+
+Snapshot+tail still equals fold within run-to-run noise at every measured size,
+because boot cost *is* store materialization: the fix made that materialization
+linear, it did not take it off the boot path.
+
+The **~6,100-triple wasm ceiling** this table quoted before was a consequence
+of the quadratic page growth, and it no longer describes the engine. A new
+wasm32 ceiling has not been measured, and none is claimed here.
+
+Provenance of this before/after pair: stores fed through `fram-server-native`
+(assert-only, five triples per entity, arena space, batch 200), native taken as
+the median of three runs and wasm as the faster of two under wasmtime. Before is
+`ae1c83e`, after is `3df8efe`, both on one machine in one sitting — that shared
+harness is what makes the comparison sound. It is *not* a re-run of the
+`9f00313` certification harness above, and its "before" column does not
+reproduce the pre-fix boot row this document previously carried; compare the two
+columns to each other, not across harnesses. Two further caveats: the wasm
+millisecond columns ride Python/wasmtime host calls and so bound engine time
+from above, while the page counts are exact; and the corpus is assert-only, so
+these curves do not price a retraction-heavy or re-assertion-heavy boot, which
+remains superlinear.
 
 **Checkpoint and portability.** Wasm checkpoints work to 1,050 triples
 (569-664 ms) and trap at 1,100 and above — a wasm-only bound in the snapshot
@@ -222,19 +270,32 @@ arena, and set the budget equal to the cap.
 
 ## Known limitations
 
-- **Store materialization is superlinear, and it is the scale limit of this
-  release.** Memory and boot time grow as roughly the square of live triples.
-  Nothing else in the measured set binds a store size as tightly.
+- **Store materialization was the scale limit of this release, and the fix for
+  it is in this release.** Boot time and boot memory grew as roughly the square
+  of live triples; after `5721164` and `3df8efe` both grow about linearly on the
+  measured corpus. The budget and limits matrix was certified before that fix
+  and has not been re-certified, so the store sizes it names bind more tightly
+  than the shipped engine actually requires.
+- **The measured boot corpus is assert-only, and retraction-heavy boots are
+  still superlinear.** Two known quadratics in the store are untouched by the
+  fix and unexercised by the curve: the live-set copy per retraction, and the
+  active-bucket copy per re-assertion. A boot dominated by either still grows
+  as roughly the square of the work. Unmeasured, not fixed.
 - **Wasm checkpoints stop at about 1,050 triples**, trapping in the snapshot
   serializer's arena allocation. Native checkpoints do not have this bound.
+  Measured pre-fix and not re-measured.
 - **Reads of a 1,000-triple store trap even at 192 MiB.** Read cost, not write
-  cost, is what makes a small isolate budget bind.
+  cost, is what makes a small isolate budget bind. Measured pre-fix and not
+  re-measured; the read path is not what the fix touched, but the boot memory
+  it shares is much smaller now.
 - **A hard-cap overrun is a trap, never a typed error.** The memory budget
   tunes compaction cadence; it does not soften exhaustion. A trap is
   instance-fatal, and the status line before the abort is a report, not a
   recovery.
-- **Write-path transients are worse than boot.** Feeding 5,000 triples through
-  the native server peaked at 7.8 GB RSS against 3.94 GB to boot the result.
+- **Write-path transients are worse than boot, and they were not re-measured.**
+  On the pre-fix engine, feeding 5,000 triples through the native server peaked
+  at 7.8 GB RSS against 3.94 GB to boot the result. Boot for that store is now
+  31.5 MB; the write-path peak is unknown on the fixed engine.
 - **The Durable Object numbers are carried from a pre-fix build.** Re-bench
   before quoting them as current.
 - **Wasm timings here ride Python/wasmtime host calls.** In-isolate per-frame
