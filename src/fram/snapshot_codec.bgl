@@ -582,8 +582,7 @@
                               space-id next-sequence)]))]))]))
 
 
-;; The nine sidecar checks the declared contract names, answered against the
-;; canonical FRAMLOG the image claims to summarise.
+;; The nine sidecar checks the declared contract names, answered against the log.
 (defn- label-present? [labels: (Vec String) label: String] -> Bool
   (loop [position 0]
     (if (>= position (count labels))
