@@ -121,13 +121,16 @@ done
 # The unpaged codec bound, in a store of its own so the row count is exactly
 # what the batches wrote: 40 answers at the limit, 42 must refuse one step over,
 # 43 pages past it. Move unpaged-occurrence-limit and one of the three flips.
+# Its reopen pass checkpoints, so the refusal must survive the image boot too.
 "$scratch/frames_driver" "$frames" "$frames/manifest-depth.txt" \
-  "$frames/manifest-depth-reopen.txt" "$scratch/native-depth.framlog" \
+  "$frames/manifest-depth-reopen.txt" "$frames/manifest-depth-image.txt" \
+  "$scratch/native-depth.framlog" \
   "$space" >"$scratch/native-depth.transcript" ||
   fail "native oracle failed the depth matrix: $(tail -3 "$scratch/native-depth.transcript")"
 python3 "$repo/tests/wasm_embed/embedder.py" \
   "$wasm_artifact/lib/libfram.wasm" "$frames" "$frames/manifest-depth.txt" \
-  "$frames/manifest-depth-reopen.txt" "$scratch/wasm-depth.framlog" \
+  "$frames/manifest-depth-reopen.txt" "$frames/manifest-depth-image.txt" \
+  "$scratch/wasm-depth.framlog" \
   "$scratch/wasm-depth.tally" "$space" >"$scratch/wasm-depth.transcript" ||
   fail "external wasm embedder failed the depth matrix: $(tail -3 "$scratch/wasm-depth.transcript")"
 if ! cmp -s "$scratch/native-depth.transcript" "$scratch/wasm-depth.transcript"; then
