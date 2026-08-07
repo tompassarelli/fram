@@ -157,6 +157,16 @@
 (defn append-presence! [encoder: Encoder present: Bool] -> Nil
   (append-u8! encoder (if present 1 0)))
 
+;; Push, never `into`: the native arena is bump-only, so rebuilding the byte
+;; cell costs one arena copy of everything appended so far.
+(defn append-bytes! [encoder: Encoder bytes: (Vec Int)] -> Nil
+  (loop [position: Int 0]
+    (if (>= position (count bytes))
+      nil
+      (do
+        (append-u8! encoder (nth bytes position))
+        (recur (+ position 1))))))
+
 (defn utf8-bytes!
   [encoder: Encoder
    value: String
@@ -254,7 +264,7 @@
     (if (nil? (deref (encoder-error encoder)))
       (do
         (append-u32-le! encoder (count bytes))
-        (swap! (encoder-bytes encoder) into bytes)
+        (append-bytes! encoder bytes)
         nil)
       nil)))
 
