@@ -136,8 +136,32 @@ The thing is where time attaches. A Triple is timeless content; time is the occu
 Rejected bench:
 
 - **datom-style fused tuple** — breaks quotation and collapses independent corroboration.
-- **a fourth time position** — makes the arity a lie and assigns a kernel role to a slot.
+- **a fourth time position** — makes the arity a lie and assigns a kernel role to a position.
 - **validity-interval fields** — closing an interval mutates history that must stay append-only.
+
+## build-stage vocabulary at the Beagle seams — adopted 2026-08-07
+
+The thing is the words fram uses for Beagle's build stages, which cross the seam
+as runtime string contracts with no compile-time coupling. Beagle decided them
+and fram follows in lockstep; reopening either word here would only desynchronize
+a gate.
+
+- **freeze / frozen** replaced seal/sealed for the build stage, on the
+  `Object.freeze` prior: the mechanism is immutability after construction. The
+  affected contracts are the accepted report line `stage source-freeze
+  ACCEPTED` and the QBE frontier refusal `native program is not frozen:
+  validation obligations failed`, whose ledger class key is
+  `program-not-frozen`.
+- **program** and **module-overlay** replaced the retired Worlds vocabulary,
+  both in that refusal and at the authoring checker:
+  `facts-check-overlay.rkt`, receipt key `overlayDigest`, rejection code
+  `beagle-overlay-rejected`.
+
+Fram's own seal surfaces are a different subject and are untouched: sealed
+epochs and range manifests (a ledger-sealing prior, see the
+[glossary](glossary.md#storage-and-query)), the sealed graph-edit runtime, and
+the migration seal. A build stage freezes; a range of history is sealed. Both
+words keep their own prior.
 
 ## Appending an entry
 
