@@ -168,12 +168,14 @@ corrupt it. **Turtle #6 lifts this** — comments are now captured and rename-co
 ### Falsification log — three queries, each one run
 
 **1. "superseded" — is it real, or overwrite with nicer vocabulary?**
-*Query (`src/supersession_check.clj`):* dump the renamed entity's claims. Result:
-entity 42 holds **both** claim 45 `(v "red")` `LIVE?=false` **and** claim 283
-`(v "crimson")` `LIVE?=true`; the retirement is itself a reified claim (284:
-`new —supersedes→ old`). Same node, old still retrievable, live view returns only
-`["crimson"]`. **Supersession is a real claim graph** — history preserved, nothing
-deleted.
+*Query (`codegraph/src/supersession_check.bclj`):* dump the renamed node's
+propositions. Result: node 8 holds **both** the assertion `(8 "v" "red")` at
+occurrence `codegraph/1#26` `LIVE?=false` **and** `(8 "v" "crimson")` at
+`codegraph/2#1` `LIVE?=true`; the retirement is the kernel's own withdrawal
+triple — `codegraph/2#0` withdraws `codegraph/1#26` — not a user-level
+`supersedes` predicate. Same node, old still retrievable, live view returns only
+`["crimson"]`. **Supersession is a real occurrence graph** — history preserved,
+nothing deleted.
 
 **2. "valid beagle" was standing in for "faithful."**
 *Query (`test/faith.rkt`):* assert the mutated→projected→re-read tree equals the

@@ -126,7 +126,8 @@
                                                                                                                                                                                                                                [dd: (Map Keyword Any)] -> Row (let [g (get radj (get dd :key) #{})] (Row. nm (short-file (get dd :key)) 1.0 (/ (count g) (double (count incumbent))) (count g) (count incumbent)))) ds) []))) collisions))))
 
 ;; A defn key is a [file leaf] pair; "<file>#<leaf>" is its Term spelling, so the
-;; edge proposition names the node directly and nothing has to be interned.
+;; edge proposition names the node directly and nothing has to be interned. The
+;; spelling is only injective because leaf is an integer.
 (defn node-term [k: (Vec Any)] -> String (str (nth k 0) "#" (nth k 1)))
 
 (defn closure-line!

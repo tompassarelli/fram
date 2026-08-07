@@ -20,8 +20,8 @@
 
 (def space-id: String "codegraph")
 
-;; The fact stream's own node ids are the store's node terms; an integer object
-;; is a node reference, anything else a literal.
+;; The fact stream's own ids are the store's node terms: the kernel accepts any
+;; Atom, so a line becomes a proposition with nothing minted or remapped.
 (defn line->operation [line: String] -> Any
   (let [trip (edn/read-string line)]
     (c/assert-operation (t/triple (nth trip 0) (nth trip 1) (nth trip 2)))))

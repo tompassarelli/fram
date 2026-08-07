@@ -92,7 +92,9 @@
 
 ;; A defn key is a [file leaf] pair, which is not a Term; resolve's closure runs
 ;; on Terms, so edges cross that seam in their "<file>#<leaf>" spelling and the
-;; answer is mapped back to keys here — callers never see the wire form.
+;; answer is mapped back to keys here — callers never see the wire form. That
+;; mapping is only sound because leaf is an integer, which makes the spelling
+;; injective.
 (defn key-index [edges: Any] -> (Map String Any)
   (reduce (fn [m: (Map String Any) e: Any] -> (Map String Any)
             (assoc (assoc m (key->str (nth e 0)) (nth e 0))

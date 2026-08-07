@@ -36,8 +36,9 @@
   #{"defn" "definline" "def-" "defonce" "defn-" "def"})
 
 ;; Node terms are the fact stream's own ids shifted by a per-file offset: the
-;; kernel accepts any Atom, so nothing is minted, and the shift is what keeps
-;; two files' node ids from colliding inside one store.
+;; kernel accepts any Atom, so nothing is minted, and the shift keeps two files'
+;; ids apart in one store. Emitted ids start at 1, so 0 stays free as
+;; field-child/sym-val's "no such child" even at offset 0.
 (defn seen-node [state: (Map Keyword Any) node: Int] -> (Map Keyword Any)
   (if (contains? (get state :seen) node)
     state
@@ -81,8 +82,8 @@
       (c/commit-transaction! ctx (vec (get loaded :operations))))
     src))
 
-;; Every read below goes through this index so the queries stay one pass over
-;; the live propositions rather than one pass per node.
+;; A snapshot of the live view, keyed by subject; every read below goes through
+;; one. A commit invalidates it, so the caller rebuilds after editing.
 (defn live-index [ctx: Any] -> (Map Any Any)
   (group-by (fn [p: Any] -> Any (t/triple-t1 p)) (c/live-propositions ctx)))
 
