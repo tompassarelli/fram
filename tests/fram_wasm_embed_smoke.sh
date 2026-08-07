@@ -118,7 +118,44 @@ for hook in allocate deallocate clock_milliseconds storage_append \
     fail "the $hook import was never called"
 done
 
-printf 'fram wasm embed smoke: PASS frames=%s framlog=%s refused-wasi-calls=0 served-wasi=%s\n' \
+# The unpaged codec bound, in a store of its own so the row count is exactly
+# what the batches wrote: 40 answers at the limit, 42 must refuse one step over,
+# 43 pages past it. Move unpaged-occurrence-limit and one of the three flips.
+"$scratch/frames_driver" "$frames" "$frames/manifest-depth.txt" \
+  "$frames/manifest-depth-reopen.txt" "$scratch/native-depth.framlog" \
+  "$space" >"$scratch/native-depth.transcript" ||
+  fail "native oracle failed the depth matrix: $(tail -3 "$scratch/native-depth.transcript")"
+python3 "$repo/tests/wasm_embed/embedder.py" \
+  "$wasm_artifact/lib/libfram.wasm" "$frames" "$frames/manifest-depth.txt" \
+  "$frames/manifest-depth-reopen.txt" "$scratch/wasm-depth.framlog" \
+  "$scratch/wasm-depth.tally" "$space" >"$scratch/wasm-depth.transcript" ||
+  fail "external wasm embedder failed the depth matrix: $(tail -3 "$scratch/wasm-depth.transcript")"
+if ! cmp -s "$scratch/native-depth.transcript" "$scratch/wasm-depth.transcript"; then
+  fail "$(printf 'wasm depth answers diverge from the native oracle:\n%s' \
+    "$(diff "$scratch/native-depth.transcript" "$scratch/wasm-depth.transcript" |
+       cut -c1-160 | head -6)")"
+fi
+cmp -s "$scratch/native-depth.framlog" "$scratch/wasm-depth.framlog" ||
+  fail "the depth-matrix FRAMLOG written through the imports differs from the native one"
+# The refusal travels as a typed payload inside an OK response, so look for its
+# code in the response bytes rather than in the transport status.
+depth_code_hex="$(printf 'term-depth-exceeded' | od -An -tx1 | tr -d ' \n')"
+frame_response_hex() {
+  awk -v name="$2" '$1 == "frame" && $2 == name { print $4; exit }' "$1"
+}
+for transcript in "$scratch/native-depth.transcript" \
+  "$scratch/wasm-depth.transcript"; do
+  frame_response_hex "$transcript" 42-query-bulk-over-limit.bin |
+    grep -q "$depth_code_hex" ||
+    fail "one row over the unpaged bound was answered instead of refused: $transcript"
+  for answered in 40-query-bulk-at-limit.bin 43-query-bulk-paged.bin; do
+    ! frame_response_hex "$transcript" "$answered" | grep -q "$depth_code_hex" ||
+      fail "$answered was refused for depth; the unpaged bound is too tight: $transcript"
+  done
+done
+
+printf 'fram wasm embed smoke: PASS frames=%s depth-frames=%s framlog=%s refused-wasi-calls=0 served-wasi=%s\n' \
   "$(grep -c '^frame ' "$scratch/wasm.transcript")" \
+  "$(grep -c '^frame ' "$scratch/wasm-depth.transcript")" \
   "$(sha256sum "$scratch/wasm.framlog" | sed 's/ .*//')" \
   "$(awk '$1 == "served" { printf "%s=%s ", $2, $3 }' "$scratch/wasm.tally")"
