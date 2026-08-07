@@ -14,3 +14,6 @@ q 16-scan-keyword-unicode.bin 293 :rpc/scan
 q 17-query-unicode.bin 1227 :rpc/query
 q 18-scan-big-string.bin 61660 :rpc/scan
 q 19-scan-deep-nest.bin 1548 :rpc/scan
+q 20-query-all-final.bin 1265 :rpc/query
+s 21-query-since2-final.bin 1351 :rpc/query
+s 22-occurrences-since2-final.bin 1413 :rpc/query
