@@ -5,8 +5,11 @@ content-addressed segment and hands parent and child a fresh tail each, so a
 branch splits off without copying or merging anything. It also fixes two
 native memory defects that made large stores unbootable or unsnapshottable,
 revives codegraph onto the occurrence store behind a CI gate that runs it
-instead of only reading its source, and closes the manifest gaps that let
-three declared tests go unrun.
+instead of only reading its source, repairs a CI pipeline ordering bug that
+had broken every push since the beagle pin landed (including the v0.5.0 tag
+push itself), and declares three previously undeclared tests in the CI
+manifest — each excluded with evidence, still not run — plus a fourth,
+newly declared and running.
 
 This is a patch release: the store format is unchanged for anything that has
 never forked, and every fix below is a defect correction against v0.5.0
@@ -40,7 +43,7 @@ The default branch — the one whose tail is the store file itself, unnamed in
 `<log>.branches/` — is spelled **main**, on the git prior for a checkout's
 starting line. No store has forked before this release, so there is nothing
 on disk the respelling migrates. Branch, fork, segment, and sealed are
-ledgered in [`docs/naming.md`](docs/naming.md#branch--chosen-2026-08-08).
+ledgered in the [naming ledger](docs/naming.md#branch--chosen-2026-08-08).
 
 Tests: `framref_codec_test.clj` (38 checks), `framlog_fork_test.clj` (40),
 and `framlog_chain_boot_test.clj` (15) all pass. The chain-boot suite pins
@@ -58,27 +61,37 @@ operation during a fold. On the 936k-operation, 138 MB reference framlog,
 RSS grew convexly past 56–60 GB without binding; the process was killed.
 After the fix (whole-vector fold, cell-backed positions and liveness during
 the fold only), the same log binds at 7.28 GB peak / 6.25 GB serving RSS in
-161.6 s. Liveness is byte-identical under the Stage 6 differential across all
-7 artifacts.
+161.6 s. `tests/native_stage6_compare.sh` — the harness's own name for this
+check — takes a pre-fix and a post-fix observation directory and byte-diffs
+all 7 store artifacts each run produces (history, live occurrences, live
+propositions, invalid-coordinate and malformed-term corpus records, the
+term-store dump, and their digest manifest); all 7 agree, so the fold
+rewrite changed how the fold runs, not what the store observes afterward.
 
 **Snapshot encode.** `rpc/checkpoint` on the same class of store drove RSS
 from 6.25 GB to over 20 GB in under 7 seconds while writing zero image bytes
-— observed as high as 44 GB in production before the process gave up.
-`frame-record!` built the image with `swap! ... into`, which lowers to a
-fresh arena vector holding the whole accumulation on every record; a payload
-staged in its own growing vector cost the arena a second full copy of the
-image on top of that. Row records now declare their payload length and write
-straight into the output encoder, with `finish-record!` CRCing the range it
-just wrote and refusing a writer whose bytes disagree with its declaration.
-After the fix, the same checkpoint costs +2.04 GB over serving baseline and
-writes a 100,863,531-byte image in 42.7 s. The image is byte-identical to the
-one the pre-fix encoder produced on the same store, modulo the sidecar stamp
-— same fingerprint.
+— observed as high as 44 GB in production. `frame-record!` built the image
+with `swap! ... into`, which lowers to a fresh arena vector holding the whole
+accumulation on every record; a payload staged in its own growing vector cost
+the arena a second full copy of the image on top of that. Row records now
+declare their payload length and write straight into the output encoder,
+with `finish-record!` CRCing the range it just wrote and refusing a writer
+whose bytes disagree with its declaration. After the fix, the same
+checkpoint costs +2.04 GB over serving baseline and writes a
+100,863,531-byte image in 42.7 s, run against the same store on a second
+boot fold below (161.6 s / 6.25 GB serving). The fixed encoder's image has
+the same fingerprint as the main-tip encoder's image on the same store,
+modulo the sidecar stamp — a cross-encoder check on the fixed generation,
+not a before/after comparison against the pre-fix encoder, which produced no
+usable image to compare against.
 
 **Snapshot image boot is now the fast restart path.** On the same store,
 image boot takes 117.4 s at 4.3 GB serving RSS afterward, against 159.7 s and
-6.55 GB for a full fold. Before the encode fix, a checkpoint was not a viable
-way to reach that image at this store size at all.
+6.55 GB for a full fold measured in this same encode-fix run — a separate
+fold pass from the 161.6 s / 6.25 GB boot-fold figure above, run to produce
+a fresh comparison baseline rather than reused from it. Before the encode
+fix, a checkpoint was not a viable way to reach that image at this store
+size at all.
 
 These numbers are measured on one reference corpus on one machine; they are
 not the certified limits matrix and make no claim about other store shapes.
@@ -96,23 +109,47 @@ old store minted. Supersession follows the kernel: a rename retracts the old
 proposition and asserts the renamed one in one transaction, and the store's
 withdrawal link stands in for the old reified `supersedes` fact.
 
-All six modules build and run on the occurrence store. Goldens are
-byte-identical to the pre-removal build except three justified diffs: the
-elapsed-ms field, node-id allocation order (now follows the input stream
-instead of the old store's allocation order), and supersession output whose
-golden printed types the removal deleted.
+The sixth module in the family, `callgraph`, never rented the removed store
+and needed no port; it stays in scope here only because the new execution
+gate loads and runs it alongside the five that did. All six build and run on
+the occurrence store. Goldens are byte-identical to the pre-removal build
+except three justified diffs: the elapsed-ms field, node-id allocation order
+(now follows the input stream instead of the old store's allocation order),
+and supersession output whose golden printed types the removal deleted.
 
 **The execution gate.** No manifest row had ever run a codegraph module:
 `codegraph_seam_test.clj` reads sources for forbidden namespaces but never
 loads them, so when the fact-and-CID store was removed the five renting
-modules died on load and CI stayed green for a week. `codegraph_exec_test.sh`
+modules died on load with no gate catching it. `codegraph_exec_test.sh`
 closes that class of failure. Its unconditional tier loads all six
 namespaces from `out/` under bb — exactly the class that rotted, needing
 nothing outside the repo. Its gated tier drives three modules end to end
-against their oracles (`beagle-roundtrip --verify`, `faith.rkt` on a rename
-trap, the rc=3 collision refusal, and `supersession_check`'s live/withdrawn
-verdict) on `FRAM_BEAGLE`. Three deliberately provoked failures fail loudly
+against real oracles on `FRAM_BEAGLE`: `roundtrip_fram` against
+`beagle-roundtrip --verify`; `rename` against both `faith.rkt`'s rename trap
+and its own rc=3 collision refusal; and `supersession_check` against its
+live/withdrawn verdict. Three deliberately provoked failures fail loudly
 under the gate, confirming it catches the class it was built for.
+
+### CI pipeline repair
+
+Both CI workflows sourced Beagle's `bin/_beagle-racket` before `raco pkg
+install --link` registered the checkout, so the raco-make freshness gate
+inside it ran against an unlinked collection and died on "collection not
+found for module path: beagle/lang/reader-impl" — every push since the
+Beagle pin landed, including the v0.5.0 tag push itself. The fix links the
+packages first and sources `_beagle-racket` after, so the gate resolves and
+warms every `.zo` outside the per-row timeouts the suite applies
+(`.github/workflows/ci.yml`, link-before-source step).
+
+Separately, `tests/fram_snapshot_boot_test.sh` builds the complete native
+server through `bin/fram-native-build --host server`, which takes 9m18s on a
+24-core machine; a 2-core hosted runner cannot fit that inside the 240s
+per-row timeout under any honest reading. The manifest now carries a new
+disposition, `exclude-runner`, for a gate whose cost exceeds a hosted
+runner: the row is excluded from the hosted CI run, its evidence is the
+`--host server` build it drives, and it still runs in the flake devShell and
+before a release (`tests/occurrence_native_ci_manifest.txt`, runner-capacity
+row).
 
 ### CI manifest exhaustiveness
 
@@ -123,11 +160,15 @@ the CI manifest, and all three fail for real against current code —
 `server_telemetry_shed_test.clj` references a function that was never
 implemented, and `snapshot_honesty_pass_test.clj` depends on a load-order
 side effect that no longer holds. Each is declared as an exclude with
-evidence pointing at its own source, following the existing
-moved-graph-control precedent rather than leaving it silently absent from
-the count. `triple_log_renumber_test.clj` was also unlisted before this
-release and is now classified. The suite at tip runs 48 green manifest rows
-under `run-bb`.
+evidence pointing at its own source: `cascade_test.clj` under
+`removed-socket-harness`, `server_telemetry_shed_test.clj` under
+`removed-telemetry-shed`, and `snapshot_honesty_pass_test.clj` under
+`moved-graph-control` — the same class the manifest already uses for tests
+stranded by the earlier graph-control move — rather than leaving any of the
+three silently absent from the count. None of the three runs; declaring them
+makes the gap visible instead of closing it. `triple_log_renumber_test.clj`
+was also unlisted before this release and is now classified as a run-bb row.
+The suite at tip runs 48 green manifest rows under `run-bb`.
 
 ## Compatibility and migration
 
@@ -144,6 +185,31 @@ under `run-bb`.
   tracking the input stream instead of the old store's allocation order. A
   consumer that depended on the old ordering, rather than on node identity
   alone, should re-check its assumptions.
+
+## Release evidence
+
+- `framref_codec_test.clj` (38 checks), `framlog_fork_test.clj` (40),
+  `framlog_chain_boot_test.clj` (15): PASS.
+- Boot fold fix: 936k-op / 138 MB reference framlog binds at 7.28 GB peak /
+  6.25 GB serving RSS in 161.6 s, where the pre-fix engine grew past 56–60 GB
+  unbound and was killed. Liveness byte-identical under the
+  `native_stage6_compare.sh` differential, 7/7 artifacts.
+- Snapshot encode fix: same-class checkpoint writes a 100,863,531-byte image
+  in 42.7 s at +2.04 GB over serving baseline, where the pre-fix encoder
+  reached >20 GB in under 7 s writing zero bytes (observed to 44 GB in
+  production). Image fingerprint identical to the main-tip encoder's output
+  on the same store, modulo the sidecar stamp — a cross-encoder check on the
+  fixed generation, not a comparison against the pre-fix encoder, which
+  produced no usable image. Image boot 117.4 s / 4.3 GB serving RSS against
+  a separately measured full fold of 159.7 s / 6.55 GB on the same store.
+- Codegraph revival: all six modules build and run on the occurrence store;
+  goldens byte-identical except the three justified diffs named above.
+  `codegraph_exec_test.sh` load tier and gated tier both green; three
+  provoked failures fail loudly under the gate.
+- CI pipeline: the link-before-source fix and the runner-capacity exclusion
+  land in `.github/workflows/ci.yml` and
+  `tests/occurrence_native_ci_manifest.txt` respectively.
+- Manifest at tip: 48 `run-bb` rows green.
 
 ## Known limitations
 
@@ -162,23 +228,6 @@ under `run-bb`.
 - **callgraph, codegraph, and rep_jurisdiction stay load-only** in the CI
   gate: their goldens are measured against the gjoa corpus, which is not in
   this tree.
-
-## Release evidence
-
-- `framref_codec_test.clj` (38 checks), `framlog_fork_test.clj` (40),
-  `framlog_chain_boot_test.clj` (15): PASS.
-- Boot fold fix: 936k-op / 138 MB reference framlog binds at 7.28 GB peak /
-  6.25 GB serving RSS in 161.6 s, where the pre-fix engine grew past 56–60 GB
-  unbound and was killed. Liveness byte-identical under the Stage 6
-  differential, 7/7 artifacts.
-- Snapshot encode fix: same-class checkpoint writes a 100,863,531-byte image
-  in 42.7 s at +2.04 GB over serving baseline, where the pre-fix encoder
-  reached >20 GB in under 7 s writing zero bytes. Image fingerprint identical
-  to the pre-fix encoder's output on the same store, modulo the sidecar
-  stamp. Image boot 117.4 s / 4.3 GB serving RSS against 159.7 s / 6.55 GB
-  for a full fold.
-- Codegraph revival: all six modules build and run on the occurrence store;
-  goldens byte-identical except the three justified diffs named above.
-  `codegraph_exec_test.sh` load tier and gated tier both green; three
-  provoked failures fail loudly under the gate.
-- Manifest at tip: 48 `run-bb` rows green.
+- **`tests/fram_snapshot_boot_test.sh` no longer runs on hosted CI**: it is
+  excluded as `runner-capacity`, and now runs only in the flake devShell and
+  before a release.
