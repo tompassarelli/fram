@@ -820,6 +820,25 @@ static void report_snapshot_line(uint64_t text) {
   (void)!write(2, "\n", (size_t)1u);
 }
 
+/* Only a host that named a budget gets this line, so a default boot's stderr
+   is byte-identical to what it was before limits became derivable. */
+static void report_derived_limits(const fram_server_limits *limits) {
+  char line[160];
+  int length = snprintf(
+      line, sizeof(line),
+      "fram: engine memory limits derived from the host budget: "
+      "arena-growth=%llu compact-increment=%llu compact-generations=%llu\n",
+      (unsigned long long)limits->arena_growth_bytes,
+      (unsigned long long)limits->compact_increment_bytes,
+      (unsigned long long)limits->compact_generations);
+
+  if (length > 0) {
+    (void)!write(2, line,
+                 (size_t)length < sizeof(line) ? (size_t)length
+                                               : sizeof(line) - 1u);
+  }
+}
+
 static int write_snapshot_vector(fram_server_store *store,
                                  const native_vec *vector, char *error,
                                  size_t error_capacity) {
@@ -1058,6 +1077,9 @@ int fram_server_store_boot_with_host(const char *canonical_log_path,
   store->host = *host;
   store->limits = derive_limits(host->memory_budget_bytes);
   store->poisoned = false;
+  if (host->memory_budget_bytes != UINT64_C(0)) {
+    report_derived_limits(&store->limits);
+  }
   status = boot_generation_from_log(
       store, store->canonical_log_path, store->space_id, true, &generation,
       &log_length, error, error_capacity);
