@@ -42,6 +42,7 @@ run-bb	current-model	tests/store_ordkey_test.clj	-
 run-bb	current-model	tests/store_test.clj	-
 run-bb	current-model	tests/triple_kernel_test.clj	-
 run-bb	current-model	tests/triple_log_migration_test.clj	-
+run-bb	current-model	tests/triple_log_renumber_test.clj	-
 run-bb	current-model	tests/triple_query_test.clj	-
 run-clojure	current-model	tests/store_defcheck_untyped_test.clj	-
 
@@ -51,6 +52,7 @@ run-shell	current-boundary	tests/fram_native_generated_adapter_smoke.sh	-
 run-shell	current-boundary	tests/fram_wasm_embed_smoke.sh	-
 run-shell	current-boundary	tests/fram_do_client_smoke.sh	-
 run-shell	current-boundary	tests/fram_snapshot_boot_test.sh	-
+run-shell	current-model	tests/codegraph_exec_test.sh	-
 run-shell	current-docs	tests/docs_semantics_ratchet.sh	-
 run-shell	current-boundary	tests/occurrence_native_ci_compare_test.sh	-
 run-shell	current-cache	tests/fri_golden.sh	-
