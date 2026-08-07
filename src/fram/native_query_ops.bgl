@@ -1049,7 +1049,10 @@
         text-result: d/CandidateSourcesResult
         (if (plan-uses-any-relation? plan d/text-relations)
           (d/build-text-candidates-result
-           (rot/propositions (rot/all-occurrences rotation)))
+           (rot/propositions
+            (d/events-after-sequence
+             (rot/all-occurrences rotation)
+             (queryview-lower-exclusive view))))
           (d/->CandidateSourcesResult {} nil))
         error-value (d/candidatesourcesresult-error text-result)
         control: d/QueryControl (d/query-control query-step-limit timeout-ms)]

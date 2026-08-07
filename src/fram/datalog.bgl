@@ -896,7 +896,9 @@
           (> sequence lower-exclusive))
         false))))
 
-(defn- events-after-sequence
+;; Public because every candidate source built from a projected rotation has to
+;; apply the same window: the rotation carries the upper snapshot only.
+(defn events-after-sequence
   [events: (Vec t/Triple)
    lower-exclusive: Int] -> (Vec t/Triple)
   (if (< lower-exclusive 0)

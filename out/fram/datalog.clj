@@ -548,7 +548,7 @@
    sequence (t/triple-t3 transaction)]
   (> sequence lower-exclusive)) false))))
 
-(defn- events-after-sequence [events lower-exclusive]
+(defn events-after-sequence [events lower-exclusive]
   (if (< lower-exclusive 0) events (filterv (fn [event] (event-after-sequence? event lower-exclusive)) events)))
 
 (defn- ^CandidateSource candidate-source-add [^String relation ^CandidateSource source tuple]

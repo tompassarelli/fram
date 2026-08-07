@@ -20,3 +20,7 @@ q 19-scan-deep-nest.bin 1548 :rpc/scan
 q 20-query-all-final.bin 1265 :rpc/query
 s 21-query-since2-final.bin 1351 :rpc/query
 s 22-occurrences-since2-final.bin 1413 :rpc/query
+t 23-assert-text-early.bin 228 :rpc/assert
+t 24-assert-text-late.bin 226 :rpc/assert
+q 25-text-all.bin 1189 :rpc/query
+s 26-text-since-early.bin 1275 :rpc/query
