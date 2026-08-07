@@ -126,7 +126,6 @@
    triples: (Vec TripleRow)
    transactions: (Vec TransactionRow)
    operations: (Vec OperationRow)
-   operation-live: (Vec Bool)
    withdrawal-targets: (Vec Int)
    active-buckets: (Vec ActiveBucket)
    atom-slots: slots/TermSlots

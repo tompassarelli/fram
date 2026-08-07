@@ -6,7 +6,7 @@
 (require fram.slots :as slots)
 
 (def empty-ids: (Vec Int) [])
-(def empty-bools: (Vec Bool) [])
+(def empty-live-cells: (Vec (Atom Bool)) [])
 (def empty-atoms: (Vec t/AtomRow) [])
 (def empty-triple-rows: (Vec t/TripleRow) [])
 (def empty-transaction-rows: (Vec t/TransactionRow) [])
@@ -79,7 +79,7 @@
   (if (valid-space-id? space-id)
     (atom (t/->TermStore
            space-id 1 empty-atoms empty-triple-rows
-           empty-transaction-rows empty-operation-rows empty-bools empty-ids
+           empty-transaction-rows empty-operation-rows empty-ids
            empty-active-buckets
            (slots/fresh-slots initial-slots)
            (slots/fresh-slots initial-slots)
@@ -383,19 +383,15 @@
     (if (= action t/assert-action)
       (set-active-positions!
        (assoc store
-              :operation-live (conj (t/termstore-operation-live store) true)
               :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1))
        handle
        (conj active operation-position))
       (if (empty? active)
         (assoc store
-               :operation-live (conj (t/termstore-operation-live store) false)
                :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1))
-        (let [target: Int (peek active)
-              live: (Vec Bool) (t/termstore-operation-live store)]
+        (let [target: Int (peek active)]
           (set-active-positions!
            (assoc store
-                  :operation-live (conj (assoc live target false) false)
                   :withdrawal-targets
                   (conj (t/termstore-withdrawal-targets store) target))
            handle
@@ -701,22 +697,49 @@
                                        (occurrence-at store target))))
             (recur (inc position) with-event)))))))
 
+;; Liveness is derived, never stored: operation p is live exactly when it
+;; asserts and no later operation withdraws it. Cells so the withdrawal pass
+;; costs one write per withdrawal instead of one copy of the whole vector.
+(defn- operation-live-cells [store: t/TermStore] -> (Vec (Atom Bool))
+  (let [operations: (Vec t/OperationRow) (t/termstore-operations store)
+        targets: (Vec Int) (t/termstore-withdrawal-targets store)
+        cells: (Vec (Atom Bool))
+        (loop [built: (Vec (Atom Bool)) empty-live-cells position: Int 0]
+          (if (>= position (count operations))
+            built
+            (recur
+             (conj built
+                   (atom (= t/assert-action
+                            (t/operationrow-action (nth operations position)))))
+             (inc position))))]
+    (loop [position: Int 0]
+      (if (>= position (count targets))
+        cells
+        (let [target: Int (nth targets position)]
+          (if (>= target 0)
+            (do
+              (reset! (nth cells target) false)
+              (recur (inc position)))
+            (recur (inc position))))))))
+
 (defn live-occurrences [ctx: (Atom t/TermStore)] -> (Vec t/Triple)
-  (let [store: t/TermStore (deref ctx)]
+  (let [store: t/TermStore (deref ctx)
+        cells: (Vec (Atom Bool)) (operation-live-cells store)]
     (loop [position: Int 0 live: (Vec t/Triple) []]
       (if (>= position (count (t/termstore-operations store)))
         live
-        (if (nth (t/termstore-operation-live store) position)
+        (if (deref (nth cells position))
           (recur (inc position) (conj live (event-at store position)))
           (recur (inc position) live))))))
 
 (defn live-propositions [ctx: (Atom t/TermStore)] -> (Vec t/Triple)
-  (let [store: t/TermStore (deref ctx)]
+  (let [store: t/TermStore (deref ctx)
+        cells: (Vec (Atom Bool)) (operation-live-cells store)]
     (loop [position: Int 0 live: (Vec t/Triple) []]
       (if (>= position (count (t/termstore-operations store)))
         live
         (let [row: t/OperationRow (nth (t/termstore-operations store) position)]
-          (if (nth (t/termstore-operation-live store) position)
+          (if (deref (nth cells position))
             (recur (inc position)
                    (conj live
                          (resolve-triple-handle store
@@ -978,7 +1001,6 @@
 (defn- rebuild-operation-state! [store: t/TermStore] -> t/TermStore
   (let [base: t/TermStore
         (assoc store
-               :operation-live empty-bools
                :withdrawal-targets empty-ids
                :active-buckets empty-active-buckets
                :active-slots (slots/fresh-slots initial-slots))]
@@ -1034,7 +1056,7 @@
             (let [loaded: t/TermStore
                   (t/->TermStore
                    dump-space next-sequence-value atoms rows transactions operations
-                   empty-bools empty-ids empty-active-buckets
+                   empty-ids empty-active-buckets
                    (build-atom-term-slots! atoms (term-slots-width-for (count atoms)))
                    (build-triple-term-slots! rows (term-slots-width-for (count rows)))
                    (slots/fresh-slots initial-slots))]

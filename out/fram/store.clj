@@ -4,7 +4,7 @@
 
 (def empty-ids [])
 
-(def empty-bools [])
+(def empty-live-cells [])
 
 (def empty-atoms [])
 
@@ -77,7 +77,7 @@
   (if (>= position (count buckets)) slots (recur (slots/slot-add! slots (slots/slot-of (t/activebucket-triple-handle (nth buckets position)) width) position) (inc position)))))
 
 (defn new-term-store [^String space-id]
-  (if (valid-space-id? space-id) (atom (t/->TermStore space-id 1 empty-atoms empty-triple-rows empty-transaction-rows empty-operation-rows empty-bools empty-ids empty-active-buckets (slots/fresh-slots initial-slots) (slots/fresh-slots initial-slots) (slots/fresh-slots initial-slots))) (throw (ex-info "fram: TermStore requires a non-empty SpaceId" {:type :invalid-space-id}))))
+  (if (valid-space-id? space-id) (atom (t/->TermStore space-id 1 empty-atoms empty-triple-rows empty-transaction-rows empty-operation-rows empty-ids empty-active-buckets (slots/fresh-slots initial-slots) (slots/fresh-slots initial-slots) (slots/fresh-slots initial-slots))) (throw (ex-info "fram: TermStore requires a non-empty SpaceId" {:type :invalid-space-id}))))
 
 (defn ^String space-id [ctx]
   (t/termstore-space-id (deref ctx)))
@@ -255,9 +255,8 @@
   (let [handle (t/operationrow-triple-handle row)
    action (t/operationrow-action row)
    active (active-positions store handle)]
-  (if (= action t/assert-action) (set-active-positions! (assoc store :operation-live (conj (t/termstore-operation-live store) true) :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1)) handle (conj active operation-position)) (if (empty? active) (assoc store :operation-live (conj (t/termstore-operation-live store) false) :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1)) (let [target (peek active)
-   live (t/termstore-operation-live store)]
-  (set-active-positions! (assoc store :operation-live (conj (assoc live target false) false) :withdrawal-targets (conj (t/termstore-withdrawal-targets store) target)) handle (pop active)))))))
+  (if (= action t/assert-action) (set-active-positions! (assoc store :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1)) handle (conj active operation-position)) (if (empty? active) (assoc store :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1)) (let [target (peek active)]
+  (set-active-positions! (assoc store :withdrawal-targets (conj (t/termstore-withdrawal-targets store) target)) handle (pop active)))))))
 
 (defn- operation-handles! [ctx operations]
   (reduce (fn [handles operation] (conj handles (intern-handle! ctx (t/commitoperation-proposition operation)))) empty-ids operations))
@@ -411,18 +410,32 @@
    target (nth (t/termstore-withdrawal-targets store) position)]
   (if (>= target 0) (recur (inc position) (conj with-event (t/withdrawal (occurrence-at store position) (occurrence-at store target)))) (recur (inc position) with-event)))))))
 
+(defn- operation-live-cells [store]
+  (let [operations (t/termstore-operations store)
+   targets (t/termstore-withdrawal-targets store)
+   cells (loop [built empty-live-cells
+   position 0]
+  (if (>= position (count operations)) built (recur (conj built (atom (= t/assert-action (t/operationrow-action (nth operations position))))) (inc position))))]
+  (loop [position 0]
+  (if (>= position (count targets)) cells (let [target (nth targets position)]
+  (if (>= target 0) (do
+  (reset! (nth cells target) false)
+  (recur (inc position))) (recur (inc position))))))))
+
 (defn live-occurrences [ctx]
-  (let [store (deref ctx)]
+  (let [store (deref ctx)
+   cells (operation-live-cells store)]
   (loop [position 0
    live []]
-  (if (>= position (count (t/termstore-operations store))) live (if (nth (t/termstore-operation-live store) position) (recur (inc position) (conj live (event-at store position))) (recur (inc position) live))))))
+  (if (>= position (count (t/termstore-operations store))) live (if (deref (nth cells position)) (recur (inc position) (conj live (event-at store position))) (recur (inc position) live))))))
 
 (defn live-propositions [ctx]
-  (let [store (deref ctx)]
+  (let [store (deref ctx)
+   cells (operation-live-cells store)]
   (loop [position 0
    live []]
   (if (>= position (count (t/termstore-operations store))) live (let [row (nth (t/termstore-operations store) position)]
-  (if (nth (t/termstore-operation-live store) position) (recur (inc position) (conj live (resolve-triple-handle store (t/operationrow-triple-handle row)))) (recur (inc position) live)))))))
+  (if (deref (nth cells position)) (recur (inc position) (conj live (resolve-triple-handle store (t/operationrow-triple-handle row)))) (recur (inc position) live)))))))
 
 (defn dump-term-store [ctx]
   (let [store (deref ctx)]
@@ -527,7 +540,7 @@
   (if (some? sequence-error) sequence-error (if (not (valid-history-rows? transactions operations (count triples) (t/termstore-next-sequence store))) (transaction-frames-error :invalid-transaction-frame "fram: invalid transaction frame") (transaction-frames-ok (valid-transaction-frames-between store lower-exclusive upper-inclusive))))))))))))
 
 (defn- rebuild-operation-state! [store]
-  (let [base (assoc store :operation-live empty-bools :withdrawal-targets empty-ids :active-buckets empty-active-buckets :active-slots (slots/fresh-slots initial-slots))]
+  (let [base (assoc store :withdrawal-targets empty-ids :active-buckets empty-active-buckets :active-slots (slots/fresh-slots initial-slots))]
   (loop [current base
    position 0]
   (if (>= position (count (t/termstore-operations current))) current (recur (apply-operation-state! current position (nth (t/termstore-operations current) position)) (inc position))))))
@@ -545,7 +558,7 @@
    operations (t/termstoredump-operations data)
    dump-space (t/termstoredump-space-id data)
    next-sequence-value (t/termstoredump-next-sequence data)]
-  (if (not (and (valid-space-id? dump-space) (and (>= next-sequence-value 1) (and (every? (fn [row] (valid-atom-row? row)) atoms) (and (valid-triple-rows? (count atoms) rows) (valid-history-rows? transactions operations (count rows) next-sequence-value)))))) (term-store-load-error :invalid-term-store-dump "fram: invalid TermStore dump") (if (not (= (space-id ctx) dump-space)) (term-store-load-error :space-mismatch "fram: TermStore dump belongs to a different space") (let [loaded (t/->TermStore dump-space next-sequence-value atoms rows transactions operations empty-bools empty-ids empty-active-buckets (build-atom-term-slots! atoms (term-slots-width-for (count atoms))) (build-triple-term-slots! rows (term-slots-width-for (count rows))) (slots/fresh-slots initial-slots))]
+  (if (not (and (valid-space-id? dump-space) (and (>= next-sequence-value 1) (and (every? (fn [row] (valid-atom-row? row)) atoms) (and (valid-triple-rows? (count atoms) rows) (valid-history-rows? transactions operations (count rows) next-sequence-value)))))) (term-store-load-error :invalid-term-store-dump "fram: invalid TermStore dump") (if (not (= (space-id ctx) dump-space)) (term-store-load-error :space-mismatch "fram: TermStore dump belongs to a different space") (let [loaded (t/->TermStore dump-space next-sequence-value atoms rows transactions operations empty-ids empty-active-buckets (build-atom-term-slots! atoms (term-slots-width-for (count atoms))) (build-triple-term-slots! rows (term-slots-width-for (count rows))) (slots/fresh-slots initial-slots))]
   (reset! ctx (rebuild-operation-state! loaded))
   (term-store-load-ok))))))))
 
