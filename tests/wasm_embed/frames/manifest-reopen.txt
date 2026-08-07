@@ -17,3 +17,4 @@ q 19-scan-deep-nest.bin 1548 :rpc/scan
 q 20-query-all-final.bin 1265 :rpc/query
 s 21-query-since2-final.bin 1351 :rpc/query
 s 22-occurrences-since2-final.bin 1413 :rpc/query
+t 23-checkpoint.bin 81 :rpc/checkpoint

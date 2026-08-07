@@ -18,6 +18,7 @@ typedef struct oracle_storage {
 } oracle_storage;
 
 static oracle_storage storage;
+static oracle_storage image;
 static uint8_t request_bytes[ORACLE_FRAME_CAPACITY];
 
 static void *host_allocate(void *context, size_t size) {
@@ -91,6 +92,7 @@ static void fill_host(fram_host_v1 *host) {
   host->allocation_context = NULL;
   host->clock_context = &storage;
   host->storage_context = &storage;
+  host->snapshot_storage_context = &image;
   host->allocate = host_allocate;
   host->deallocate = host_deallocate;
   host->clock_milliseconds = host_clock;
@@ -206,26 +208,30 @@ int main(int argc, char **argv) {
   const char *directory;
   const char *manifest_path;
   const char *reopen_manifest_path;
+  const char *image_manifest_path;
   const char *log_path;
   const char *space_id;
   FILE *log;
   int failures = 0;
 
-  if (argc < 6) {
+  if (argc < 7) {
     fprintf(stderr,
-            "usage: frames_driver FRAMES MANIFEST REOPEN-MANIFEST LOG-OUT "
-            "SPACE\n");
+            "usage: frames_driver FRAMES MANIFEST REOPEN-MANIFEST "
+            "IMAGE-MANIFEST LOG-OUT SPACE\n");
     return 2;
   }
   directory = argv[1];
   manifest_path = argv[2];
   reopen_manifest_path = argv[3];
-  log_path = argv[4];
-  space_id = argv[5];
+  image_manifest_path = argv[4];
+  log_path = argv[5];
+  space_id = argv[6];
 
   setvbuf(stdout, NULL, _IOLBF, 0);
   failures += run_pass("open", directory, manifest_path, space_id);
   failures += run_pass("reopen", directory, reopen_manifest_path, space_id);
+  /* The third pass opens over a host-held image plus the log tail. */
+  failures += run_pass("image", directory, image_manifest_path, space_id);
 
   log = fopen(log_path, "wb");
   if (log == NULL) {
@@ -241,5 +247,6 @@ int main(int argc, char **argv) {
   }
   fclose(log);
   printf("log %llu\n", (unsigned long long)storage.length);
+  printf("image %llu\n", (unsigned long long)image.length);
   return failures == 0 ? 0 : 1;
 }

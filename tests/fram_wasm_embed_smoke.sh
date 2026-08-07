@@ -73,13 +73,15 @@ embed_artifact="$("$builder" --host embed "${sources[@]}")" ||
   "$embed_artifact/lib/libfram.a" -o "$scratch/frames_driver" ||
   fail "native oracle driver did not compile"
 "$scratch/frames_driver" "$frames" "$frames/manifest.txt" \
-  "$frames/manifest-reopen.txt" "$scratch/native.framlog" "$space" \
+  "$frames/manifest-reopen.txt" "$frames/manifest-image.txt" \
+  "$scratch/native.framlog" "$space" \
   >"$scratch/native.transcript" ||
   fail "native oracle reported a failure: $(tail -3 "$scratch/native.transcript")"
 
 python3 "$repo/tests/wasm_embed/embedder.py" \
   "$wasm_artifact/lib/libfram.wasm" "$frames" "$frames/manifest.txt" \
-  "$frames/manifest-reopen.txt" "$scratch/wasm.framlog" "$scratch/wasm.tally" \
+  "$frames/manifest-reopen.txt" "$frames/manifest-image.txt" \
+  "$scratch/wasm.framlog" "$scratch/wasm.tally" \
   "$space" >"$scratch/wasm.transcript" ||
   fail "external wasm embedder reported a failure: $(tail -3 "$scratch/wasm.transcript")"
 
@@ -101,8 +103,13 @@ if awk '$1 == "served" && $2 != "clock_time_get" && $2 != "environ_get" &&
 fi
 grep -q '^served clock_time_get ' "$scratch/wasm.tally" ||
   fail "the monotonic clock import was never called; the seam ledger claims it is live"
+awk '$1 == "image" { print $2 }' "$scratch/wasm.transcript" |
+  grep -qv '^0$' ||
+  fail "the checkpoint wrote no bytes to the host image object"
+grep -Fq 'image 0 ""' "$scratch/wasm.transcript" ||
+  fail "the third pass did not open over the host-held image"
 for hook in allocate deallocate clock_milliseconds storage_append \
-  storage_close storage_read storage_size storage_sync; do
+  storage_close storage_read storage_size storage_sync storage_truncate; do
   grep -q "^host $hook " "$scratch/wasm.tally" ||
     fail "the $hook import was never called"
 done

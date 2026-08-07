@@ -21,7 +21,7 @@ FIXED_EPOCH_MS = 1700000000000
 FIXED_MONOTONIC_NS = 1000000000
 PAGE_BYTES = 65536
 ARENA_PAGES = 256
-OPTIONS_SIZE = 20  # fram_open_options_v1 on wasm32
+OPTIONS_SIZE = 32  # fram_open_options_v1 on wasm32
 ERROR_SIZE = 516  # fram_error
 BUFFER_SIZE = 16  # fram_buffer
 ENOSYS = 52
@@ -50,11 +50,19 @@ WASI_PREVIEW1 = [
 
 
 class HostLog:
-    """The FRAMLOG, held entirely on the host side."""
+    """The FRAMLOG and the snapshot image, both held on the host side.
+
+    One storage context per object: the import host passes 0 for the log and 1
+    for the image, so the same seven storage imports serve both.
+    """
 
     def __init__(self):
         self.bytes = bytearray()
+        self.image = bytearray()
         self.calls = {}
+
+    def object_for(self, context):
+        return self.image if context == 1 else self.bytes
 
     def tick(self, name):
         self.calls[name] = self.calls.get(name, 0) + 1
@@ -70,30 +78,33 @@ class HostLog:
         def storage_size(caller, context, out_ptr):
             self.tick("storage_size")
             caller.get("memory").write(
-                caller, struct.pack("<Q", len(self.bytes)), out_ptr
+                caller, struct.pack("<Q", len(self.object_for(context))), out_ptr
             )
             return 0
 
         def storage_read(caller, context, offset, destination, length):
             self.tick("storage_read")
-            if offset + length > len(self.bytes):
+            target = self.object_for(context)
+            if offset + length > len(target):
                 return 1
             caller.get("memory").write(
-                caller, bytes(self.bytes[offset : offset + length]), destination
+                caller, bytes(target[offset : offset + length]), destination
             )
             return 0
 
         def storage_truncate(caller, context, length):
             self.tick("storage_truncate")
-            if length > len(self.bytes):
+            target = self.object_for(context)
+            if length > len(target):
                 return 1
-            del self.bytes[length:]
+            del target[length:]
             return 0
 
         def storage_append(caller, context, pointer, length):
             self.tick("storage_append")
             memory = caller.get("memory")
-            self.bytes += bytes(memory.read(caller, pointer, pointer + length))
+            target = self.object_for(context)
+            target += bytes(memory.read(caller, pointer, pointer + length))
             return 0
 
         def storage_sync(caller, context):
@@ -275,8 +286,12 @@ class Guest:
         label = self.put_cstring(log_label)
         address = self.alloc(OPTIONS_SIZE)
         # host = 0: the named imports are selected by a NULL host table.
+        # The trailing pad + u64 is memory_budget_bytes: zero names no budget.
         self.write(
-            address, struct.pack("<IIIII", 1, OPTIONS_SIZE, space, label, 0)
+            address,
+            struct.pack(
+                "<IIIIIIQ", 1, OPTIONS_SIZE, space, label, 0, 0, 0
+            ),
         )
         return address
 
@@ -348,10 +363,10 @@ def run_pass(guest, label, frames_dir, manifest_path, space_id, out):
 
 
 def main():
-    if len(sys.argv) < 8:
+    if len(sys.argv) < 9:
         sys.stderr.write(
             "usage: embedder.py MODULE FRAMES MANIFEST REOPEN-MANIFEST "
-            "LOG-OUT TALLY-OUT SPACE\n"
+            "IMAGE-MANIFEST LOG-OUT TALLY-OUT SPACE\n"
         )
         return 2
     (
@@ -359,10 +374,11 @@ def main():
         frames_dir,
         manifest_path,
         reopen_manifest_path,
+        image_manifest_path,
         log_path,
         tally_path,
         space_id,
-    ) = sys.argv[1:8]
+    ) = sys.argv[1:9]
 
     engine = Engine()
     module = Module.from_file(engine, module_path)
@@ -389,6 +405,17 @@ def main():
         sys.stdout,
     )
 
+    # A third instance over the retained host bytes: the image object now
+    # holds a checkpoint, so this open takes the snapshot route plus the tail.
+    failures += run_pass(
+        Guest(engine, module, log, refused, served),
+        "image",
+        frames_dir,
+        image_manifest_path,
+        space_id,
+        sys.stdout,
+    )
+
     with open(log_path, "wb") as handle:
         handle.write(bytes(log.bytes))
     with open(tally_path, "w", encoding="utf-8") as handle:
@@ -399,6 +426,7 @@ def main():
         for name, count in sorted(log.calls.items()):
             handle.write("host %s %d\n" % (name, count))
     sys.stdout.write("log %d\n" % len(log.bytes))
+    sys.stdout.write("image %d\n" % len(log.image))
     return 0 if failures == 0 else 1
 
 
