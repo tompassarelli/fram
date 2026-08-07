@@ -19,8 +19,131 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The native server and wasm-embed routes need the flake devShell, so a
+  # runner can only gate the bb suite and the cc-only smokes.
+  gate:
+    name: Gate the tag on the run-bb suite and the native cache/adapter smokes
+    runs-on: ubuntu-latest
+    env:
+      BEAGLE_HOME: ${{ github.workspace }}/.beagle
+      FRAM_BEAGLE: ${{ github.workspace }}/.beagle/bin/beagle
+      FRAM_SERVER_RUNTIME: jvm-dev
+    steps:
+      - name: Check out the requested release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          fetch-depth: 0
+
+      - name: Bind this gate to the immutable release commit
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "release tag must be vMAJOR.MINOR.PATCH: $RELEASE_TAG" >&2
+            exit 2
+          }
+          [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" ]] || {
+            echo "checked-out source is not the requested tag commit" >&2
+            exit 1
+          }
+
+      # native_code_reader_test.clj and projection_lifecycle_test.clj ingest
+      # real Beagle sources, so the run-bb suite needs the same Beagle and
+      # Racket that .github/workflows/ci.yml installs.
+      - name: Checkout beagle
+        uses: actions/checkout@v4
+        with:
+          repository: Autonymy/beagle
+          path: .beagle
+
+      - name: Install Racket (Beagle graph-authoring runtime)
+        uses: Bogdanp/setup-racket@v1.14
+        with:
+          architecture: x64
+          distribution: full
+          variant: CS
+          version: '9.1'
+
+      - name: Link checked-out Beagle packages with pinned Racket
+        run: |
+          _BEAGLE_RACKET="$(command -v racket)"
+          export _BEAGLE_RACKET
+          export _BEAGLE_ZO_CHECKED=1
+          # Package linking owns collection resolution in this step.
+          export _BEAGLE_SCOPE_ROOT="$BEAGLE_HOME"
+          source "$BEAGLE_HOME/bin/_beagle-racket"
+          "$RACO" pkg install --auto --link \
+            "$BEAGLE_HOME/beagle-lib/" \
+            "$BEAGLE_HOME/beagle-test/" \
+            "$BEAGLE_HOME/beagle/"
+          echo "FRAM_RACKET=$RACKET" >> "$GITHUB_ENV"
+          echo "_BEAGLE_RACKET=$RACKET" >> "$GITHUB_ENV"
+
+      - name: Install babashka
+        run: curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | sudo bash
+
+      - name: Install Clojure CLI
+        run: |
+          curl -L -O https://github.com/clojure/brew-install/releases/latest/download/linux-install.sh
+          chmod +x linux-install.sh
+          sudo ./linux-install.sh
+          clojure --version
+
+      - name: Warm JVM deps (cheshire) so the server boots fast
+        run: clojure -P
+
+      - name: Occurrence-native run-bb suite and native cache/adapter smokes
+        env:
+          BEAGLE: ${{ github.workspace }}/.beagle
+        run: |
+          set -uo pipefail
+          manifest=tests/occurrence_native_ci_manifest.txt
+          # Named, not scanned: these two are the release-relevant run-shell
+          # gates that need nothing past the runner's own cc.
+          smokes=(
+            tests/fram_native_build_cache_smoke.sh
+            tests/fram_native_generated_adapter_smoke.sh
+          )
+
+          fail=0
+          gates=0
+          while IFS=$'\t' read -r disposition _class test_path _evidence; do
+            [ "$disposition" = "run-bb" ] || continue
+            if [ ! -f "$test_path" ]; then
+              echo "missing inventoried path: $test_path" >&2
+              fail=1
+              continue
+            fi
+            gates=$((gates + 1))
+            echo "== $test_path =="
+            env -u FRAM_TELEMETRY_LOG \
+              timeout --signal=TERM --kill-after=10s 240s \
+              bb -cp out "$test_path" || fail=1
+          done < "$manifest"
+
+          for smoke in "${smokes[@]}"; do
+            if ! awk -F '\t' -v path="$smoke" \
+                '$1 == "run-shell" && $3 == path { found = 1 }
+                 END { exit !found }' "$manifest"; then
+              echo "$smoke is no longer a run-shell gate in $manifest" >&2
+              fail=1
+              continue
+            fi
+            gates=$((gates + 1))
+            echo "== $smoke =="
+            env -u FRAM_TELEMETRY_LOG \
+              timeout --signal=TERM --kill-after=10s 600s \
+              bash "$smoke" || fail=1
+          done
+
+          echo "release gates run: $gates"
+          exit $fail
+
   publish:
     name: Publish the tagged release
+    needs: gate
     runs-on: ubuntu-latest
     steps:
       - name: Check out the requested release tag
