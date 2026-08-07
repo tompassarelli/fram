@@ -147,7 +147,7 @@
      :rpc/record)))
 
 (defn read-list [value: Any] -> ValuesResult
-  (loop [cursor value values: (Vec Any) [] count-value 0]
+  (loop [cursor: Any value values: (Vec Any) [] count-value: Int 0]
     (cond
       [(= cursor :rpc/list-end) (values-ok values)]
       [(>= count-value max-list-values)
@@ -284,11 +284,11 @@
       (->ScanCursorResult false 0 0 0
                           "scan cursor record is malformed")
       (let [values: (Vec Any) (valuesresult-values fields)
-            cursor-space (nth values 0)
-            version (nth values 1)
-            ordinal (nth values 2)
-            offset (nth values 3)
-            cursor-pattern (nth values 4)]
+            cursor-space: Any (nth values 0)
+            version: Any (nth values 1)
+            ordinal: Any (nth values 2)
+            offset: Any (nth values 3)
+            cursor-pattern: Any (nth values 4)]
         (if (not (and (string? cursor-space)
                       (and (integer? version)
                            (and (integer? ordinal) (integer? offset)))))
@@ -312,7 +312,7 @@
    version: Int] -> (Atom t/TermStore)
   (if (= version (store/current-sequence root))
     root
-    (let [copy (store/new-term-store (store/space-id root))
+    (let [copy: (Atom t/TermStore) (store/new-term-store (store/space-id root))
           frames: (Vec t/TransactionFrame)
           (store/transaction-frames-between (deref root) 0 version)]
       (do
@@ -331,7 +331,7 @@
   [session: schema/Session
    request: t/RpcRequest
    current-version: Int] -> t/RpcResponse
-  (let [payload (t/rpc-request-payload-value request)
+  (let [payload: Any (t/rpc-request-payload-value request)
         pattern: PatternResult (parse-pattern payload)]
     (if (not (patternresult-ok pattern))
       (error-response request current-version :rpc-invalid-payload false
@@ -369,16 +369,16 @@
                     request current-version :query-cursor-mismatch false
                     "scan cursor names a future store version")]
                   [:else
-                   (let [snapshot-version (scancursorresult-version cursor)
+                   (let [snapshot-version: Int (scancursorresult-version cursor)
                          digest-result: native-wire/TermDigestResult
                          (native-wire/canonical-term-sha256-result! payload)]
                      (if (not (native-wire/termdigestresult-ok digest-result))
                        (error-response
                         request snapshot-version :rpc-invalid-payload false
                         (native-wire/termdigestresult-message digest-result))
-                       (let [digest
+                       (let [digest: String
                              (native-wire/termdigestresult-digest digest-result)
-                             key
+                             key: schema/OrderedResultKey
                              (query-ops/result-cache-key
                               session snapshot-version -1 :rpc/scan digest)
                              cached: query-ops/ResultCacheLookup
@@ -394,16 +394,16 @@
                                    (query-ops/retain-triple-result!
                                     session key built)
                                    built)))
-                             offset (scancursorresult-offset cursor)]
+                             offset: Int (scancursorresult-offset cursor)]
                          (if (> offset (count rows))
                            (error-response
                             request snapshot-version :query-cursor-mismatch false
                             "scan cursor offset is past the result")
-                           (let [end (min (count rows) (+ offset limit))
+                           (let [end: Int (min (count rows) (+ offset limit))
                                  selected: (Vec t/Triple)
                                  (subvec rows offset end)
-                                 done (= end (count rows))
-                                 ordinal (scancursorresult-ordinal cursor)
+                                 done: Bool (= end (count rows))
+                                 ordinal: Int (scancursorresult-ordinal cursor)
                                  page-response: t/RpcPageResponse
                                  (if done
                                    (t/->RpcPageResponse ordinal nil true)
@@ -428,9 +428,9 @@
     (if (not (valuesresult-ok fields))
       (action-error :rpc-invalid-payload "mutation contains a malformed action")
       (let [parts: (Vec Any) (valuesresult-values fields)
-            operation (nth parts 0)
-            proposition (nth parts 1)
-            policy (nth parts 2)]
+            operation: Any (nth parts 0)
+            proposition: Any (nth parts 1)
+            policy: Any (nth parts 2)]
         (cond
           [(not (or (= :rpc/assert operation) (= :rpc/retract operation)))
            (action-error :rpc-invalid-action
@@ -453,11 +453,11 @@
 (defn parse-actions [values: (Vec Any)] -> ActionPlan
   (if (empty? values)
     (actions-error :rpc-invalid-action "batch requires at least one action")
-    (loop [remaining values index 0 actions: (Vec Action) []]
+    (loop [remaining: (Vec Any) values index: Int 0 actions: (Vec Action) []]
       (if (empty? remaining)
         (->ActionPlan true actions nil nil)
         (let [parsed: ActionResult (parse-action (first remaining) index)
-              action (actionresult-action parsed)]
+              action: Action? (actionresult-action parsed)]
           (if (and (actionresult-ok parsed) action)
             (let [present-action: Action action]
               (recur (vec (rest remaining)) (inc index)
@@ -492,14 +492,14 @@
 (defn prepare-actions
   [live: (Vec t/Triple)
    actions: (Vec Action)] -> PreparedMutation
-  (loop [remaining actions
+  (loop [remaining: (Vec Action) actions
          simulated: (Vec t/Triple) live
          operations: (Vec t/CommitOperation) []
          decisions: (Vec Decision) []]
     (if (empty? remaining)
       (->PreparedMutation true operations decisions nil nil)
       (let [action: Action (first remaining)
-            proposition (action-proposition action)]
+            proposition: t/Triple (action-proposition action)]
         (if (and (= :rpc/subject-existing (action-policy action))
                  (not (subject-known? simulated proposition)))
           (prepared-error
@@ -534,9 +534,9 @@
         (if (not (valuesresult-ok fields))
           (fence-error :rpc-invalid-payload "mutation fence is malformed")
           (let [values: (Vec Any) (valuesresult-values fields)
-                resource (nth values 0)
-                holder (nth values 1)
-                epoch (nth values 2)]
+                resource: Any (nth values 0)
+                holder: Any (nth values 1)
+                epoch: Any (nth values 2)]
             (if (not (and (t/term? resource)
                           (and (t/term? holder) (integer? epoch))))
               (fence-error :rpc-invalid-payload
@@ -593,11 +593,11 @@
   [transaction: t/Triple?
    decisions: (Vec Decision)] -> t/Triple
   (let [results: (Vec t/Triple)
-        (loop [remaining decisions ordinal 0 values: (Vec t/Triple) []]
+        (loop [remaining: (Vec Decision) decisions ordinal: Int 0 values: (Vec t/Triple) []]
           (if (empty? remaining)
             values
             (let [decision: Decision (first remaining)
-                  changed (decision-changed decision)]
+                  changed: Bool (decision-changed decision)]
               (recur
                (vec (rest remaining))
                (if changed (inc ordinal) ordinal)
@@ -624,7 +624,7 @@
      (or (preparedmutation-message prepared) "mutation is invalid"))
     (let [operations: (Vec t/CommitOperation)
           (preparedmutation-operations prepared)
-          root (schema/store-of session)]
+          root: (Atom t/TermStore) (schema/store-of session)]
       (if (empty? operations)
         (response request served-version
                   (mutation-results nil
@@ -688,7 +688,7 @@
                          [(t/rpcrequest-op request)
                           (nth values 0) (nth values 1)])
              0)
-            action (actionresult-action parsed)
+            action: Action? (actionresult-action parsed)
             fence: FenceResult (parse-fence (read-option (nth values 2)))]
         (if (and (actionresult-ok parsed) action)
           (let [present-action: Action action

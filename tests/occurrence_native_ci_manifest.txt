@@ -141,6 +141,9 @@ exclude	removed-flat-store	tests/store_replay_test.clj	tests/store_replay_test.c
 exclude	removed-flat-log	tests/tls_test.clj	tests/tls_test.clj#facts\.log
 exclude	moved-graph-control	tests/tools_test.clj	tests/tools_test.clj#replace-in-body
 exclude	removed-flat-log	tests/torn_tail_test.clj	tests/torn_tail_test.clj#rt/read-log
+exclude	removed-socket-harness	tests/cascade_test.clj	tests/cascade_test.clj#register-pred!
+exclude	removed-telemetry-shed	tests/server_telemetry_shed_test.clj	tests/server_telemetry_shed_test.clj#telemetry-shed-decision
+exclude	moved-graph-control	tests/snapshot_honesty_pass_test.clj	tests/snapshot_honesty_pass_test.clj#resolve/select-main-1
 
 run-bb	current-model	tests/text_match_test.clj	-
 run-clojure	current-model	tests/text_index_cache_test.clj	-

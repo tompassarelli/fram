@@ -54,7 +54,7 @@
     (t/triple :rpc/some value :rpc/option)))
 
 (defn read-list [value: Any] -> ValuesResult
-  (loop [cursor value values: (Vec Any) [] count-value 0]
+  (loop [cursor: Any value values: (Vec Any) [] count-value: Int 0]
     (cond
       [(= cursor :rpc/list-end) (values-ok values)]
       [(>= count-value max-list-values)
@@ -144,9 +144,9 @@
                      (or (valuesresult-message fields)
                          "lease fence is malformed"))
       (let [values: (Vec Any) (valuesresult-values fields)
-            resource (nth values 0)
-            holder (nth values 1)
-            epoch (nth values 2)]
+            resource: Any (nth values 0)
+            holder: Any (nth values 1)
+            epoch: Any (nth values 2)]
         (if (and (t/term? resource)
                  (and (t/term? holder)
                       (integer? epoch)))
@@ -156,14 +156,14 @@
 
 (defn lease-state [event: t/Triple] -> LeaseState?
   (let [proposition: t/Triple (rot/proposition-of event)
-        value (t/triple-t3 proposition)
+        value: Any (t/triple-t3 proposition)
         occurrence: t/Triple (rot/occurrence-of event)]
     (if (and (= :kernel/lease (t/triple-t2 proposition))
              (and (t/triple? value)
                   (and (= :kernel/expires-at (t/triple-t2 value))
                        (and (integer? (t/triple-t3 value))
                             (t/occurrence-coordinate? occurrence)))))
-      (let [transaction (t/triple-t1 occurrence)
+      (let [transaction: Any (t/triple-t1 occurrence)
             epoch: Any (if (t/triple? transaction)
                          (t/triple-t3 transaction)
                          nil)]
@@ -226,7 +226,7 @@
    resource: Any
    holder: Any
    expires-ms: Int] -> Int
-  (let [root (schema/store-of session)
+  (let [root: (Atom t/TermStore) (schema/store-of session)
         proposition: t/Triple (lease-proposition resource holder expires-ms)
         operations: (Vec t/CommitOperation)
         (if (nil? prior)
@@ -259,7 +259,7 @@
   [session: schema/Session
    request: t/RpcRequest
    now-ms: Int] -> t/RpcResponse
-  (let [served-version (store/current-sequence (schema/store-of session))
+  (let [served-version: Int (store/current-sequence (schema/store-of session))
         fields: ValuesResult
         (read-record (t/rpc-request-payload-value request) :lease/acquire 3)]
     (if (not (valuesresult-ok fields))
@@ -267,9 +267,9 @@
                       (or (valuesresult-message fields)
                           "lease acquire payload is malformed"))
       (let [values: (Vec Any) (valuesresult-values fields)
-            resource (nth values 0)
-            holder (nth values 1)
-            ttl-ms (nth values 2)]
+            resource: Any (nth values 0)
+            holder: Any (nth values 1)
+            ttl-ms: Any (nth values 2)]
         (if (not (valid-grant-input? resource holder ttl-ms now-ms))
           (error-response
            request served-version :rpc-invalid-payload false
@@ -287,7 +287,7 @@
   [session: schema/Session
    request: t/RpcRequest
    now-ms: Int] -> t/RpcResponse
-  (let [served-version (store/current-sequence (schema/store-of session))
+  (let [served-version: Int (store/current-sequence (schema/store-of session))
         fields: ValuesResult
         (read-record (t/rpc-request-payload-value request) :lease/renew 2)]
     (if (not (valuesresult-ok fields))
@@ -296,7 +296,7 @@
                           "lease renew payload is malformed"))
       (let [values: (Vec Any) (valuesresult-values fields)
             fence: FenceResult (parse-fence (nth values 0))
-            ttl-ms (nth values 1)]
+            ttl-ms: Any (nth values 1)]
         (if (or (not (fenceresult-ok fence))
                 (not (valid-grant-input?
                       (fenceresult-resource fence)
@@ -327,7 +327,7 @@
 (defn release-response!
   [session: schema/Session
    request: t/RpcRequest] -> t/RpcResponse
-  (let [served-version (store/current-sequence (schema/store-of session))
+  (let [served-version: Int (store/current-sequence (schema/store-of session))
         fence: FenceResult
         (parse-fence (t/rpc-request-payload-value request))]
     (if (not (fenceresult-ok fence))
@@ -345,7 +345,7 @@
   [session: schema/Session
    request: t/RpcRequest
    now-ms: Int] -> t/RpcResponse
-  (let [served-version (store/current-sequence (schema/store-of session))
+  (let [served-version: Int (store/current-sequence (schema/store-of session))
         fence: FenceResult
         (parse-fence (t/rpc-request-payload-value request))]
     (if (not (fenceresult-ok fence))

@@ -453,21 +453,21 @@
     ""))
 
 (defn read-page-request! [decoder: Decoder] -> t/RpcPageRequest
-  (let [limit (read-u32-le! decoder "page limit")
-        cursor-present (read-presence! decoder "page cursor presence")
+  (let [limit: Int (read-u32-le! decoder "page limit")
+        cursor-present: Bool (read-presence! decoder "page cursor presence")
         cursor: t/Term? (if cursor-present (read-term! decoder 0) nil)]
     (t/->RpcPageRequest limit cursor)))
 
 (defn read-request-body! [decoder: Decoder] -> t/RpcRequest
-  (let [space (read-space-term! decoder)
-        op (read-keyword-term! decoder "request op")
-        expected-present (read-presence! decoder "expected-version presence")
+  (let [space: String (read-space-term! decoder)
+        op: Keyword (read-keyword-term! decoder "request op")
+        expected-present: Bool (read-presence! decoder "expected-version presence")
         expected: Int? (if expected-present
                          (read-i64-le! decoder "expected-version") nil)
-        page-present (read-presence! decoder "request page presence")
+        page-present: Bool (read-presence! decoder "request page presence")
         page: t/RpcPageRequest?
         (if page-present (read-page-request! decoder) nil)
-        timeout-present (read-presence! decoder "timeout-ms presence")
+        timeout-present: Bool (read-presence! decoder "timeout-ms presence")
         timeout: Int? (if timeout-present
                         (read-u32-le! decoder "timeout-ms") nil)
         payload: t/Term (read-term! decoder 0)]

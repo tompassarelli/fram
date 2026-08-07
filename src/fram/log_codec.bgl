@@ -165,7 +165,7 @@
            (->FrameDecodeResult
             nil "FRAMLOG transaction operation count is invalid")]
           [:else
-           (loop [ordinal 0 operations: (Vec t/CommitOperation) []]
+           (loop [ordinal: Int 0 operations: (Vec t/CommitOperation) []]
              (if (>= ordinal operation-count)
                (let [error (deref (wire/decoder-error decoder))]
                  (cond
