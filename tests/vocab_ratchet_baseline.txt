@@ -1,9 +1,10 @@
 1	README.md
+1	RELEASE-v0.5.0.md
 4	bench/in-class/results/2026-07-28-index-architecture.jsonl
 1	bench/in-class/scenario-contract.edn
 1	bin/fram-graph-edit-runtime
 1	build/generated-targets.d/00-current.tsv
-26	codegraph/RESULTS.md
+22	codegraph/RESULTS.md
 1	codegraph/bin/rename-demo
 1	codegraph/bin/safe-rename
 5	codegraph/docs/build-log.md
