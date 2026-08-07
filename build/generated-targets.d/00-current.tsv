@@ -31,7 +31,6 @@ beagle	src/fram/import.bclj	out/fram/import.clj
 beagle	src/fram/export.bclj	out/fram/export.clj
 beagle	src/fram/tools.bclj	out/fram/tools.clj
 beagle	src/fram/authority.bclj	out/fram/authority.clj
-beagle	src/fram/world.bclj	out/fram/world.clj
 beagle	src/fram/claims.bclj	out/fram/claims.clj
 beagle	src/fram/main.bclj	out/fram/main.clj
 beagle	src/pull.bclj	out/pull.clj

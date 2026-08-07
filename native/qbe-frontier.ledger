@@ -2,7 +2,7 @@
 # fails, a recorded refusal that no longer reproduces fails until deleted. See
 # bin/fram-native-build for the gate, the schema, and --regen-qbe-frontier.
 #
-# scope<TAB>class<TAB>detail. QBE reports one refusal per world, so a scope
+# scope<TAB>class<TAB>detail. QBE reports one refusal per program, so a scope
 # carries at most one line; resolving it reveals the next front.
 #
 fram.store/known-term-handle+fram.store/new-term-store+fram.store/term-count	unsupported-value-semantics	hash

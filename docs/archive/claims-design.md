@@ -8,10 +8,11 @@
 # fram.claims — assertion under verification
 
 **Status: historical pre-recursive-kernel design draft. Not a current runtime
-reference.** The old contract remains executable as evidence:
-[`tests/claims_spec_test.clj`](../../tests/claims_spec_test.clj) — 90 bars, 13 green
-(the substrate self-check) and 77 red by absence. The module does not exist yet;
-the bars define it. Run it from the repo root:
+reference.** `fram.claims` shipped; [`src/fram/claims.bclj`](../../src/fram/claims.bclj)
+cites this file as its design record. The surviving executable contract is
+[`tests/claims_spec_test.clj`](../../tests/claims_spec_test.clj), narrowed to the
+published surface — the lifecycle bars were driven by the deleted Worlds
+service's write verbs. Run it from the repo root:
 
 ```
 bb -cp out tests/claims_spec_test.clj
@@ -26,10 +27,9 @@ There is no claim atom, no marker predicate, and — this is the headline — **
 engine change**. The module is a predicate vocabulary, a handful of Datalog
 rules, and the views mechanics the engine already has: `(view selects @cid)`
 ([VIEWS_AND_BRANCHES §8](VIEWS_AND_BRANCHES.md), `coord.clj` `select!`). Section 0
-of the spec drives the whole lifecycle — claim, cite, verify, un-verify, dispute,
-re-verify, across a two-version world — through ops that exist *today*, and it
-passes today. If section 0 is green and everything else is red, the only missing
-thing is the module.
+of the spec drove the whole lifecycle — claim, cite, verify, un-verify, dispute,
+re-verify, across a two-version world lineage — through ops that existed at the
+time of writing. That write path is gone with the Worlds service.
 
 ## Four ratified decisions
 
@@ -40,15 +40,17 @@ thing is the module.
    `verified`, `pending`, `rejected` are never even interned as values.
 3. **Rejection is a view convention.** A rejection is a selection into the
    rejected-view family plus a reason fact. No new engine primitive.
-4. **In-repo, worlds-optional.** `fram.claims` ships in this repo beside
-   `fram.world`, and works with no world in sight. `evidence.world` is the one
-   optional predicate; omit it and everything except the transition rule is
-   byte-identical.
+4. **In-repo, version-optional.** `fram.claims` ships in this repo and needs no
+   version lineage in sight. `evidence.world` is the one optional predicate; omit
+   it and everything except the transition rule is byte-identical. The Worlds
+   service that once minted those versions is deleted; `fram.claims` folds a
+   version chain out of `world.record` facts itself.
 
 ## The vocabulary
 
-Predicates are dotted lowercase in the `claim` / `evidence` namespaces, matching
-`world.head` / `world.sealed`.
+Predicates are dotted lowercase in the `claim` / `evidence` namespaces. The
+`world.*` spellings are durable FRAMLOG data: existing logs carry them, so
+respelling is a data migration, not a rename ([`docs/naming.md`](../naming.md)).
 
 | name | subject → object | meaning |
 | --- | --- | --- |
@@ -89,11 +91,12 @@ A → B:
 > or deleted).
 
 One Datalog rule over `claim.evidence` + the verdict selections, with the slots
-that changed between A and B entering as rule constants (a manifest diff — a
-world read, not a graph query). Directional: B → A yields nothing, because no
-evidence was extracted against B. Worlds-optional falls straight out — evidence
-with no `evidence.world` never participates, so a store that never called a world
-verb gets an empty answer instead of a false alarm.
+that changed between A and B entering as rule constants. The manifest diff is
+`fram.claims`' own fold over the `world.record` version chain — the module owns
+it outright now that no Worlds service does. Directional: B → A yields nothing,
+because no evidence was extracted against B. Version-optional falls straight out
+— evidence with no `evidence.world` never participates, so a store that wrote no
+version records gets an empty answer instead of a false alarm.
 
 ## Mapping: Plangrep's production layer → fram.claims
 
@@ -114,7 +117,7 @@ verb gets an empty answer instead of a false alarm.
 | citation policy (how many, how strong) | — | **policy**: a product decision, and it changes faster than a substrate |
 
 The line: **model in the graph, machinery in the app.** If it answers "what is
-claimed, on what evidence, judged by whom, and what does a world change
+claimed, on what evidence, judged by whom, and what does a version change
 invalidate" it belongs here. If it answers "who works on it next, and did the
 message get delivered" it does not.
 

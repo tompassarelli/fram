@@ -58,7 +58,7 @@ type. See the [naming ledger](docs/naming.md).
 - [Isolation and deployment](docs/isolation-and-deployment.md) — trust domains and the Cloudflare edge shape.
 - [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
 
-The rationale and positioning essays, plus the old pull, Worlds, claims, and Codegraph documents, live under
+The rationale and positioning essays, plus the old pull, claims, and Codegraph documents, live under
 [`docs/archive/`](docs/archive/README.md). Each one carries a `HISTORICAL`
 banner, is retained as design evidence only, and is never a recursive-kernel
 runtime reference.

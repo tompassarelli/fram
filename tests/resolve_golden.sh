@@ -11,7 +11,7 @@
 #   tests/resolve_golden.sh verify  <outdir>   # run + diff against it (rc!=0 on drift)
 #
 # What is compared (nothing is masked — no sed, no sort, no filtering):
-#   G1  callgraph JSON over the fram src/fram corpus (14 modules)   stdout
+#   G1  callgraph JSON over the fram src/fram corpus (7 modules)    stdout
 #   G2  callgraph stderr summary line for the same corpus
 #   G3  resolve mode over the codegraph .bjs corpus                 stdout+stderr
 #   G4  resolve mode's PROJECTED output EDN (identity projection)   every file
@@ -56,8 +56,9 @@ fi
 rm -rf "${WORK:?}"; mkdir -p "$WORK"
 
 # ---------------------------------------------------------------- corpora ---
-# fram corpus: the 14 engine modules already authored in Beagle.
-FRAM_MODULES="types store schema datalog kernel fold import export query tools authority world claims main"
+# fram corpus: the engine modules still authored as hosted Beagle; the rest
+# are .bgl Native Core modules and are not this gate's input.
+FRAM_MODULES="fold import export tools authority claims main"
 # codegraph corpus: the .bjs trap/shadowing files the rename engine was built against.
 BJS="trap mod-a mod-b trap-collision shadow forshadow mapshadow torture types re-a re-b re-c"
 

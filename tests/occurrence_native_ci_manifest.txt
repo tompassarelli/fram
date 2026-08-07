@@ -40,7 +40,6 @@ run-bb	current-model	tests/store_test.clj	-
 run-bb	current-model	tests/triple_kernel_test.clj	-
 run-bb	current-model	tests/triple_log_migration_test.clj	-
 run-bb	current-model	tests/triple_query_test.clj	-
-run-bb	current-model	tests/worlds_provider_test.clj	-
 run-clojure	current-model	tests/store_defcheck_untyped_test.clj	-
 baseline-bb	catalog-drift	tests/catalog_current_test.clj	tests/catalog_current_test.clj#catalog_current_test:.*FAIL.*DRIFTED
 
@@ -60,13 +59,10 @@ baseline-shell	vocab-residue	tests/vocab_ratchet_test.sh	tests/vocab_ratchet_tes
 exclude-gate	removed-flat-cli	scripts/readme-check.sh	scripts/readme-check.sh#core.engine.loop
 exclude-gate	removed-flat-store	bench/propagation/check-budget.clj	bench/propagation/sweep.clj#fram.schema
 
-exclude	moved-world-service	tests/adversarial_torn_sweep_test.clj	tests/adversarial_torn_sweep_test.clj#fram\.world
-exclude	moved-world-service	tests/adversarial_world_fuzz_test.clj	tests/adversarial_world_fuzz_test.clj#fram\.world
-exclude	moved-world-service	tests/adversarial_world_surgery_test.clj	tests/adversarial_world_surgery_test.clj#fram\.world
 exclude	moved-graph-control	tests/authority_graph_authoring_test.clj	tests/authority_graph_authoring_test.clj#graph.?author
 exclude	moved-graph-control	tests/authority_primitives_test.clj	tests/authority_primitives_test.clj#graph-edit
 exclude	removed-flat-log	tests/bind_test.clj	tests/bind_test.clj#facts\.log
-exclude	moved-world-service	tests/claims_spec_test.clj	tests/claims_spec_test.clj#fram\.world
+exclude	stale-database-api	tests/claims_spec_test.clj	tests/claims_spec_test.clj#fram\.claims
 exclude	moved-world-service	tests/coherence_doctor_test.clj	tests/coherence_doctor_test.clj#world[_-]
 exclude	moved-graph-control	tests/server_addressable_forms_test.clj	tests/server_addressable_forms_test.clj#edit-min
 exclude	removed-flat-store	tests/server_aggregate_seam_test.clj	tests/server_aggregate_seam_test.clj#fram\.store
@@ -114,7 +110,7 @@ exclude	removed-flat-store	tests/datalog_scale_test.clj	tests/datalog_scale_test
 exclude	removed-query-v1	tests/datalog_shared_index_test.clj	tests/datalog_shared_index_test.clj#fixpoint-bi
 exclude	removed-flat-store	tests/datalog_test.clj	tests/datalog_test.clj#c/value!
 exclude	removed-flat-log	tests/doctor_fingerprint_test.clj	tests/doctor_fingerprint_test.clj#facts\.log
-exclude	moved-world-service	tests/edit_verifier_adapter_test.clj	tests/edit_verifier_adapter_test.clj#world[_-]
+exclude	sealed-overlay-checker	tests/edit_verifier_adapter_test.clj	tests/edit_verifier_adapter_test.clj#overlay[_-]
 exclude	moved-graph-control	tests/fram_commit_code_prestate_test.clj	tests/fram_commit_code_prestate_test.clj#edit-min
 exclude	moved-graph-control	tests/graph_ops_telemetry_smoke_test.clj	tests/graph_ops_telemetry_smoke_test.clj#set-body
 exclude	removed-flat-store	tests/kernel_violations_test.clj	tests/kernel_violations_test.clj#k/->Fact
@@ -144,10 +140,6 @@ exclude	removed-flat-store	tests/store_replay_test.clj	tests/store_replay_test.c
 exclude	removed-flat-log	tests/tls_test.clj	tests/tls_test.clj#facts\.log
 exclude	moved-graph-control	tests/tools_test.clj	tests/tools_test.clj#replace-in-body
 exclude	removed-flat-log	tests/torn_tail_test.clj	tests/torn_tail_test.clj#rt/read-log
-exclude	moved-world-service	tests/world_git_bridge_test.clj	tests/world_git_bridge_test.clj#fram\.world
-exclude	moved-world-service	tests/world_kernel_test.clj	tests/world_kernel_test.clj#fram\.world
-exclude	moved-world-service	tests/world_persistence_test.clj	tests/world_persistence_test.clj#fram\.world
-exclude	moved-world-service	tests/world_vertical_slice_test.clj	tests/world_vertical_slice_test.clj#fram\.world
 
 run-bb	current-model	tests/text_match_test.clj	-
 run-clojure	current-model	tests/text_index_cache_test.clj	-

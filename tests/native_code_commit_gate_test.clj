@@ -93,8 +93,8 @@
    :verifier-env
    {"BEAGLE_HOME" beagle-home
     "FRAM_EDIT_VERIFIER_RACKET" racket
-    "FRAM_EDIT_VERIFIER_WORLD_CHECK"
-    (str beagle-home "/beagle-lib/private/facts-check-world.rkt")}})
+    "FRAM_EDIT_VERIFIER_OVERLAY_CHECK"
+    (str beagle-home "/beagle-lib/private/facts-check-overlay.rkt")}})
 
 (defn version! []
   (-> (rt/native-call! port space :rpc/version
@@ -185,7 +185,7 @@
                          port space checkout-root "gate_fixture")))]
       (check! "failing sealed Beagle check is a typed precommit rejection"
               (and (= :precommit-rejection (:type rejected))
-                   (= "beagle-world-rejected"
+                   (= "beagle-overlay-rejected"
                       (get-in rejected [:rejection :code]))))
       (check! "failing Beagle check commits nothing"
               (and (= version-before version-after)

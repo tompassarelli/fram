@@ -67,7 +67,7 @@
         (lifecycle/publish-checked-projection!
          {:commit-outcome {:type :precommit-rejection
                            :module "known"
-                           :rejection {:code "beagle-world-rejected"}}
+                           :rejection {:code "beagle-overlay-rejected"}}
           :registered-root checkout-root
           :registered-path "../outside.bclj"
           :checked-bytes (.getBytes "MUST-NOT-WRITE" "UTF-8")})]

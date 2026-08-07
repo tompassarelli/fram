@@ -1,6 +1,6 @@
 #!/usr/bin/env bb
 ;; Launch-sealed adapter between Fram's server proof protocol and Beagle's
-;; coherent-world checker. The server owns invocation; callers never submit
+;; module-overlay checker. The server owns invocation; callers never submit
 ;; receipts or choose a checker per request.
 ;;
 ;; Required launch environment:
@@ -8,8 +8,8 @@
 ;;   BEAGLE_HOME                exact Beagle root
 ;;
 ;; Optional:
-;;   FRAM_EDIT_VERIFIER_WORLD_CHECK
-;;     exact facts-check-world.rkt path
+;;   FRAM_EDIT_VERIFIER_OVERLAY_CHECK
+;;     exact facts-check-overlay.rkt path
 ;;
 ;; stdout is protocol-only: one closed success/failure JSON receipt. Adapter or
 ;; toolchain failures write stderr and exit 2, which keeps the candidate
@@ -33,7 +33,7 @@
 (def toolchain-schema "fram-edit-verifier-toolchain-v1")
 (def checker-timeout-ms 120000)
 (def checker-rejection-sentinel
-  "REJECTED: coherent candidate world failed — nothing emitted")
+  "REJECTED: coherent candidate overlay failed — nothing emitted")
 
 (def request-keys
   #{:schema :protocol :input-digest :candidate :base-version
@@ -41,7 +41,7 @@
     :checked-modules :closure :overlay})
 (def closure-row-keys #{:source :namespace :source-digest})
 (def overlay-row-keys #{:source :namespace :source-digest :edn})
-(def checker-result-keys #{:schemaVersion :ok :worldDigest :modules})
+(def checker-result-keys #{:schemaVersion :ok :overlayDigest :modules})
 (def checker-module-keys
   #{:source :namespace :sourceDigest :interfaceDigest :emitted})
 
@@ -158,11 +158,11 @@
          :executable)
         checker
         (canonical-file!
-         (or (System/getenv "FRAM_EDIT_VERIFIER_WORLD_CHECK")
+         (or (System/getenv "FRAM_EDIT_VERIFIER_OVERLAY_CHECK")
              (.getPath
               (io/file beagle-home
-                       "beagle-lib/private/facts-check-world.rkt")))
-         "FRAM_EDIT_VERIFIER_WORLD_CHECK"
+                       "beagle-lib/private/facts-check-overlay.rkt")))
+         "FRAM_EDIT_VERIFIER_OVERLAY_CHECK"
          :file)
         checker-path (.getPath checker)
         beagle-lib-path (.getPath beagle-lib)
@@ -170,7 +170,7 @@
                         (str/starts-with?
                          checker-path
                          (str beagle-lib-path File/separator)))
-                    "coherent-world checker must be inside BEAGLE_HOME/beagle-lib")
+                    "module-overlay checker must be inside BEAGLE_HOME/beagle-lib")
         executable-path (current-executable)
         executable (when executable-path
                      (canonical-file! executable-path
@@ -380,14 +380,14 @@
       (do
         (.destroyForcibly process)
         (.waitFor process)
-        (fail! (str "coherent-world checker exceeded "
+        (fail! (str "module-overlay checker exceeded "
                     checker-timeout-ms
                     "ms")))
       {:exit (.exitValue process)
        :stdout (bounded (deref stdout-f 5000 "") 1048576)
        :stderr (bounded (deref stderr-f 5000 "") 1048576)})))
 
-(defn deterministic-world-rejection? [checker-result]
+(defn deterministic-overlay-rejection? [checker-result]
   (and
    (= 1 (:exit checker-result))
    (= checker-rejection-sentinel
@@ -403,7 +403,7 @@
 
 (defn parse-checker-success [result request toolchain-digest]
   (require! (zero? (:exit result))
-            (str "coherent-world checker failed unexpectedly (exit "
+            (str "module-overlay checker failed unexpectedly (exit "
                  (:exit result)
                  "): "
                  (:stderr result)))
@@ -411,15 +411,15 @@
         (try
           (json/parse-string (:stdout result) true)
           (catch Throwable _
-            (fail! "coherent-world checker emitted malformed JSON")))
+            (fail! "module-overlay checker emitted malformed JSON")))
         _ (exact-keys! payload checker-result-keys "checker receipt")
         _ (require! (= 1 (:schemaVersion payload))
-                    "coherent-world checker schemaVersion mismatch")
+                    "module-overlay checker schemaVersion mismatch")
         _ (require! (true? (:ok payload))
-                    "coherent-world checker success receipt is not ok")
+                    "module-overlay checker success receipt is not ok")
         modules (:modules payload)
         _ (require! (vector? modules)
-                    "coherent-world checker modules must be a vector")
+                    "module-overlay checker modules must be a vector")
         checked
         (mapv
          (fn [row index]
@@ -440,10 +440,10 @@
          (range))
         by-source (into {} (map (juxt :source identity)) checked)
         _ (require! (= (count checked) (count by-source))
-                    "coherent-world checker returned duplicate module sources")
+                    "module-overlay checker returned duplicate module sources")
         _ (require! (= (set (:checked-modules request))
                        (set (keys by-source)))
-                    "coherent-world checker returned the wrong selected modules")
+                    "module-overlay checker returned the wrong selected modules")
         receipt-modules
         (mapv
          (fn [closure-row]
@@ -466,8 +466,8 @@
     {:schema receipt-schema
      :ok true
      :input-digest (:input-digest request)
-     :world-digest
-     (normalized-racket-digest (:worldDigest payload) "worldDigest")
+     :overlay-digest
+     (normalized-racket-digest (:overlayDigest payload) "overlayDigest")
      :toolchain-closure-digest toolchain-digest
      :modules receipt-modules}))
 
@@ -483,7 +483,7 @@
              vec)]
     (if (seq errors)
       errors
-      ["coherent candidate world rejected"])))
+      ["coherent candidate overlay rejected"])))
 
 (defn verify-request [request]
   ;; A mutable development checkout can change while the checker is running.
@@ -502,7 +502,7 @@
       (if-not (= (:digest before) (:digest after))
         (if (zero? attempt)
           (recur (inc attempt) after)
-          (fail! "verifier toolchain changed during coherent-world checking"))
+          (fail! "verifier toolchain changed during module-overlay checking"))
         (cond
           (zero? (:exit checker-result))
           {:exit 0
@@ -512,18 +512,18 @@
             request
             (:digest before))}
 
-          (deterministic-world-rejection? checker-result)
+          (deterministic-overlay-rejection? checker-result)
           {:exit 1
            :receipt
            {:schema receipt-schema
             :ok false
             :input-digest (:input-digest request)
-            :code "beagle-world-rejected"
+            :code "beagle-overlay-rejected"
             :errors (rejection-errors (:stderr checker-result))}}
 
           :else
           (fail!
-           (str "coherent-world checker infrastructure failure (exit "
+           (str "module-overlay checker infrastructure failure (exit "
                 (:exit checker-result)
                 "): "
                 (:stderr checker-result))))))))

@@ -15,8 +15,8 @@ Usage:
   fram-native-build --host embed [--adapter FILE] SOURCE.bgl...
   fram-native-build --host wasm-embed --abi wasm32 [--adapter FILE] SOURCE.bgl...
   fram-native-build --host wasm-embed --abi wasm32 --regen-wasm-seams SOURCE.bgl...
-  fram-native-build --host world [--abi ID] [--entry NS/NAME]... SOURCE.bgl...
-  fram-native-build --host world --regen-qbe-frontier [--entry NS/NAME]... SOURCE.bgl...
+  fram-native-build --host program [--abi ID] [--entry NS/NAME]... SOURCE.bgl...
+  fram-native-build --host program --regen-qbe-frontier [--entry NS/NAME]... SOURCE.bgl...
 
 Prints the absolute immutable artifact directory on success.
 Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, FRAM_NATIVE_CC,
@@ -29,14 +29,14 @@ embed host emits include/fram.h, lib/libfram.a, and lib/libfram.so. The
 wasm-embed host emits include/fram.h and lib/libfram.wasm: a reactor whose
 fram_host_v1 table is built from nine named wasm imports, so an external
 engine embedder supplies storage, clock, and allocation as host functions. The
-world host stops at the frozen Native World and its C17 projection, emits no C
+program host stops at the frozen native program and its C17 projection, emits no C
 host, and is how a source slice narrower than the server ABI is taken through
 the same release gate.
 
---abi names the Beagle ABI profile the world is frozen at (default lp64;
+--abi names the Beagle ABI profile the program is frozen at (default lp64;
 Beagle owns the registry and refuses an unknown id by name). server and embed
 link their projection with the native compiler and stay at lp64; wasm-embed
-requires wasm32. Each profile gets its own Native World cache entry and its own
+requires wasm32. Each profile gets its own native program cache entry and its own
 QBE frontier scope.
 
 RELEASE GATE
@@ -106,8 +106,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 case "$host" in
-  server|embed|wasm-embed|world) ;;
-  "") die "--host must be server, embed, wasm-embed, or world" ;;
+  server|embed|wasm-embed|program) ;;
+  "") die "--host must be server, embed, wasm-embed, or program" ;;
   *) die "unsupported host: $host" ;;
 esac
 [[ ${#sources[@]} -gt 0 ]] || die "provide the dependency-first source closure"
@@ -115,18 +115,18 @@ esac
 # enters both the cache manifest and the tab-separated frontier scope.
 [[ "$abi" =~ ^[A-Za-z0-9_.-]+$ ]] || die "--abi takes a bare profile id: $abi"
 case "$host" in
-  world) ;;
+  program) ;;
   wasm-embed)
     [[ "$abi" == "$wasm_abi" ]] ||
       die "--host wasm-embed needs --abi $wasm_abi; its reactor is a $wasm_abi module" ;;
   *)
     [[ "$abi" == "$default_abi" ]] ||
-      die "--abi $abi needs --host world; the $host host links its C17 projection with the native compiler" ;;
+      die "--abi $abi needs --host program; the $host host links its C17 projection with the native compiler" ;;
 esac
-[[ ${#entries[@]} -eq 0 || "$host" == "world" ]] ||
-  die "--entry overrides the server ABI entry set and needs --host world"
-[[ "$regen_qbe_frontier" == 0 || "$host" == "world" ]] ||
-  die "--regen-qbe-frontier needs --host world"
+[[ ${#entries[@]} -eq 0 || "$host" == "program" ]] ||
+  die "--entry overrides the server ABI entry set and needs --host program"
+[[ "$regen_qbe_frontier" == 0 || "$host" == "program" ]] ||
+  die "--regen-qbe-frontier needs --host program"
 [[ "$regen_wasm_seams" == 0 || "$host" == "wasm-embed" ]] ||
   die "--regen-wasm-seams needs --host wasm-embed"
 
@@ -146,7 +146,7 @@ host_source=""
 host_header=""
 adapter_header=""
 wasm_host_source=""
-if [[ "$host" != "world" ]]; then
+if [[ "$host" != "program" ]]; then
   if [[ "$host" == "server" ]]; then
     host_source="$repo/native/server_host.c"
     host_header="$repo/native/server_host.h"
@@ -211,9 +211,9 @@ cache_root="${FRAM_NATIVE_CACHE:-${XDG_CACHE_HOME:-${home:+$home/.cache}}}"
 [[ -n "$cache_root" ]] || die "set FRAM_NATIVE_CACHE, XDG_CACHE_HOME, or HOME"
 [[ -n "${FRAM_NATIVE_CACHE:-}" ]] || cache_root="$cache_root/fram/native-build"
 mkdir -p "$cache_root/.locks" "$cache_root/.tmp" \
-  "$cache_root/.worlds/.locks" "$cache_root/.worlds/.tmp"
+  "$cache_root/.programs/.locks" "$cache_root/.programs/.tmp"
 cache_root="$(cd "$cache_root" && pwd -P)"
-world_cache="$cache_root/.worlds"
+program_cache="$cache_root/.programs"
 
 normalized_sources=()
 for source in "${sources[@]}"; do
@@ -246,15 +246,15 @@ cc_identity="$cc:$($cc --version 2>&1 | sed -n '1p')"
 builder_identity="$(sha256sum "${BASH_SOURCE[0]}" | sed 's/ .*//')"
 
 input_manifest=""
-world_input_manifest=""
+program_input_manifest=""
 stage=""
-world_stage=""
+program_stage=""
 cleanup() {
   [[ -z "$stage" || ! -d "$stage" ]] || rm -rf "${stage:?}"
-  [[ -z "$world_stage" || ! -d "$world_stage" ]] || rm -rf "${world_stage:?}"
+  [[ -z "$program_stage" || ! -d "$program_stage" ]] || rm -rf "${program_stage:?}"
   [[ -z "$input_manifest" || ! -f "$input_manifest" ]] || rm -f "${input_manifest:?}"
-  [[ -z "$world_input_manifest" || ! -f "$world_input_manifest" ]] ||
-    rm -f "${world_input_manifest:?}"
+  [[ -z "$program_input_manifest" || ! -f "$program_input_manifest" ]] ||
+    rm -f "${program_input_manifest:?}"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -271,21 +271,21 @@ native_server_entries=(
   fram.native-server/server-codec-release-response
 )
 # The QBE frontier ledger is keyed by the entry set, because that is what
-# selects the Native World QBE judges; the default set gets a stable short name.
+# selects the native program QBE judges; the default set gets a stable short name.
 if [[ ${#entries[@]} -eq 0 ]]; then
-  world_entries=("${native_server_entries[@]}")
-  world_scope="fram-native-server"
+  program_entries=("${native_server_entries[@]}")
+  program_scope="fram-native-server"
 else
-  mapfile -t world_entries < <(printf '%s\n' "${entries[@]}" | LC_ALL=C sort -u)
-  world_scope="$(IFS='+'; printf '%s' "${world_entries[*]}")"
+  mapfile -t program_entries < <(printf '%s\n' "${entries[@]}" | LC_ALL=C sort -u)
+  program_scope="$(IFS='+'; printf '%s' "${program_entries[*]}")"
 fi
 # QBE judges each ABI profile separately, so each gets its own scope; lp64 keeps
 # the bare name so every recorded ledger line stays addressed as it was written.
-[[ "$abi" == "$default_abi" ]] || world_scope+="@$abi"
-[[ "$world_scope" != *[[:space:]]* ]] ||
-  die "entry names must not contain whitespace: $world_scope"
+[[ "$abi" == "$default_abi" ]] || program_scope+="@$abi"
+[[ "$program_scope" != *[[:space:]]* ]] ||
+  die "entry names must not contain whitespace: $program_scope"
 native_server_entry_args=()
-for native_server_entry in "${world_entries[@]}"; do
+for native_server_entry in "${program_entries[@]}"; do
   native_server_entry_args+=(--entry "$native_server_entry")
 done
 
@@ -305,16 +305,16 @@ wasm_exports=(
   fram_wasm_free
 )
 
-write_world_input_manifest() {
+write_program_input_manifest() {
   local destination="$1" index source
   {
-    printf 'fram-native-world-input/v1\n%s\n%s\nconfiguration=profile=3\n' \
+    printf 'fram-native-program-input/v1\n%s\n%s\nconfiguration=profile=3\n' \
       "$builder_identity" "$beagle_identity"
-    # Mirrors the ABI profile Beagle freezes into the world configuration; without
+    # Mirrors the ABI profile Beagle freezes into the program configuration; without
     # it two profiles over one closure would collide on a single cache entry.
     printf 'abi=%s\n' "$abi"
-    printf 'scope=%s\n' "$world_scope"
-    for native_server_entry in "${world_entries[@]}"; do
+    printf 'scope=%s\n' "$program_scope"
+    for native_server_entry in "${program_entries[@]}"; do
       printf 'entry=%s\n' "$native_server_entry"
     done
     for index in "${!normalized_sources[@]}"; do
@@ -327,9 +327,9 @@ write_world_input_manifest() {
 write_input_manifest() {
   local destination="$1"
   {
-    printf 'fram-native-build-input/v1\n%s\nhost=%s\nworld=%s\nnative-world=%s\n%s\n' \
-      "$builder_identity" "$host" "$world_closure_hash" \
-      "$native_world_digest" "$cc_identity"
+    printf 'fram-native-build-input/v1\n%s\nhost=%s\nprogram=%s\nnative-program=%s\n%s\n' \
+      "$builder_identity" "$host" "$program_closure_hash" \
+      "$native_program_digest" "$cc_identity"
     printf 'link=%s\n' "$link_mode"
     printf 'host-source %q %s\n' "$host_source" \
       "$(sha256sum "$host_source" | sed 's/ .*//')"
@@ -404,12 +404,12 @@ classify_qbe_refusal() {
     "QBE stdout extern ABI is unsupported:"*) printf 'stdout-extern\t-\n' ;;
     "QBE host extern ABI is unsupported:"*) printf 'host-extern\t-\n' ;;
     "QBE vector sort is unsupported:"*) printf 'vector-sort\t-\n' ;;
-    "native world uses a shape outside the QBE materializer's slice")
+    "native program uses a shape outside the QBE materializer's slice")
       printf 'shape-outside-slice\t-\n' ;;
-    "native world contains a Text or Keyword literal outside the QBE literal slice")
+    "native program contains a Text or Keyword literal outside the QBE literal slice")
       printf 'literal-outside-slice\t-\n' ;;
-    "native world is not frozen: validation obligations failed")
-      printf 'world-not-frozen\t-\n' ;;
+    "native program is not frozen: validation obligations failed")
+      printf 'program-not-frozen\t-\n' ;;
     "module index must be nonnegative") printf 'module-index\t-\n' ;;
     # Unrecognised refusals key on their own text so they fail the ratchet.
     *) printf 'unclassified\t%s\n' "$detail" ;;
@@ -425,7 +425,7 @@ write_qbe_frontier() {
     die "native report must carry exactly one materialize-qbe line (found ${#qbe_lines[@]}); QBE must always run and report"
   case "${qbe_lines[0]}" in
     "materialize-qbe OK module_0.ssa")
-      printf 'qbe-frontier/v1\nscope\t%s\nstatus\tOK\n' "$world_scope" \
+      printf 'qbe-frontier/v1\nscope\t%s\nstatus\tOK\n' "$program_scope" \
         >"$destination"
       ;;
     "materialize-qbe REFUSED "*)
@@ -433,7 +433,7 @@ write_qbe_frontier() {
       key="$(classify_qbe_refusal "$detail")"
       class="${key%%$'\t'*}"
       printf 'qbe-frontier/v1\nscope\t%s\nstatus\tREFUSED\nkey\t%s\ndetail\t%s\n' \
-        "$world_scope" "$key" "$detail" >"$destination"
+        "$program_scope" "$key" "$detail" >"$destination"
       [[ -n "$class" ]] || die "QBE refusal classified to an empty key"
       ;;
     *)
@@ -448,7 +448,7 @@ write_qbe_frontier_receipt() {
   status="$(awk -F'\t' '$1 == "status" { print $2 }' "$stage/qbe-frontier.txt")"
   key="$(awk -F'\t' '$1 == "key" { print $2 "/" $3 }' "$stage/qbe-frontier.txt")"
   printf 'native-qbe-frontier %s scope=%s ledger=%s\n' \
-    "$status" "$world_scope" "${key:-clean}"
+    "$status" "$program_scope" "${key:-clean}"
 }
 
 # Two-sided and shrink-only: a new refusal fails, a stale one fails until deleted.
@@ -460,44 +460,44 @@ check_qbe_frontier() {
   [[ -f "$qbe_ledger" ]] ||
     die "QBE frontier ledger is unavailable: $qbe_ledger"
   mapfile -t recorded_rows < <(
-    awk -F'\t' -v scope="$world_scope" \
+    awk -F'\t' -v scope="$program_scope" \
       '/^[^#]/ && NF >= 3 && $1 == scope { print $2 "\t" $3 }' "$qbe_ledger"
   )
   [[ ${#recorded_rows[@]} -le 1 ]] ||
-    die "QBE frontier ledger records ${#recorded_rows[@]} refusals for scope $world_scope; QBE reports at most one per world"
+    die "QBE frontier ledger records ${#recorded_rows[@]} refusals for scope $program_scope; QBE reports at most one per program"
   recorded="${recorded_rows[0]:-}"
 
   if [[ "$regen_qbe_frontier" == 1 ]]; then
     local regenerated
     regenerated="$(mktemp "$cache_root/.tmp/ledger.XXXXXX")"
-    awk -F'\t' -v scope="$world_scope" \
+    awk -F'\t' -v scope="$program_scope" \
       '/^#/ || NF < 3 || $1 != scope' "$qbe_ledger" >"$regenerated"
     [[ "$status" != "REFUSED" ]] ||
-      printf '%s\t%s\n' "$world_scope" "$observed" >>"$regenerated"
+      printf '%s\t%s\n' "$program_scope" "$observed" >>"$regenerated"
     cat "$regenerated" >"$qbe_ledger"
     rm -f "${regenerated:?}"
     if [[ "$status" == "REFUSED" ]]; then
-      echo "qbe frontier: recorded $world_scope -> $observed" >&2
+      echo "qbe frontier: recorded $program_scope -> $observed" >&2
     else
-      echo "qbe frontier: cleared $world_scope (QBE materializes it)" >&2
+      echo "qbe frontier: cleared $program_scope (QBE materializes it)" >&2
     fi
     return 0
   fi
 
   if [[ "$status" == "OK" ]]; then
     [[ -z "$recorded" ]] || die "$(printf '%s\n%s\n%s' \
-      "QBE frontier ledger is STALE for scope $world_scope: QBE now materializes it." \
+      "QBE frontier ledger is STALE for scope $program_scope: QBE now materializes it." \
       "  recorded: $recorded" \
       "  delete that line from $qbe_ledger (or rerun with --regen-qbe-frontier).")"
     return 0
   fi
   [[ -n "$recorded" ]] || die "$(printf '%s\n%s\n%s\n%s' \
-    "QBE frontier GREW for scope $world_scope: an unrecorded QBE refusal." \
+    "QBE frontier GREW for scope $program_scope: an unrecorded QBE refusal." \
     "  observed: $observed" \
-    "  QBE is the anti-C-capture check; a new refusal means this world left" \
+    "  QBE is the anti-C-capture check; a new refusal means this program left" \
     "  QBE's slice. Fix it, or record it in $qbe_ledger with a justification.")"
   [[ "$recorded" == "$observed" ]] || die "$(printf '%s\n%s\n%s' \
-    "QBE frontier MOVED for scope $world_scope." \
+    "QBE frontier MOVED for scope $program_scope." \
     "  recorded: $recorded" \
     "  observed: $observed")"
 }
@@ -742,106 +742,106 @@ write_server_symbols() {
   } >"$destination"
 }
 
-world_input_manifest="$(mktemp "$world_cache/.tmp/input.XXXXXX")"
-write_world_input_manifest "$world_input_manifest"
-world_closure_hash="$(sha256sum "$world_input_manifest" | sed 's/ .*//')"
-world_dir="$world_cache/$world_closure_hash"
+program_input_manifest="$(mktemp "$program_cache/.tmp/input.XXXXXX")"
+write_program_input_manifest "$program_input_manifest"
+program_closure_hash="$(sha256sum "$program_input_manifest" | sed 's/ .*//')"
+program_dir="$program_cache/$program_closure_hash"
 
-exec {world_lock_fd}>"$world_cache/.locks/$world_closure_hash.lock"
-flock "$world_lock_fd"
-if [[ ! -e "$world_dir" ]]; then
-  world_stage="$(mktemp -d "$world_cache/.tmp/$world_closure_hash.XXXXXX")"
-  cp "$world_input_manifest" "$world_stage/input.manifest"
+exec {program_lock_fd}>"$program_cache/.locks/$program_closure_hash.lock"
+flock "$program_lock_fd"
+if [[ ! -e "$program_dir" ]]; then
+  program_stage="$(mktemp -d "$program_cache/.tmp/$program_closure_hash.XXXXXX")"
+  cp "$program_input_manifest" "$program_stage/input.manifest"
   combined_status=0
   "$beagle" build --materializer c17 --materializer qbe \
-      --out "$world_stage" --abi "$abi" \
+      --out "$program_stage" --abi "$abi" \
       "${native_server_entry_args[@]}" \
       -- \
       "${normalized_sources[@]}" \
-      >"$world_stage/materialize.log" 2>&1 || combined_status=$?
+      >"$program_stage/materialize.log" 2>&1 || combined_status=$?
   # beagle-build-core wipes managed artifacts up front and, on any materializer
   # failure, exits before copying the successful ones out (:118-133, :713-720).
-  [[ -f "$world_stage/report.txt" ]] ||
-    die "$(sed -n '1,240p' "$world_stage/materialize.log"; echo "Beagle Native World materialization produced no report")"
-  cp "$world_stage/report.txt" "$world_stage/qbe-probe.report.txt"
-  combined_world_digest=""
-  [[ ! -f "$world_stage/module.native-world" ]] ||
-    combined_world_digest="$(sha256sum "$world_stage/module.native-world" | sed 's/ .*//')"
+  [[ -f "$program_stage/report.txt" ]] ||
+    die "$(sed -n '1,240p' "$program_stage/materialize.log"; echo "Beagle native program materialization produced no report")"
+  cp "$program_stage/report.txt" "$program_stage/qbe-probe.report.txt"
+  combined_program_digest=""
+  [[ ! -f "$program_stage/module.native-program" ]] ||
+    combined_program_digest="$(sha256sum "$program_stage/module.native-program" | sed 's/ .*//')"
   if [[ "$combined_status" -ne 0 ]]; then
     # Recover C17's output from the sibling refusal; any other failure is fatal.
     grep -Fxq 'materialize-c17 OK module_0.h module_0.c' \
-      "$world_stage/qbe-probe.report.txt" &&
+      "$program_stage/qbe-probe.report.txt" &&
       grep -Fxq 'result FAIL materialization' \
-        "$world_stage/qbe-probe.report.txt" &&
-      grep -q '^materialize-qbe REFUSED ' "$world_stage/qbe-probe.report.txt" || {
-        sed -n '1,240p' "$world_stage/materialize.log" >&2
-        die "Beagle Native World materialization failed"
+        "$program_stage/qbe-probe.report.txt" &&
+      grep -q '^materialize-qbe REFUSED ' "$program_stage/qbe-probe.report.txt" || {
+        sed -n '1,240p' "$program_stage/materialize.log" >&2
+        die "Beagle native program materialization failed"
       }
     "$beagle" build --materializer c17 \
-        --out "$world_stage" --abi "$abi" \
+        --out "$program_stage" --abi "$abi" \
         "${native_server_entry_args[@]}" \
         -- \
         "${normalized_sources[@]}" \
-        >"$world_stage/materialize.log" 2>&1 || {
-      sed -n '1,240p' "$world_stage/materialize.log" >&2
+        >"$program_stage/materialize.log" 2>&1 || {
+      sed -n '1,240p' "$program_stage/materialize.log" >&2
       die "C17 recovery materialization failed after a QBE refusal"
     }
   fi
-  write_qbe_frontier "$world_stage/qbe-probe.report.txt" \
-    "$world_stage/qbe-frontier.txt"
-  for artifact in source.facts module.native-world module.native-world.sha256 \
+  write_qbe_frontier "$program_stage/qbe-probe.report.txt" \
+    "$program_stage/qbe-frontier.txt"
+  for artifact in source.facts module.native-program module.native-program.sha256 \
       module_0.h module_0.c native_shim.h native_shim.c \
       native_unicode15_data.h UNICODE-LICENSE.txt report.txt; do
-    [[ -f "$world_stage/$artifact" ]] ||
+    [[ -f "$program_stage/$artifact" ]] ||
       die "C17 materialization omitted $artifact"
   done
-  validate_native_report "$world_stage/report.txt"
-  [[ "$host" == "world" ]] ||
-    { write_server_symbols "$world_stage/report.txt" "$world_stage/module_0.h" \
-        "$world_stage/server_symbols.validate"
-      rm -f "$world_stage/server_symbols.validate"; }
-  native_world_digest="$(sha256sum "$world_stage/module.native-world" | sed 's/ .*//')"
-  # The frontier receipt only attributes anything if QBE judged this world.
-  [[ "$combined_world_digest" == "$native_world_digest" ]] ||
-    die "QBE and C17 materialized different Native Worlds; the frontier receipt cannot be attributed"
-  if [[ "$(awk -F'\t' '$1 == "status" { print $2 }' "$world_stage/qbe-frontier.txt")" == "OK" ]]; then
-    [[ -f "$world_stage/module_0.ssa" ]] ||
+  validate_native_report "$program_stage/report.txt"
+  [[ "$host" == "program" ]] ||
+    { write_server_symbols "$program_stage/report.txt" "$program_stage/module_0.h" \
+        "$program_stage/server_symbols.validate"
+      rm -f "$program_stage/server_symbols.validate"; }
+  native_program_digest="$(sha256sum "$program_stage/module.native-program" | sed 's/ .*//')"
+  # The frontier receipt only attributes anything if QBE judged this program.
+  [[ "$combined_program_digest" == "$native_program_digest" ]] ||
+    die "QBE and C17 materialized different native programs; the frontier receipt cannot be attributed"
+  if [[ "$(awk -F'\t' '$1 == "status" { print $2 }' "$program_stage/qbe-frontier.txt")" == "OK" ]]; then
+    [[ -f "$program_stage/module_0.ssa" ]] ||
       die "QBE reported OK but omitted module_0.ssa"
   else
-    rm -f "$world_stage/module_0.ssa"
+    rm -f "$program_stage/module_0.ssa"
   fi
-  check_qbe_frontier "$world_stage/qbe-frontier.txt"
-  [[ "$(<"$world_stage/module.native-world.sha256")" == "$native_world_digest" ]] ||
-    die "materializer Native World digest does not match its bytes"
-  write_world_input_manifest "$world_stage/input.after"
-  cmp -s "$world_input_manifest" "$world_stage/input.after" ||
-    die "source/compiler/config closure changed during Native World build"
-  rm -f "$world_stage/input.after"
-  printf 'fram-native-world/v1 %s %s\n' \
-    "$world_closure_hash" "$native_world_digest" >"$world_stage/READY"
-  mv "$world_stage" "$world_dir"
-  world_stage=""
+  check_qbe_frontier "$program_stage/qbe-frontier.txt"
+  [[ "$(<"$program_stage/module.native-program.sha256")" == "$native_program_digest" ]] ||
+    die "materializer native program digest does not match its bytes"
+  write_program_input_manifest "$program_stage/input.after"
+  cmp -s "$program_input_manifest" "$program_stage/input.after" ||
+    die "source/compiler/config closure changed during native program build"
+  rm -f "$program_stage/input.after"
+  printf 'fram-native-program/v1 %s %s\n' \
+    "$program_closure_hash" "$native_program_digest" >"$program_stage/READY"
+  mv "$program_stage" "$program_dir"
+  program_stage=""
 fi
 
-[[ -f "$world_dir/READY" && -f "$world_dir/input.manifest" &&
-  -f "$world_dir/module.native-world" &&
-  -f "$world_dir/module.native-world.sha256" ]] ||
-  die "Native World cache entry is incomplete: $world_dir"
-cmp -s "$world_input_manifest" "$world_dir/input.manifest" ||
-  die "Native World cache identity does not match its input closure"
-native_world_digest="$(sha256sum "$world_dir/module.native-world" | sed 's/ .*//')"
-[[ "$(<"$world_dir/module.native-world.sha256")" == "$native_world_digest" &&
-  "$(<"$world_dir/READY")" == \
-    "fram-native-world/v1 $world_closure_hash $native_world_digest" ]] ||
-  die "Native World cache entry failed its digest receipt: $world_dir"
-validate_native_report "$world_dir/report.txt"
-[[ -f "$world_dir/qbe-frontier.txt" && -f "$world_dir/qbe-probe.report.txt" ]] ||
-  die "Native World cache entry omitted its QBE frontier receipt: $world_dir"
-check_qbe_frontier "$world_dir/qbe-frontier.txt"
+[[ -f "$program_dir/READY" && -f "$program_dir/input.manifest" &&
+  -f "$program_dir/module.native-program" &&
+  -f "$program_dir/module.native-program.sha256" ]] ||
+  die "native program cache entry is incomplete: $program_dir"
+cmp -s "$program_input_manifest" "$program_dir/input.manifest" ||
+  die "native program cache identity does not match its input closure"
+native_program_digest="$(sha256sum "$program_dir/module.native-program" | sed 's/ .*//')"
+[[ "$(<"$program_dir/module.native-program.sha256")" == "$native_program_digest" &&
+  "$(<"$program_dir/READY")" == \
+    "fram-native-program/v1 $program_closure_hash $native_program_digest" ]] ||
+  die "native program cache entry failed its digest receipt: $program_dir"
+validate_native_report "$program_dir/report.txt"
+[[ -f "$program_dir/qbe-frontier.txt" && -f "$program_dir/qbe-probe.report.txt" ]] ||
+  die "native program cache entry omitted its QBE frontier receipt: $program_dir"
+check_qbe_frontier "$program_dir/qbe-frontier.txt"
 [[ "$regen_qbe_frontier" == 0 ]] || exit 0
 
-if [[ "$host" == "world" ]]; then
-  printf '%s\n' "$world_dir"
+if [[ "$host" == "program" ]]; then
+  printf '%s\n' "$program_dir"
   exit 0
 fi
 
@@ -880,16 +880,16 @@ fi
 stage="$(mktemp -d "$cache_root/.tmp/$closure_hash.XXXXXX")"
 mkdir -p "$stage/bin" "$stage/include" "$stage/lib"
 cp "$input_manifest" "$stage/input.manifest"
-for artifact in source.facts module.native-world module.native-world.sha256 \
+for artifact in source.facts module.native-program module.native-program.sha256 \
     module_0.h module_0.c native_shim.h native_shim.c \
     native_unicode15_data.h UNICODE-LICENSE.txt report.txt \
     qbe-frontier.txt qbe-probe.report.txt materialize.log; do
-  [[ -f "$world_dir/$artifact" ]] ||
-    die "Native World cache entry omitted $artifact"
-  cp "$world_dir/$artifact" "$stage/$artifact"
+  [[ -f "$program_dir/$artifact" ]] ||
+    die "native program cache entry omitted $artifact"
+  cp "$program_dir/$artifact" "$stage/$artifact"
 done
-[[ ! -f "$world_dir/module_0.ssa" ]] ||
-  cp "$world_dir/module_0.ssa" "$stage/module_0.ssa"
+[[ ! -f "$program_dir/module_0.ssa" ]] ||
+  cp "$program_dir/module_0.ssa" "$stage/module_0.ssa"
 
 report="$stage/report.txt"
 
@@ -1022,11 +1022,11 @@ else
   [[ -x "$stage/bin/fram-server-native" ]] || die "native executable is missing"
 fi
 
-world_after_manifest="$stage/world-input.after"
-write_world_input_manifest "$world_after_manifest"
-cmp -s "$world_input_manifest" "$world_after_manifest" ||
+program_after_manifest="$stage/program-input.after"
+write_program_input_manifest "$program_after_manifest"
+cmp -s "$program_input_manifest" "$program_after_manifest" ||
   die "source/compiler/config closure changed during host packaging"
-rm -f "${world_after_manifest:?}"
+rm -f "${program_after_manifest:?}"
 after_manifest="$stage/input.after"
 write_input_manifest "$after_manifest"
 cmp -s "$input_manifest" "$after_manifest" ||

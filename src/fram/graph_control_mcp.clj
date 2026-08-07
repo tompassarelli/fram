@@ -178,7 +178,7 @@
             t/rpcresponse-served-version)]
     (when-not (:accepted check)
       (fail! :sealed-preflight-rejected
-             "sealed coherent-world preflight rejected the current corpus"
+             "sealed module-overlay preflight rejected the current corpus"
              {:module selected :receipt (:receipt check)}))
     (when-not (= (:version corpus) version-after)
       (fail! :preflight-version-drift

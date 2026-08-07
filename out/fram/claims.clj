@@ -3,7 +3,6 @@
             [fram.schema :as s]
             [fram.rotation :as rot]
             [fram.datalog :as d]
-            [fram.world :as w]
             [fram.rt :as rt]
             [clojure.string :as str]))
 
@@ -118,8 +117,27 @@
   (if (or (nil? v) (contains? acc v)) acc (let [r (version-record-of co v)]
   (if (nil? r) acc (recur (:base r) (assoc acc v r)))))))
 
+(defn- resolve-slot [versions version slot]
+  (loop [vid version]
+  (if (nil? vid) nil (let [record (get versions vid)]
+  (if (nil? record) nil (let [hits (filterv (fn [e] (= (:slot e) slot)) (vec (:overlay record)))
+   e (if (empty? hits) nil (first hits))]
+  (cond
+  (nil? e) (recur (:base record))
+  (= (:op e) :inherit) (recur (:base record))
+  (= (:op e) :delete) nil
+  :else {:blob-id (:blob-id e)})))))))
+
+(defn- chain-slots [versions version]
+  (loop [vid version
+   acc []]
+  (if (nil? vid) (vec (distinct acc)) (let [record (get versions vid)]
+  (if (nil? record) (vec (distinct acc)) (recur (:base record) (vec (concat acc (mapv (fn [e] (:slot e)) (vec (:overlay record)))))))))))
+
 (defn- slot-blobs [co vid]
-  (reduce (fn [m e] (assoc m (:slot e) (:blob-id e))) {} (w/manifest (version-chain co vid) vid)))
+  (let [versions (version-chain co vid)]
+  (reduce (fn [m s] (let [r (resolve-slot versions vid s)]
+  (if (nil? r) m (assoc m s (:blob-id r))))) {} (chain-slots versions vid))))
 
 (defn- changed-slots [co from to]
   (let [a (slot-blobs co from)

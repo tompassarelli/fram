@@ -27,14 +27,12 @@ historical_docs=(
   docs/archive/VIEWS_AND_BRANCHES.md
   docs/archive/adr-0001-claims-as-universal-substrate.md
   docs/archive/beagle-dogfood-findings.md
-  docs/archive/bridge-README.md
   docs/archive/claims-design.md
   docs/archive/codegraph-README.md
   docs/archive/measurements.md
   docs/archive/position-in-class.md
   docs/archive/pull-reference.md
   docs/archive/WHY_FRAM_EXISTS.md
-  docs/archive/worlds-provider-v1-final-report.md
 )
 
 fail() {
@@ -127,8 +125,8 @@ grep -Fq 'does not implement `rpc/pull`' docs/archive/pull-reference.md ||
   fail 'legacy pull reference does not state the missing runtime surface'
 grep -Fq 'architecture prior, never a primitive' docs/naming.md ||
   fail 'naming ledger lacks the Turtle boundary'
-grep -Fq '**Current scope:** historical Worlds-service vocabulary.' docs/naming.md ||
-  fail 'naming ledger leaves Worlds vocabulary unscoped'
+grep -Fq '**Retired 2026-08-07:** the Worlds service is deleted from the tree.' docs/naming.md ||
+  fail 'naming ledger leaves the retired Worlds verdict unrecorded'
 grep -Fq '**Current scope:** historical experiment and sealed-consumer vocabulary' docs/naming.md ||
   fail 'naming ledger leaves Codegraph vocabulary unscoped'
 

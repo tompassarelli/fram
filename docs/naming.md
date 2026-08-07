@@ -14,9 +14,11 @@ The June ruling named a stored `(subject predicate object)` record **fact**. The
 
 The deciding prior is Datalog: a fact is a proposition present in the evaluated relation. The rejected primitive use is **fact-as-stored-row** — it falsely merges structure, assertion act, and view status.
 
-## world — chosen 2026-07-26
+## world — chosen 2026-07-26; retired 2026-08-07
 
-**Current scope:** historical Worlds-service vocabulary. The service left the public recursive-kernel runtime, so `world` and `version` are not kernel primitives or FRAMRPC operations.
+**Retired 2026-08-07:** the Worlds service is deleted from the tree. `world` and `version` name no module, primitive, or FRAMRPC operation, and the word is spent for new naming. Durable FRAMLOG data that service wrote (`evidence.world`, `world.record`, `world.version:`) keeps its spelling: respelling stored predicates is a data migration, not a rename.
+
+The former ruling read: historical Worlds-service vocabulary; the service left the public recursive-kernel runtime, so `world` and `version` are not kernel primitives or FRAMRPC operations.
 
 The thing was a named, forkable lineage of immutable versions that fixed which facts a query saw without promising consistency. The possible-worlds prior decided it: propositions are evaluated at a way things could stand.
 
@@ -99,6 +101,8 @@ The thing was every remaining `ns/name` family after normalization. An inventory
 - **Closed wire tags** (`authority/*`, `fram/*`, `fram.defcheck/*`, `lease/*`, `query/*`) retained spelling because a change is wire versioning, not ontology normalization.
 
 The deciding prior is boundary ownership: at that revision no in-scope family was written verbatim to a configured live store, so nine fixtures and zero stores changed. Replan if a configured non-test `worlds/invoke-plan-to!` caller, an external corpus carrying `worlds/*` or `provider/*`, or a FRAMRPC tag rename appears.
+
+**Discharged 2026-08-07:** the `world/*` and `worlds/*` spelling condition is closed by deletion — the service awaiting retirement was retired, so no shipped module carries those families. The surviving spellings are test fixture labels and durable FRAMLOG predicates, both already out of scope here, so the replan trigger cannot fire.
 
 ## positions of the Triple — t1/t2/t3 — chosen 2026-08-04
 

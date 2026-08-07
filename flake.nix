@@ -285,7 +285,7 @@
             helpers = {
               beagleBuildAll = "${sealedBeaglePkg}/bin/beagle-build-all";
               factsCheckEmit = "${sealedBeaglePkg}/beagle-lib/private/facts-check-emit.rkt";
-              factsCheckWorld = "${sealedBeaglePkg}/beagle-lib/private/facts-check-world.rkt";
+              factsCheckOverlay = "${sealedBeaglePkg}/beagle-lib/private/facts-check-overlay.rkt";
               framResolve = "${framRoot}/out/resolve.clj";
             };
             environment = {
@@ -377,11 +377,11 @@
               --set FRAM_GRAPH_EDIT_SEALED_FRAM "${framRoot}" \
               --set FRAM_GRAPH_EDIT_SEALED_JAVA "${pkgs.jdk}/bin/java" \
               --set FRAM_GRAPH_EDIT_SEALED_MANIFEST "$out/share/fram/graph-edit-runtime-core-v1.json" \
+              --set FRAM_GRAPH_EDIT_SEALED_OVERLAY_CHECK "${sealedBeaglePkg}/beagle-lib/private/facts-check-overlay.rkt" \
               --set FRAM_GRAPH_EDIT_SEALED_PATH "${runtimePath}" \
               --set FRAM_GRAPH_EDIT_SEALED_RACKET "${pkgs.racket}/bin/racket" \
               --set FRAM_GRAPH_EDIT_SEALED_REALPATH "${pkgs.coreutils}/bin/realpath" \
-              --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/out/resolve.clj" \
-              --set FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK "${sealedBeaglePkg}/beagle-lib/private/facts-check-world.rkt"
+              --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/out/resolve.clj"
             set -u
 
             runHook postInstall

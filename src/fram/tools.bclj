@@ -210,11 +210,11 @@
        :replace-in-body
        "")
      (->ToolSpec "edit-transaction"
-       (str "Atomically author two or more DISTINCT module-qualified definitions as one coherent graph world. "
+       (str "Atomically author two or more DISTINCT module-qualified definitions as one coherent graph overlay. "
          "`module` is the default module; any edit may carry its own `module` override. `edits` contains "
          "set-body, replace-in-body, or upsert-form objects; upsert identity is derived from its whole form "
          "and an optional `name` is only an assertion. Fram stages every edit across all touched modules, "
-         "derives the dependency check scope from the graph, renders and type-checks only the FINAL WORLD, "
+         "derives the dependency check scope from the graph, renders and type-checks only the FINAL OVERLAY, "
          "and rejects surviving references to removed bindings, variants, members, or record accessors. "
          "Success is one sealed canonical graph batch; failure emits and records nothing. "
          "Recompile-gated + fail-closed.")

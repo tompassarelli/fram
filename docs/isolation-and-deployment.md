@@ -6,7 +6,7 @@ This document specifies the source-head database trust domain, server bind and F
 
 Fram has no engine accounts, authorization, or tenant policy. One [SpaceId](glossary.md#storage-and-query), one FRAMLOG, one writer process/lock, and one private network boundary form a trust domain. Separate personal, client, and public-tooling data across all four; ontology fields are not tenant isolation.
 
-`bin/fram-server` launches native by default and fails closed unless `FRAM_NATIVE_ARTIFACT_DIR` names a READY artifact containing `bin/fram-server-native`. `FRAM_SERVER_RUNTIME=graal` selects the transitional self-contained server at the absolute `FRAM_GRAAL_ARTIFACT` path without presenting it as a Native World artifact. `jvm-oracle` selects the sealed packaged JVM differential oracle; `jvm-dev` selects the checkout-only Clojure development route. None is an automatic fallback. The server binds `127.0.0.1` by default. `FRAM_BIND` changes the listener intentionally, `FRAM_SERVER_PORT` selects its port, and `FRAM_SERVER_CONNECT` selects the client host. New databases require `FRAM_SPACE_ID`; every request carries the same identity or is rejected. `FRAM_LISTEN_FD` may pass an operator-owned INET listener without changing codec, operations, or writer authority.
+`bin/fram-server` launches native by default and fails closed unless `FRAM_NATIVE_ARTIFACT_DIR` names a READY artifact containing `bin/fram-server-native`. `FRAM_SERVER_RUNTIME=graal` selects the transitional self-contained server at the absolute `FRAM_GRAAL_ARTIFACT` path without presenting it as a native program artifact. `jvm-oracle` selects the sealed packaged JVM differential oracle; `jvm-dev` selects the checkout-only Clojure development route. None is an automatic fallback. The server binds `127.0.0.1` by default. `FRAM_BIND` changes the listener intentionally, `FRAM_SERVER_PORT` selects its port, and `FRAM_SERVER_CONNECT` selects the client host. New databases require `FRAM_SPACE_ID`; every request carries the same identity or is rejected. `FRAM_LISTEN_FD` may pass an operator-owned INET listener without changing codec, operations, or writer authority.
 
 The Cloudflare server image carries one statically linked musl native artifact
 on `scratch`, packaged from its READY receipt rather than compiled in the image;
@@ -46,7 +46,7 @@ The edge selects one SpaceId and maps tagged JSON to closed FRAMRPC records; it 
 - `bin/fram-mcp` is the five-tool JSON-RPC-over-stdio edge.
 - The Cloudflare shim/Worker is an optional authenticated JSON edge.
 
-The native route consumes only a linked executable promoted behind the native artifact's READY marker. The Graal route consumes the absolute executable named by `FRAM_GRAAL_ARTIFACT`; it is not a Native World artifact. Raw Beagle projection output is not executable runtime input. Compiled Clojure under `out/` remains available only through the explicit JVM routes. QBE remains the direct-native cross-check.
+The native route consumes only a linked executable promoted behind the native artifact's READY marker. The Graal route consumes the absolute executable named by `FRAM_GRAAL_ARTIFACT`; it is not a native program artifact. Raw Beagle projection output is not executable runtime input. Compiled Clojure under `out/` remains available only through the explicit JVM routes. QBE remains the direct-native cross-check.
 
 ## Durable state and handoff
 

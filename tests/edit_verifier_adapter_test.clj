@@ -1,5 +1,5 @@
 #!/usr/bin/env bb
-;; Real closed-protocol adapter smoke. This uses Beagle's coherent-world checker,
+;; Real closed-protocol adapter smoke. This uses Beagle's module-overlay checker,
 ;; not the server's controlled verifier fixture.
 
 (require '[babashka.fs :as fs]
@@ -108,8 +108,8 @@
    (into {} (System/getenv))
    {"BEAGLE_HOME" beagle-home
     "FRAM_EDIT_VERIFIER_RACKET" racket
-    "FRAM_EDIT_VERIFIER_WORLD_CHECK"
-    (str beagle-home "/beagle-lib/private/facts-check-world.rkt")
+    "FRAM_EDIT_VERIFIER_OVERLAY_CHECK"
+    (str beagle-home "/beagle-lib/private/facts-check-overlay.rkt")
     ;; The adapter must launch its measured Racket/checker pair from a closed
     ;; environment rather than inheriting caller-controlled collection roots.
     "PLTCOLLECTS" "/definitely/hostile-racket-collects"
@@ -168,12 +168,12 @@
               (zero? (:exit accepted)))
       (check! "success receipt is closed and input-bound"
               (and
-               (= #{:schema :ok :input-digest :world-digest
+               (= #{:schema :ok :input-digest :overlay-digest
                     :toolchain-closure-digest :modules}
                   (set (keys receipt)))
                (true? (:ok receipt))
                (= (:input-digest full-request) (:input-digest receipt))
-               (re-matches #"[0-9a-f]{64}" (:world-digest receipt))
+               (re-matches #"[0-9a-f]{64}" (:overlay-digest receipt))
                (re-matches #"[0-9a-f]{64}"
                            (:toolchain-closure-digest receipt))))
       (check! "receipt module row is exact and follows selected closure order"
@@ -198,14 +198,14 @@
         ;; surface, so a deliberately incomplete request can parse as an
         ;; external dependency. The server—not this stateless adapter—owns
         ;; proof that :overlay is the complete graph. What the adapter must prove
-        ;; is that every supplied overlay row participates in the world receipt.
-        (check! "complete overlay is bound into the world digest"
+        ;; is that every supplied overlay row participates in the overlay receipt.
+        (check! "complete overlay is bound into the overlay digest"
                 (or
                  (= 1 (:exit partial))
                  (and
                   (zero? (:exit partial))
-                  (not= (:world-digest receipt)
-                        (:world-digest partial-receipt))))))
+                  (not= (:overlay-digest receipt)
+                        (:overlay-digest partial-receipt))))))
 
       (let [red-request
             (request [(dissoc bad-consumer :edn)]
@@ -215,12 +215,12 @@
                        (json/parse-string (:out red-result) true))]
         (check! "typed candidate failure is deterministic rejection"
                 (= 1 (:exit red-result)))
-        (check! "deterministic world rejection uses the closed failure receipt"
+        (check! "deterministic overlay rejection uses the closed failure receipt"
                 (and
                  (= #{:schema :ok :input-digest :code :errors}
                     (set (keys rejected)))
                  (false? (:ok rejected))
-                 (= "beagle-world-rejected" (:code rejected))
+                 (= "beagle-overlay-rejected" (:code rejected))
                  (seq (:errors rejected)))))
 
       (let [tampered

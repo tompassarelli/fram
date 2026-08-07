@@ -58,7 +58,7 @@ trap cleanup EXIT INT TERM
                     (str (get-in m [:executables :editVerifier]))
                     "/nix/store/")
                    (clojure.string/starts-with?
-                    (str (get-in m [:helpers :factsCheckWorld]))
+                    (str (get-in m [:helpers :factsCheckOverlay]))
                     "/nix/store/")
                    (every? store? roots))
       (binding [*out* *err*] (println (pr-str m)))
@@ -103,7 +103,7 @@ for name, rhs in expected_assignments.items():
 sealed_verifier_assignments = {
     "FRAM_EDIT_VERIFIER": '"$FRAM_GRAPH_EDIT_SEALED_EDIT_VERIFIER"',
     "FRAM_EDIT_VERIFIER_RACKET": '"$FRAM_GRAPH_EDIT_SEALED_RACKET"',
-    "FRAM_EDIT_VERIFIER_WORLD_CHECK": '"$FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK"',
+    "FRAM_EDIT_VERIFIER_OVERLAY_CHECK": '"$FRAM_GRAPH_EDIT_SEALED_OVERLAY_CHECK"',
 }
 for name, rhs in sealed_verifier_assignments.items():
     line = f"  {name}={rhs} \\"
@@ -186,7 +186,7 @@ common_hostile=(
   FRAM_EDIT_VERIFIER="$evil/bin/verifier"
   FRAM_EDIT_VERIFIER_ARGS='["hostile"]'
   FRAM_EDIT_VERIFIER_RACKET="$evil/bin/racket"
-  FRAM_EDIT_VERIFIER_WORLD_CHECK="$evil/check-world.rkt"
+  FRAM_EDIT_VERIFIER_OVERLAY_CHECK="$evil/check-overlay.rkt"
   FRAM_HOME="$evil/fram"
   FRAM_LOG="$evil/facts.log"
   FRAM_MCP_PROFILE=full

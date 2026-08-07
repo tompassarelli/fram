@@ -23,8 +23,6 @@
 
 (require fram.datalog :as d)
 
-(require fram.world :as w)
-
 (require fram.rt)
 
 (require clojure.string :as str)
@@ -185,10 +183,44 @@
       (let [r (version-record-of co v)]
         (if (nil? r) acc (recur (get r :base) (assoc acc v r)))))))
 
+;; A version record's overlay is authoritative for the slots it names; every
+;; other slot, and every :inherit entry, defers to the record's :base.
+(defn- resolve-slot
+  [versions: Any
+   version: Any
+   slot: Any] -> Any
+  (loop [vid version]
+    (if (nil? vid)
+      nil
+      (let [record (get versions vid)]
+        (if (nil? record)
+          nil
+          (let [hits (filterv (fn [e: Any] -> Bool (= (get e :slot) slot))
+                       (vec (get record :overlay)))
+                e (if (empty? hits) nil (first hits))]
+            (cond
+              [(nil? e) (recur (get record :base))]
+              [(= (get e :op) :inherit) (recur (get record :base))]
+              [(= (get e :op) :delete) nil]
+              [:else {:blob-id (get e :blob-id)}])))))))
+
+(defn- chain-slots [versions: Any version: Any] -> Any
+  (loop [vid version acc []]
+    (if (nil? vid)
+      (vec (distinct acc))
+      (let [record (get versions vid)]
+        (if (nil? record)
+          (vec (distinct acc))
+          (recur (get record :base)
+            (vec (concat acc
+                   (mapv (fn [e: Any] -> Any (get e :slot))
+                     (vec (get record :overlay)))))))))))
+
 (defn- slot-blobs [co: Any vid: Any] -> Any
-  (reduce (fn [m: Any e: Any] -> Any (assoc m (get e :slot) (get e :blob-id)))
-    {}
-    (w/manifest (version-chain co vid) vid)))
+  (let [versions (version-chain co vid)]
+    (reduce (fn [m: Any s: Any] -> Any (let [r (resolve-slot versions vid s)] (if (nil? r) m (assoc m s (get r :blob-id)))))
+      {}
+      (chain-slots versions vid))))
 
 (defn- changed-slots
   [co: Any

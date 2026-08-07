@@ -1,7 +1,7 @@
 ;; server.clj — narrow TermStore v2 database server.
 ;;
 ;; Run long-lived servers with `clojure -M`, never Babashka. This surface stays
-;; deliberately small until schema/query/pull/world projections consume TermStore
+;; deliberately small until schema/query/pull projections consume TermStore
 ;; directly; it never reconstructs the removed fact-object APIs.
 (ns server
   (:require [clojure.java.io :as io]

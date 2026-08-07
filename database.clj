@@ -1,7 +1,7 @@
 ;; database.clj — authoritative TermStore v2 database.
 ;;
 ;; This file deliberately depends only on the recursive-Term kernel. Schema,
-;; query, pull, worlds, and codegraph remain downstream projections; none may
+;; query, pull, and codegraph remain downstream projections; none may
 ;; restore the removed fact-object store beneath this boundary.
 (ns database
   (:require [clojure.edn :as edn]

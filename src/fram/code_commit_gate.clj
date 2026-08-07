@@ -143,7 +143,7 @@
                    "sealed verifier emitted malformed JSON"
                    {:exit (:exit result) :stderr (:err result)})))
         success-keys
-        #{:schema :ok :input-digest :world-digest
+        #{:schema :ok :input-digest :overlay-digest
           :toolchain-closure-digest :modules}
         rejection-keys #{:schema :ok :input-digest :code :errors}
         expected-keys (if (zero? (:exit result)) success-keys rejection-keys)]

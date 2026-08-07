@@ -93,7 +93,7 @@
     {:schema receipt-schema
      :ok true
      :input-digest (:input-digest request)
-     :world-digest
+     :overlay-digest
      (sha256-hex [(:overlay-digest request)
                   toolchain-closure-digest
                   modules])

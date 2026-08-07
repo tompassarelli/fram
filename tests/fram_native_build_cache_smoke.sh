@@ -50,9 +50,9 @@ if [[ "$command" == "build" ]]; then
     "$out/native_shim.h" "$out/native_shim.c" "$out/report.txt" \
     "$out/native_unicode15_data.h" "$out/UNICODE-LICENSE.txt"
   printf '%s\n' 'fake source facts' >"$out/source.facts"
-  printf '%s\n' 'fake frozen Native World' >"$out/module.native-world"
-  sha256sum "$out/module.native-world" | sed 's/ .*//' \
-    >"$out/module.native-world.sha256"
+  printf '%s\n' 'fake frozen native program' >"$out/module.native-program"
+  sha256sum "$out/module.native-program" | sed 's/ .*//' \
+    >"$out/module.native-program.sha256"
   cat >"$out/module_0.h" <<'C'
 #ifndef FAKE_MODULE_0_H
 #define FAKE_MODULE_0_H
@@ -524,10 +524,10 @@ embed_hit="$("${build_env[@]}" "$builder" --host embed \
   fail "embed host cache hit failed"
 [[ "$embed_hit" == "$embed_artifact" ]] || fail "embed host missed the cache"
 [[ "$(wc -l <"$calls")" == "$calls_before_embed" ]] ||
-  fail "embed host rebuilt the shared Native World"
-[[ "$(find "$scratch/cache/.worlds" -mindepth 2 -maxdepth 2 \
+  fail "embed host rebuilt the shared native program"
+[[ "$(find "$scratch/cache/.programs" -mindepth 2 -maxdepth 2 \
   -name READY | wc -l)" == "1" ]] ||
-  fail "server and embed did not share exactly one Native World"
+  fail "server and embed did not share exactly one native program"
 
 # The wasm-embed host is refusal-visible without its toolchain: it names the
 # missing tool instead of degrading to the native compiler. Its positive path
@@ -552,7 +552,7 @@ if "${build_env[@]}" "$builder" --host embed --abi wasm32 \
     >"$scratch/embed-wasm-abi.out" 2>"$scratch/embed-wasm-abi.err"; then
   fail "embed host accepted a non-native ABI"
 fi
-grep -Fq -- '--abi wasm32 needs --host world' "$scratch/embed-wasm-abi.err" ||
+grep -Fq -- '--abi wasm32 needs --host program' "$scratch/embed-wasm-abi.err" ||
   fail "embed host did not refuse a non-native ABI by name"
 
 printf '%s\n' '#lang beagle' '(ns demo.missing-symbol)' \
@@ -604,9 +604,9 @@ grep -Fq 'fram_server_codec_release_response' "$scratch/missing-export.err" ||
   fail "failed server host link exposed a READY artifact"
 [[ -z "$(find "$scratch/cache/.tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
   fail "failed server host link left temporary artifacts"
-[[ -z "$(find "$scratch/cache/.worlds/.tmp" -mindepth 1 -maxdepth 1 \
+[[ -z "$(find "$scratch/cache/.programs/.tmp" -mindepth 1 -maxdepth 1 \
   -print -quit)" ]] ||
-  fail "failed Native World build left temporary artifacts"
+  fail "failed native program build left temporary artifacts"
 
 cp "$scratch/server_generated.pristine.c" "$adapter"
 
@@ -669,21 +669,21 @@ grep -Fq 'materialize-qbe REFUSED unsupported native value-semantics op: hash' \
   "build-c17+qbe build-c17 " ]] ||
   fail "QBE refusal did not recover C17 through a second materialization"
 
-# --regen-qbe-frontier records the observed frontier for a world scope.
+# --regen-qbe-frontier records the observed frontier for a program scope.
 printf '%s\n' '# scratch QBE frontier ledger' >"$ledger"
-"${qbe_env[@]}" "$builder" --host world --entry demo.main/start \
+"${qbe_env[@]}" "$builder" --host program --entry demo.main/start \
   "$scratch/sources/refused.bgl" >"$scratch/regen.out" 2>"$scratch/regen.err" &&
-  fail "unrecorded QBE refusal did not fail --host world"
-"${qbe_env[@]}" "$builder" --host world --regen-qbe-frontier \
+  fail "unrecorded QBE refusal did not fail --host program"
+"${qbe_env[@]}" "$builder" --host program --regen-qbe-frontier \
   --entry demo.main/start "$scratch/sources/refused.bgl" \
   >"$scratch/regen.out" 2>"$scratch/regen.err" ||
   fail "--regen-qbe-frontier failed"
 grep -Fq "$(printf 'demo.main/start\tunsupported-value-semantics\thash')" \
   "$ledger" || fail "--regen-qbe-frontier did not record the observed refusal"
-world_dir="$("${qbe_env[@]}" "$builder" --host world --entry demo.main/start \
+program_dir="$("${qbe_env[@]}" "$builder" --host program --entry demo.main/start \
   "$scratch/sources/refused.bgl")" ||
-  fail "recorded QBE refusal blocked --host world"
-[[ -f "$world_dir/module_0.c" && -f "$world_dir/READY" ]] ||
-  fail "--host world did not persist the C17 projection"
+  fail "recorded QBE refusal blocked --host program"
+[[ -f "$program_dir/module_0.c" && -f "$program_dir/READY" ]] ||
+  fail "--host program did not persist the C17 projection"
 
 echo "fram native build cache smoke: PASS"

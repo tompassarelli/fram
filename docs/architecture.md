@@ -62,7 +62,7 @@ not enlarge FRAMRPC.
 
 ## Native embedding
 
-The Native World closure has two host shapes over the same eight generated
+The native program closure has two host shapes over the same eight generated
 engine hooks. The server host owns sockets and serves FRAMRPC. The embedding
 host publishes ABI v1 as `fram.h`, `libfram.a`, and `libfram.so`:
 
@@ -98,7 +98,7 @@ they are not part of the Linux library artifact.
 
 ## Native embedding
 
-The Native World closure has two host shapes over the same eight generated
+The native program closure has two host shapes over the same eight generated
 engine hooks. The server host owns sockets and serves FRAMRPC. The embedding
 host publishes ABI v1 as `fram.h`, `libfram.a`, and `libfram.so`:
 
@@ -145,4 +145,4 @@ The engine has no tenant authorization. Loopback/private FRAMRPC, process, Space
   embedding ABI, host capabilities, and the shared generated-engine adapter.
 - [`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj), [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj), and [`../tests/triple_log_migration_test.clj`](../tests/triple_log_migration_test.clj): kernel, boundary, and migration gates.
 
-Historical Worlds, claims, Codegraph, pull, rationale, and positioning documents in [`archive/`](archive/README.md) add no current primitives or operations.
+Historical claims, Codegraph, pull, rationale, and positioning documents in [`archive/`](archive/README.md) add no current primitives or operations.
