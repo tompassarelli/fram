@@ -247,7 +247,7 @@
    cat: (Vec ToolSpec)
    tool-name: String
    args: (Map Keyword Any)] -> Any
-  (let [tool: String (if (= tool-name "query") "ask" (if (= tool-name "untell") "retract" tool-name)) spec: ToolSpec? (spec-by-name cat tool) session: schema/Session (schema/session ctx) propositions: (Vec t/Triple) (rotation/propositions (rotation/all-occurrences (schema/view session)))]
+  (let [tool: String (if (= tool-name "query") "ask" (if (= tool-name "untell") "retract" tool-name)) spec: ToolSpec? (spec-by-name cat tool) session: schema/Session (schema/session! ctx) propositions: (Vec t/Triple) (rotation/propositions (rotation/all-occurrences (schema/view session)))]
     (if (nil? spec)
       {:error [(str "unknown tool '" tool "' — call `tools` for the catalog")]}
       (let [op: Op (:op spec) miss: (Vec String) (missing-req op args)]

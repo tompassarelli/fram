@@ -12,6 +12,7 @@ copy	src/fram/graph_control_mcp.clj	out/fram/graph_control_mcp.clj
 copy	src/fram/code_commit_gate.clj	out/fram/code_commit_gate.clj
 copy	src/fram/projection_lifecycle.clj	out/fram/projection_lifecycle.clj
 copy	src/fram/candidate_transformer.clj	out/fram/candidate_transformer.clj
+beagle-core	src/fram/slots.bgl	out/fram/slots.clj
 beagle-core	src/fram/types.bgl	out/fram/types.clj
 beagle-core	src/fram/store.bgl	out/fram/store.clj
 beagle-core	src/fram/rotation.bgl	out/fram/rotation.clj

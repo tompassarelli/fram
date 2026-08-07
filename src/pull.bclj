@@ -104,7 +104,7 @@
   (let [errs (validate root pattern opts)]
     (if (seq errs)
       {:error errs}
-      (let [schema: s/Session (s/session store-atom)
+      (let [schema: s/Session (s/session! store-atom)
             history: (Vec t/Triple) (c/operation-occurrences store-atom)
             live-now: (Vec t/Triple) (c/live-occurrences store-atom)
             withdrawals: (Vec t/Triple) (c/withdrawal-triples store-atom)

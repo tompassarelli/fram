@@ -1,3 +1,4 @@
+src/fram/slots.bgl
 src/fram/types.bgl
 src/fram/store.bgl
 src/fram/rotation.bgl

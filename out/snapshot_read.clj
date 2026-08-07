@@ -55,7 +55,7 @@
   (if (int? r) r nil))))
 
 (defn withdrawal-of [ctx cid]
-  (let [session (s/session ctx)
+  (let [session (s/session! ctx)
    wb (s/resolve-predicate session "withdrawn_by")
    by-id (live-r-on ctx cid wb)]
   (if (nil? by-id) nil (let [at-id (live-r-on ctx cid (s/resolve-predicate session "withdrawn_at"))
@@ -72,7 +72,7 @@
   (vec (distinct (concat live resurrected)))) live)))
 
 (defn view-selects [ctx ^String view]
-  (let [session (s/session ctx)
+  (let [session (s/session! ctx)
    ve (s/resolve-name session view)
    sel (s/resolve-predicate session "selects")]
   (if (or (nil? ve) (nil? sel)) nil (reduce (fn [acc cid] (let [f (c/fact-of ctx cid)

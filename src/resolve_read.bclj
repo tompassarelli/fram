@@ -281,7 +281,7 @@
         coordinate: t/Triple (txn/builder-coordinate open)
         store: (Atom t/TermStore) (ri/store-of context)]
     (ri/with-view! context
-      (rot/staged (rot/project store)
+      (rot/staged (rot/project! store)
                   (t/triple-t1 coordinate)
                   (t/triple-t3 coordinate)
                   (txn/builder-operations open)))))

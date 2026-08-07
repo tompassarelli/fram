@@ -12,7 +12,7 @@
          '[fram.rotation :as rot] '[fram.types :as t])
 
 (def ctx (c/new-term-store "schema-test"))
-(def sess (s/session ctx))
+(def sess (s/session! ctx))
 (s/setup! sess)
 (s/def-predicate! sess "title" "single" "literal")
 (s/def-predicate! sess "tag" "multi" "literal")
@@ -44,7 +44,7 @@
 ;; A legacy integer node id is still a valid Term, and a proposition written
 ;; straight to the store with no registry entry stays readable through schema.
 (def legacy-ctx (c/new-term-store "schema-test-legacy"))
-(def legacy-sess (s/session legacy-ctx))
+(def legacy-sess (s/session! legacy-ctx))
 (def legacy-pid "legacy_pred")
 (def legacy-subj 7)
 (c/commit-transaction!
@@ -75,7 +75,7 @@
     (catch clojure.lang.ExceptionInfo _ true)))
 
 (def atomic-ctx (c/new-term-store "schema-test-atomic"))
-(def atomic-sess (s/session atomic-ctx))
+(def atomic-sess (s/session! atomic-ctx))
 (s/setup! atomic-sess)
 (s/def-predicate! atomic-sess ":atomic_auto" "multi" "literal")
 (def atomic-before-store @atomic-ctx)

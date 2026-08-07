@@ -82,7 +82,7 @@
                           {:subject "x" :predicate ":friend" :object "z"}))
           {:op "assert" :l "@x" :p "friend" :r "@z"}))
   (chk "shared predicate normalization resolves aliases for CLI callers"
-       (= "friend" (t/canonical-predicate (schema/session dctx) ":friend"))))
+       (= "friend" (t/canonical-predicate (schema/session! dctx) ":friend"))))
 
 ;; An explicit negative declaration wins over the transitional depends_on
 ;; fallback, so a literal that happens to look like an id stays literal.

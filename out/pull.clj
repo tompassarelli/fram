@@ -36,7 +36,7 @@
 
 (defn run [store-atom root pattern opts]
   (let [errs (validate root pattern opts)]
-  (if (seq errs) {:error errs} (let [schema (s/session store-atom)
+  (if (seq errs) {:error errs} (let [schema (s/session! store-atom)
    history (c/operation-occurrences store-atom)
    live-now (c/live-occurrences store-atom)
    withdrawals (c/withdrawal-triples store-atom)

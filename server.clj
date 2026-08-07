@@ -978,10 +978,10 @@
   (mod (hash value) width))
 
 (defn- native-index-position [rows slots value]
-  (let [positions (t/termbucket-positions
-                   (nth slots (native-term-slot value (count slots))))]
+  (let [positions @(nth slots (native-term-slot value (count slots)))]
     (some (fn [position]
-            (when (= value (nth rows position)) position))
+            (when (and (< position (count rows)) (= value (nth rows position)))
+              position))
           positions)))
 
 (defn- native-atom-row [value]
@@ -1037,13 +1037,13 @@
 (defn- native-active-handle? [root handle]
   (let [slots (t/termstore-active-slots root)
         buckets (t/termstore-active-buckets root)
-        positions (t/termbucket-positions
-                   (nth slots (native-term-slot handle (count slots))))]
+        positions @(nth slots (native-term-slot handle (count slots)))]
     (boolean
      (some (fn [position]
-             (let [bucket (nth buckets position)]
-               (and (= handle (t/activebucket-triple-handle bucket))
-                    (seq (t/activebucket-positions bucket)))))
+             (when (< position (count buckets))
+               (let [bucket (nth buckets position)]
+                 (and (= handle (t/activebucket-triple-handle bucket))
+                      (seq (t/activebucket-positions bucket))))))
            positions))))
 
 (def ^:private native-unbound ::native-unbound)

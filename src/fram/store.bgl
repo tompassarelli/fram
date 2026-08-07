@@ -3,6 +3,7 @@
 (ns fram.store)
 (define-mode strict)
 (require fram.types :as t)
+(require fram.slots :as slots)
 
 (def empty-ids: (Vec Int) [])
 (def empty-bools: (Vec Bool) [])
@@ -13,7 +14,6 @@
 (def empty-commit-operations: (Vec t/CommitOperation) [])
 (def empty-transaction-frames: (Vec t/TransactionFrame) [])
 (def empty-active-buckets: (Vec t/ActiveBucket) [])
-(def empty-term-buckets: (Vec t/TermBucket) [])
 (def term-store-dump-version: Int 2)
 (def max-transaction-sequence: Int 9223372036854775806)
 
@@ -41,54 +41,38 @@
 (defn- valid-space-id? [space-id: Any] -> Bool
   (and (string? space-id) (pos? (count space-id))))
 
-(defn- fresh-term-slots [width: Int] -> (Vec t/TermBucket)
-  (loop [slots: (Vec t/TermBucket) empty-term-buckets position: Int 0]
-    (if (>= position width)
-      slots
-      (recur (conj slots (t/->TermBucket position empty-ids)) (inc position)))))
-
-(defn- term-slot [value: Any width: Int] -> Int (mod (hash value) width))
-
-(defn- term-slot-add
-  [slots: (Vec t/TermBucket)
-   slot: Int
-   position: Int] -> (Vec t/TermBucket)
-  (assoc slots slot
-         (t/->TermBucket slot
-                         (conj (t/termbucket-positions (nth slots slot)) position))))
-
 (defn- term-slots-width-for [n: Int] -> Int
   (loop [width initial-slots]
     (if (>= (* slot-load width) n) width (recur (* 2 width)))))
 
-(defn- build-atom-term-slots
+(defn- build-atom-term-slots!
   [atoms: (Vec t/AtomRow)
-   width: Int] -> (Vec t/TermBucket)
-  (loop [slots: (Vec t/TermBucket) (fresh-term-slots width) position: Int 0]
+   width: Int] -> slots/TermSlots
+  (loop [slots: slots/TermSlots (slots/fresh-slots width) position: Int 0]
     (if (>= position (count atoms))
       slots
-      (recur (term-slot-add slots (term-slot (nth atoms position) width) position)
+      (recur (slots/slot-add! slots (slots/slot-of (nth atoms position) width) position)
              (inc position)))))
 
-(defn- build-triple-term-slots
+(defn- build-triple-term-slots!
   [rows: (Vec t/TripleRow)
-   width: Int] -> (Vec t/TermBucket)
-  (loop [slots: (Vec t/TermBucket) (fresh-term-slots width) position: Int 0]
+   width: Int] -> slots/TermSlots
+  (loop [slots: slots/TermSlots (slots/fresh-slots width) position: Int 0]
     (if (>= position (count rows))
       slots
-      (recur (term-slot-add slots (term-slot (nth rows position) width) position)
+      (recur (slots/slot-add! slots (slots/slot-of (nth rows position) width) position)
              (inc position)))))
 
-(defn- build-active-slots
+(defn- build-active-slots!
   [buckets: (Vec t/ActiveBucket)
-   width: Int] -> (Vec t/TermBucket)
-  (loop [slots: (Vec t/TermBucket) (fresh-term-slots width) position: Int 0]
+   width: Int] -> slots/TermSlots
+  (loop [slots: slots/TermSlots (slots/fresh-slots width) position: Int 0]
     (if (>= position (count buckets))
       slots
       (recur
-       (term-slot-add slots
-                      (term-slot (t/activebucket-triple-handle (nth buckets position)) width)
-                      position)
+       (slots/slot-add! slots
+                       (slots/slot-of (t/activebucket-triple-handle (nth buckets position)) width)
+                       position)
        (inc position)))))
 
 (defn new-term-store [space-id: String] -> (Atom t/TermStore)
@@ -97,9 +81,9 @@
            space-id 1 empty-atoms empty-triple-rows
            empty-transaction-rows empty-operation-rows empty-bools empty-ids
            empty-active-buckets
-           (fresh-term-slots initial-slots)
-           (fresh-term-slots initial-slots)
-           (fresh-term-slots initial-slots)))
+           (slots/fresh-slots initial-slots)
+           (slots/fresh-slots initial-slots)
+           (slots/fresh-slots initial-slots)))
     (throw (ex-info "fram: TermStore requires a non-empty SpaceId"
                     {:type :invalid-space-id}))))
 
@@ -136,31 +120,33 @@
   (let [value (atom-row-value row)]
     (and (some? value) (= row (atom-row value)))))
 
+;; A slot cell outlives the row vector any one store value holds, so the range
+;; test keeps the full-row confirmation below in bounds.
 (defn- find-atom-position
   [atoms: (Vec t/AtomRow)
-   slots: (Vec t/TermBucket)
+   slots: slots/TermSlots
    value: t/AtomRow] -> Int
   (let [positions: (Vec Int)
-        (t/termbucket-positions (nth slots (term-slot value (count slots))))]
+        (deref (nth slots (slots/slot-of value (count slots))))]
     (loop [offset 0]
       (if (>= offset (count positions))
         -1
         (let [position (nth positions offset)]
-          (if (= (nth atoms position) value)
+          (if (and (< position (count atoms)) (= (nth atoms position) value))
             position
             (recur (inc offset))))))))
 
 (defn- find-triple-position
   [rows: (Vec t/TripleRow)
-   slots: (Vec t/TermBucket)
+   slots: slots/TermSlots
    value: t/TripleRow] -> Int
   (let [positions: (Vec Int)
-        (t/termbucket-positions (nth slots (term-slot value (count slots))))]
+        (deref (nth slots (slots/slot-of value (count slots))))]
     (loop [offset 0]
       (if (>= offset (count positions))
         -1
         (let [position (nth positions offset)]
-          (if (= (nth rows position) value)
+          (if (and (< position (count rows)) (= (nth rows position) value))
             position
             (recur (inc offset))))))))
 
@@ -168,32 +154,30 @@
   [ctx: (Atom t/TermStore)
    value: t/AtomRow
    position: Int] -> t/TermStore
-  (let [store: t/TermStore
-        (swap! ctx update :atom-slots
-               (fn [slots: (Vec t/TermBucket)] -> (Vec t/TermBucket)
-                 (term-slot-add slots (term-slot value (count slots)) position)))]
-    (if (> (count (t/termstore-atoms store))
-           (* slot-load (count (t/termstore-atom-slots store))))
+  (let [store: t/TermStore (deref ctx)
+        slots: slots/TermSlots
+        (slots/slot-add! (t/termstore-atom-slots store)
+                        (slots/slot-of value (count (t/termstore-atom-slots store)))
+                        position)]
+    (if (> (count (t/termstore-atoms store)) (* slot-load (count slots)))
       (swap! ctx assoc :atom-slots
-             (build-atom-term-slots
-              (t/termstore-atoms store)
-              (* 2 (count (t/termstore-atom-slots store)))))
+             (build-atom-term-slots!
+              (t/termstore-atoms store) (* 2 (count slots))))
       store)))
 
 (defn- index-triple-term!
   [ctx: (Atom t/TermStore)
    value: t/TripleRow
    position: Int] -> t/TermStore
-  (let [store: t/TermStore
-        (swap! ctx update :triple-slots
-               (fn [slots: (Vec t/TermBucket)] -> (Vec t/TermBucket)
-                 (term-slot-add slots (term-slot value (count slots)) position)))]
-    (if (> (count (t/termstore-triples store))
-           (* slot-load (count (t/termstore-triple-slots store))))
+  (let [store: t/TermStore (deref ctx)
+        slots: slots/TermSlots
+        (slots/slot-add! (t/termstore-triple-slots store)
+                        (slots/slot-of value (count (t/termstore-triple-slots store)))
+                        position)]
+    (if (> (count (t/termstore-triples store)) (* slot-load (count slots)))
       (swap! ctx assoc :triple-slots
-             (build-triple-term-slots
-              (t/termstore-triples store)
-              (* 2 (count (t/termstore-triple-slots store)))))
+             (build-triple-term-slots!
+              (t/termstore-triples store) (* 2 (count slots))))
       store)))
 
 (defn- atom-handle [position: Int] -> Int (* 2 position))
@@ -346,15 +330,16 @@
                     {:type :invalid-transaction-frame}))))
 
 (defn- find-active-bucket-position [store: t/TermStore handle: Int] -> Int
-  (let [slots: (Vec t/TermBucket) (t/termstore-active-slots store)
+  (let [slots: slots/TermSlots (t/termstore-active-slots store)
         buckets: (Vec t/ActiveBucket) (t/termstore-active-buckets store)
         positions: (Vec Int)
-        (t/termbucket-positions (nth slots (term-slot handle (count slots))))]
+        (deref (nth slots (slots/slot-of handle (count slots))))]
     (loop [offset 0]
       (if (>= offset (count positions))
         -1
         (let [position (nth positions offset)]
-          (if (= handle (t/activebucket-triple-handle (nth buckets position)))
+          (if (and (< position (count buckets))
+                   (= handle (t/activebucket-triple-handle (nth buckets position))))
             position
             (recur (inc offset))))))))
 
@@ -364,7 +349,7 @@
       (t/activebucket-positions (nth (t/termstore-active-buckets store) position))
       empty-ids)))
 
-(defn- set-active-positions
+(defn- set-active-positions!
   [store: t/TermStore
    handle: Int
    positions: (Vec Int)] -> t/TermStore
@@ -376,18 +361,19 @@
       (let [buckets: (Vec t/ActiveBucket)
             (conj (t/termstore-active-buckets store) (t/->ActiveBucket handle positions))
             position: Int (dec (count buckets))
-            slots: (Vec t/TermBucket) (t/termstore-active-slots store)
+            slots: slots/TermSlots
+            (slots/slot-add! (t/termstore-active-slots store)
+                            (slots/slot-of handle
+                                       (count (t/termstore-active-slots store)))
+                            position)
             store-with-bucket: t/TermStore
-            (assoc store
-                   :active-buckets buckets
-                   :active-slots
-                   (term-slot-add slots (term-slot handle (count slots)) position))]
+            (assoc store :active-buckets buckets)]
         (if (> (count buckets) (* slot-load (count slots)))
           (assoc store-with-bucket :active-slots
-                 (build-active-slots buckets (* 2 (count slots))))
+                 (build-active-slots! buckets (* 2 (count slots))))
           store-with-bucket)))))
 
-(defn- apply-operation-state
+(defn- apply-operation-state!
   [store: t/TermStore
    operation-position: Int
    row: t/OperationRow] -> t/TermStore
@@ -395,7 +381,7 @@
         action: Keyword (t/operationrow-action row)
         active: (Vec Int) (active-positions store handle)]
     (if (= action t/assert-action)
-      (set-active-positions
+      (set-active-positions!
        (assoc store
               :operation-live (conj (t/termstore-operation-live store) true)
               :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1))
@@ -407,7 +393,7 @@
                :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1))
         (let [target: Int (peek active)
               live: (Vec Bool) (t/termstore-operation-live store)]
-          (set-active-positions
+          (set-active-positions!
            (assoc store
                   :operation-live (conj (assoc live target false) false)
                   :withdrawal-targets
@@ -461,7 +447,7 @@
                   with-row: t/TermStore
                   (assoc current :operations
                          (conj (t/termstore-operations current) row))]
-              (recur (apply-operation-state with-row operation-position row)
+              (recur (apply-operation-state! with-row operation-position row)
                      (inc ordinal)))))
         final-store: t/TermStore (assoc appended :next-sequence (inc sequence))]
     (do
@@ -989,18 +975,18 @@
                       (valid-transaction-frames-between
                        store lower-exclusive upper-inclusive)))))))))])))
 
-(defn- rebuild-operation-state [store: t/TermStore] -> t/TermStore
+(defn- rebuild-operation-state! [store: t/TermStore] -> t/TermStore
   (let [base: t/TermStore
         (assoc store
                :operation-live empty-bools
                :withdrawal-targets empty-ids
                :active-buckets empty-active-buckets
-               :active-slots (fresh-term-slots initial-slots))]
+               :active-slots (slots/fresh-slots initial-slots))]
     (loop [current: t/TermStore base position: Int 0]
       (if (>= position (count (t/termstore-operations current)))
         current
         (recur
-         (apply-operation-state
+         (apply-operation-state!
           current position (nth (t/termstore-operations current) position))
          (inc position))))))
 
@@ -1049,10 +1035,10 @@
                   (t/->TermStore
                    dump-space next-sequence-value atoms rows transactions operations
                    empty-bools empty-ids empty-active-buckets
-                   (build-atom-term-slots atoms (term-slots-width-for (count atoms)))
-                   (build-triple-term-slots rows (term-slots-width-for (count rows)))
-                   (fresh-term-slots initial-slots))]
-              (reset! ctx (rebuild-operation-state loaded))
+                   (build-atom-term-slots! atoms (term-slots-width-for (count atoms)))
+                   (build-triple-term-slots! rows (term-slots-width-for (count rows)))
+                   (slots/fresh-slots initial-slots))]
+              (reset! ctx (rebuild-operation-state! loaded))
               (term-store-load-ok))))))))
 
 (defn load-term-store! [ctx: (Atom t/TermStore) data: Any] -> (Atom t/TermStore)

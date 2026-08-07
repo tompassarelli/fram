@@ -20,7 +20,7 @@
 ;; predicate any more.
 ;;
 ;; API (reads take a Session; each write commits one transaction):
-;;   (session ctx)                          -> Session
+;;   (session! ctx)                         -> Session
 ;;   (setup! s)                             bootstrap the meta-predicates
 ;;   (mint-node! s pname value)             -> a minted node coordinate Term
 ;;   (def-predicate! s pname card kind)     -> pid
@@ -100,8 +100,8 @@
   (->OrderedResultCache no-ordered-result-entries
                         no-ordered-result-snapshots 0 0 0 0))
 
-(defn session [ctx: (Atom t/TermStore)] -> Session
-  (->Session ctx (atom (rot/project ctx))
+(defn session! [ctx: (Atom t/TermStore)] -> Session
+  (->Session ctx (atom (rot/project! ctx))
              (atom (empty-ordered-result-cache)) (atom 0)))
 
 (defn fork-session [s: Session] -> Session

@@ -421,7 +421,7 @@
         coordinate (txn/builder-coordinate open)]
     (ri/with-view!
      context
-     (rot/staged (rot/project (ri/store-of context))
+     (rot/staged (rot/project! (ri/store-of context))
                  (t/triple-t1 coordinate)
                  (t/triple-t3 coordinate)
                  (txn/builder-operations open)))))

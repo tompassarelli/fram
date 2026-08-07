@@ -325,7 +325,7 @@
   (let [root (schema/store-of session)]
     (if (= version (store/current-sequence root))
       (schema/view session)
-      (rot/project (historical-root! root version)))))
+      (rot/project! (historical-root! root version)))))
 
 (defn scan-response!
   [session: schema/Session

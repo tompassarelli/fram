@@ -1,4 +1,5 @@
-(ns fram.types)
+(ns fram.types
+  (:require [fram.slots :as slots]))
 
 (defrecord Instant [epoch-seconds nanos])
 
@@ -161,12 +162,6 @@
 (defn triplerow-t2 [r] (:t2 r))
 
 (defn triplerow-t3 [r] (:t3 r))
-
-(defrecord TermBucket [key positions])
-
-(defn termbucket-key [r] (:key r))
-
-(defn termbucket-positions [r] (:positions r))
 
 (defrecord TransactionRow [sequence first-operation operation-count])
 

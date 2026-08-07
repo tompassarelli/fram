@@ -81,8 +81,8 @@
 (defn ^OrderedResultCache empty-ordered-result-cache []
   (->OrderedResultCache no-ordered-result-entries no-ordered-result-snapshots 0 0 0 0))
 
-(defn ^Session session [ctx]
-  (->Session ctx (atom (rot/project ctx)) (atom (empty-ordered-result-cache)) (atom 0)))
+(defn ^Session session! [ctx]
+  (->Session ctx (atom (rot/project! ctx)) (atom (empty-ordered-result-cache)) (atom 0)))
 
 (defn ^Session fork-session [^Session s]
   (->Session (atom (deref (session-store s))) (atom (deref (session-view s))) (atom (deref (session-ordered-results s))) (atom (deref (session-derived-generation s)))))

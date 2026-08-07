@@ -64,7 +64,7 @@
    ordinals: (Atom (Map Any Int))])
 
 (defn graph [store: (Atom t/TermStore) writers: Any] -> Graph
-  (->Graph store (atom (rot/project store)) writers (atom no-ordinals)))
+  (->Graph store (atom (rot/project! store)) writers (atom no-ordinals)))
 
 (defn new-graph [space-id: String] -> Graph
   (graph (c/new-term-store space-id) {}))

@@ -89,7 +89,7 @@
 (defn call! [ctx cat ^String tool-name args]
   (let [tool (if (= tool-name "query") "ask" (if (= tool-name "untell") "retract" tool-name))
    spec (spec-by-name cat tool)
-   session (schema/session ctx)
+   session (schema/session! ctx)
    propositions (rotation/propositions (rotation/all-occurrences (schema/view session)))]
   (if (nil? spec) {:error [(str "unknown tool '" tool "' — call `tools` for the catalog")]} (let [op (:op spec)
    miss (missing-req op args)]

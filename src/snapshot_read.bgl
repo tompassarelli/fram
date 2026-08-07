@@ -79,7 +79,7 @@
       (if (int? r) r nil))))
 
 (defn withdrawal-of [ctx: (Atom fram.types/TermStore) cid: Int] -> Any
-  (let [session (s/session ctx)
+  (let [session (s/session! ctx)
         wb (s/resolve-predicate session "withdrawn_by")
         by-id (live-r-on ctx cid wb)]
     (if (nil? by-id)
@@ -113,7 +113,7 @@
 (defn view-selects
   [ctx: (Atom fram.types/TermStore)
    view: String] -> (U (Set Int) Nil)
-  (let [session (s/session ctx)
+  (let [session (s/session! ctx)
         ve (s/resolve-name session view)
         sel (s/resolve-predicate session "selects")]
     (if (or (nil? ve) (nil? sel))

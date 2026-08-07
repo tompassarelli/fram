@@ -90,7 +90,7 @@
   (let [open (deref (builder context))
    coordinate (txn/builder-coordinate open)
    store (ri/store-of context)]
-  (ri/with-view! context (rot/staged (rot/project store) (t/triple-t1 coordinate) (t/triple-t3 coordinate) (txn/builder-operations open)))))
+  (ri/with-view! context (rot/staged (rot/project! store) (t/triple-t1 coordinate) (t/triple-t3 coordinate) (txn/builder-operations open)))))
 
 (defn context [store]
   (ri/graph store {builder-key (txn/open store)}))

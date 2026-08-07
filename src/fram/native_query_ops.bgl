@@ -990,7 +990,7 @@
       (->QueryView selected-root
                    (if (= head (querybounds-version bounds))
                      (schema/view session)
-                     (rot/project selected-root))
+                     (rot/project! selected-root))
                    (querybounds-version bounds)
                    (querybounds-lower-exclusive bounds))
       (->QueryView root (schema/view session) head -1))))

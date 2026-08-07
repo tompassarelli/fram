@@ -50,7 +50,7 @@
         (= 3 (txn/operation-count (rr/builder context))))
 
 (def coordinate (rr/commit! context))
-(def committed-view (rot/project store))
+(def committed-view (rot/project! store))
 (check! "all staged operations commit atomically as one transaction"
         (and (t/transaction-coordinate? coordinate)
              (= 1 (c/transaction-count store))
@@ -72,7 +72,7 @@
 (check! "the update compiler retires and asserts in one transaction"
         (and (= 1 (- (c/transaction-count store) transactions-before-update))
              (= [99]
-                (rot/values (rot/by-t12 (rot/project store) node-a predicate)))))
+                (rot/values (rot/by-t12 (rot/project! store) node-a predicate)))))
 
 ;; ---------------------------------------------- EDN boundary + verb + emit
 (def input (java.io.File/createTempFile "fram-s2-authoring-" ".edn"))

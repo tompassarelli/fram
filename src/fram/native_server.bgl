@@ -115,7 +115,7 @@
             boot-append (log/bootstream-boot-append completed)]
         (->StoreResult
          status-ok
-         (->Store canonical-log-path (schema/session root)
+         (->Store canonical-log-path (schema/session! root)
                   (+ valid-log-bytes (count boot-append)))
          nil
          valid-log-bytes
@@ -166,7 +166,7 @@
                   (let [valid-log-bytes (log/bootstream-valid-log-bytes tail)]
                     (->StoreResult
                      status-ok
-                     (->Store canonical-log-path (schema/session root)
+                     (->Store canonical-log-path (schema/session! root)
                               valid-log-bytes)
                      nil
                      valid-log-bytes

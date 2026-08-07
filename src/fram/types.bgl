@@ -4,6 +4,7 @@
 ;; in private physical rows and projected back to ordinary Triples.
 (ns fram.types)
 (define-mode strict)
+(require fram.slots :as slots)
 
 ;; Atom is the closed grounding vocabulary for the recursive term model.  An
 ;; Instant is canonical epoch seconds plus nanoseconds; civil-time context is
@@ -102,7 +103,6 @@
   [t1: Int
    t2: Int
    t3: Int])
-(defrecord TermBucket [key: Int positions: (Vec Int)])
 
 ;; SpaceId plus the transaction sequence and operation ordinal form an exact
 ;; occurrence coordinate. The handle is only a private content reference.
@@ -129,9 +129,9 @@
    operation-live: (Vec Bool)
    withdrawal-targets: (Vec Int)
    active-buckets: (Vec ActiveBucket)
-   atom-slots: (Vec TermBucket)
-   triple-slots: (Vec TermBucket)
-   active-slots: (Vec TermBucket)])
+   atom-slots: slots/TermSlots
+   triple-slots: slots/TermSlots
+   active-slots: slots/TermSlots])
 (defrecord TermStoreDump
   [version: Int
    space-id: SpaceId

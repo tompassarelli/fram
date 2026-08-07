@@ -14,22 +14,89 @@
 
 (require fram.store :as store)
 
-(defalias Bucket (Map (Vec Any) (Vec t/Triple)))
+;; A leaf keyed by its bound-subset tuple. The keys are appended, never moved,
+;; so a slot row names entry positions and a probe compares whole keys.
+(defrecord Bucket
+  [width: Int
+   keys: (Vec (Vec Any))
+   events: (Vec (Vec t/Triple))
+   slots: (Vec (Vec Int))])
 
 (defrecord Rotation
   [space-id: String
    version: Int
    events: (Vec t/Triple)
-   by-occurrence: (Map t/Triple t/Triple)
+   by-occurrence: Bucket
    spo: Bucket
    pos: Bucket
    osp: Bucket])
 
 (def empty-events: (Vec t/Triple) [])
 
-(def empty-bucket: Bucket {})
+(def empty-keys: (Vec (Vec Any)) [])
 
-(def empty-occurrences: (Map t/Triple t/Triple) {})
+(def empty-event-lists: (Vec (Vec t/Triple)) [])
+
+(def empty-positions: (Vec Int) [])
+
+(def empty-slot-rows: (Vec (Vec Int)) [])
+
+;; A bucket doubles once it holds more than this many keys per slot.
+(def bucket-initial-slots: Int 64)
+
+(def bucket-slot-load: Int 4)
+
+(defn- fresh-slot-rows [width: Int] -> (Vec (Vec Int))
+  (loop [rows: (Vec (Vec Int)) empty-slot-rows position: Int 0]
+    (if (>= position width)
+      rows
+      (recur (conj rows empty-positions) (inc position)))))
+
+(defn- empty-bucket [] -> Bucket
+  (->Bucket bucket-initial-slots empty-keys empty-event-lists
+    (fresh-slot-rows bucket-initial-slots)))
+
+(defn- bucket-slot [key: (Vec Any) width: Int] -> Int (mod (hash key) width))
+
+(defn- bucket-entry [bucket: Bucket key: (Vec Any)] -> Int
+  (let [keys: (Vec (Vec Any)) (bucket-keys bucket) positions: (Vec Int) (nth (bucket-slots bucket) (bucket-slot key (bucket-width bucket)))]
+    (loop [offset: Int 0]
+      (if (>= offset (count positions))
+        -1
+        (let [position: Int (nth positions offset)]
+          (if (= (nth keys position) key)
+            position
+            (recur (inc offset))))))))
+
+(defn- bucket-get [bucket: Bucket key: (Vec Any)] -> (Vec t/Triple)
+  (let [position: Int (bucket-entry bucket key)]
+    (if (>= position 0) (nth (bucket-events bucket) position) empty-events)))
+
+(defn- bucket-rehash [bucket: Bucket width: Int] -> Bucket
+  (let [keys: (Vec (Vec Any)) (bucket-keys bucket)]
+    (loop [rows: (Vec (Vec Int)) (fresh-slot-rows width) position: Int 0]
+      (if (>= position (count keys))
+        (->Bucket width keys (bucket-events bucket) rows)
+        (let [slot: Int (bucket-slot (nth keys position) width)]
+          (recur (assoc rows slot (conj (nth rows slot) position)) (inc position)))))))
+
+(defn- bucket-set
+  [bucket: Bucket
+   key: (Vec Any)
+   events: (Vec t/Triple)] -> Bucket
+  (let [at: Int (bucket-entry bucket key)]
+    (if (>= at 0)
+      (->Bucket (bucket-width bucket) (bucket-keys bucket)
+        (assoc (bucket-events bucket) at events)
+        (bucket-slots bucket))
+      (let [width: Int (bucket-width bucket) position: Int (count (bucket-keys bucket)) keys: (Vec (Vec Any)) (conj (bucket-keys bucket) key) lists: (Vec (Vec t/Triple)) (conj (bucket-events bucket) events) slot: Int (bucket-slot key width) rows: (Vec (Vec Int)) (assoc (bucket-slots bucket) slot (conj (nth (bucket-slots bucket) slot) position)) grown: Bucket (->Bucket width keys lists rows)]
+        (if (> (count keys) (* bucket-slot-load width))
+          (bucket-rehash grown (* 2 width))
+          grown)))))
+
+(defn- one-event [event: t/Triple] -> (Vec t/Triple) [event])
+
+(defn- occurrence-key [occurrence: t/Triple] -> (Vec Any) [occurrence])
 
 (defn occurrence-of [event: t/Triple] -> t/Triple (t/triple-t1 event))
 
@@ -50,7 +117,7 @@
   [bucket: Bucket
    key: (Vec Any)
    event: t/Triple] -> Bucket
-  (assoc bucket key (conj (get bucket key empty-events) event)))
+  (bucket-set bucket key (conj (bucket-get bucket key) event)))
 
 (defn- without-event [events: (Vec t/Triple) target: t/Triple] -> (Vec t/Triple)
   (filterv (fn [event: t/Triple] -> Bool (not (= event target))) events))
@@ -59,15 +126,15 @@
   [bucket: Bucket
    key: (Vec Any)
    event: t/Triple] -> Bucket
-  (let [remaining: (Vec t/Triple) (without-event (get bucket key empty-events) event)]
-    (if (empty? remaining) (dissoc bucket key) (assoc bucket key remaining))))
+  (bucket-set bucket key (without-event (bucket-get bucket key) event)))
 
 (defn- rotate-add [rotation: Rotation event: t/Triple] -> Rotation
   (let [proposition: t/Triple (proposition-of (checked-assertion event)) t1: Any (t/triple-t1 proposition) t2: Any (t/triple-t2 proposition) t3: Any (t/triple-t3 proposition)]
     (->Rotation (rotation-space-id rotation)
       (rotation-version rotation)
       (conj (rotation-events rotation) event)
-      (assoc (rotation-by-occurrence rotation) (occurrence-of event) event)
+      (bucket-set (rotation-by-occurrence rotation) (occurrence-key (occurrence-of event))
+        (one-event event))
       (bucket-add (bucket-add (bucket-add (rotation-spo rotation) [t1] event) [t1 t2] event)
         [t1 t2 t3]
         event)
@@ -83,7 +150,8 @@
     (->Rotation (rotation-space-id rotation)
       (rotation-version rotation)
       (without-event (rotation-events rotation) event)
-      (dissoc (rotation-by-occurrence rotation) (occurrence-of event))
+      (bucket-set (rotation-by-occurrence rotation) (occurrence-key (occurrence-of event))
+        empty-events)
       (bucket-del (bucket-del (bucket-del (rotation-spo rotation) [t1] event) [t1 t2] event)
         [t1 t2 t3]
         event)
@@ -98,10 +166,10 @@
   (->Rotation space-id
     version
     empty-events
-    empty-occurrences
-    empty-bucket
-    empty-bucket
-    empty-bucket))
+    (empty-bucket)
+    (empty-bucket)
+    (empty-bucket)
+    (empty-bucket)))
 
 (defn space-id [rotation: Rotation] -> String (rotation-space-id rotation))
 
@@ -116,40 +184,39 @@
 ;; Every bound subset resolves to exactly one bucket key; results stay in commit
 ;; order, so `last` is the newest live occurrence of that pattern.
 (defn by-t1 [rotation: Rotation t1: Any] -> (Vec t/Triple)
-  (get (rotation-spo rotation) [t1] empty-events))
+  (bucket-get (rotation-spo rotation) [t1]))
 
 (defn by-t12
   [rotation: Rotation
    t1: Any
    t2: Any] -> (Vec t/Triple)
-  (get (rotation-spo rotation) [t1 t2] empty-events))
+  (bucket-get (rotation-spo rotation) [t1 t2]))
 
 (defn by-t2 [rotation: Rotation t2: Any] -> (Vec t/Triple)
-  (get (rotation-pos rotation) [t2] empty-events))
+  (bucket-get (rotation-pos rotation) [t2]))
 
 (defn by-t23
   [rotation: Rotation
    t2: Any
    t3: Any] -> (Vec t/Triple)
-  (get (rotation-pos rotation) [t2 t3] empty-events))
+  (bucket-get (rotation-pos rotation) [t2 t3]))
 
 (defn by-t3 [rotation: Rotation t3: Any] -> (Vec t/Triple)
-  (get (rotation-osp rotation) [t3] empty-events))
+  (bucket-get (rotation-osp rotation) [t3]))
 
 (defn by-t13
   [rotation: Rotation
    t1: Any
    t3: Any] -> (Vec t/Triple)
-  (get (rotation-osp rotation) [t3 t1] empty-events))
+  (bucket-get (rotation-osp rotation) [t3 t1]))
 
 (defn by-proposition
   [rotation: Rotation
    proposition: t/Triple] -> (Vec t/Triple)
-  (get (rotation-spo rotation)
+  (bucket-get (rotation-spo rotation)
     [(t/triple-t1 proposition)
      (t/triple-t2 proposition)
-     (t/triple-t3 proposition)]
-    empty-events))
+     (t/triple-t3 proposition)]))
 
 ;; nil in a slot means UNBOUND. This is the semantic entry point; the bucket
 ;; layout above is private detail every caller is expected to route through.
@@ -170,10 +237,12 @@
     [:else (rotation-events rotation)]))
 
 (defn live-occurrence? [rotation: Rotation occurrence: t/Triple] -> Bool
-  (contains? (rotation-by-occurrence rotation) occurrence))
+  (not (empty? (bucket-get (rotation-by-occurrence rotation)
+                 (occurrence-key occurrence)))))
 
 (defn event-at [rotation: Rotation occurrence: t/Triple] -> t/Triple?
-  (get (rotation-by-occurrence rotation) occurrence))
+  (let [events: (Vec t/Triple) (bucket-get (rotation-by-occurrence rotation) (occurrence-key occurrence))]
+    (if (empty? events) nil (nth events 0))))
 
 (defn newest-first [events: (Vec t/Triple)] -> (Vec t/Triple)
   (vec (reverse events)))
@@ -195,10 +264,152 @@
 (defn occurrences [events: (Vec t/Triple)] -> (Vec t/Triple)
   (mapv (fn [event: t/Triple] -> t/Triple (occurrence-of event)) events))
 
-(defn project [ctx: (Atom t/TermStore)] -> Rotation
-  (reduce (fn [rotation: Rotation event: t/Triple] -> Rotation (rotate-add rotation event))
-    (empty-rotation (store/space-id ctx) (store/current-sequence ctx))
-    (store/live-occurrences ctx)))
+;; The build owns its cells outright and closes into ordinary values, so the
+;; whole projection costs one append per leaf instead of one bucket copy.
+(defrecord BucketBuild
+  [width: Int
+   keys: (Vec (Vec Any))
+   events: (Vec (Atom (Vec t/Triple)))
+   slots: (Vec (Atom (Vec Int)))])
+
+(defrecord RotationBuild
+  [events: (Vec t/Triple)
+   by-occurrence: BucketBuild
+   spo: BucketBuild
+   pos: BucketBuild
+   osp: BucketBuild])
+
+(def empty-event-cells: (Vec (Atom (Vec t/Triple))) [])
+
+(def empty-position-cells: (Vec (Atom (Vec Int))) [])
+
+(defn- fresh-position-cells [width: Int] -> (Vec (Atom (Vec Int)))
+  (loop [cells: (Vec (Atom (Vec Int))) empty-position-cells position: Int 0]
+    (if (>= position width)
+      cells
+      (recur (conj cells (atom empty-positions)) (inc position)))))
+
+(defn- cells-add!
+  [cells: (Vec (Atom (Vec Int)))
+   slot: Int
+   position: Int] -> (Vec (Atom (Vec Int)))
+  (do
+    (swap! (nth cells slot) conj position)
+    cells))
+
+(defn- events-add!
+  [cells: (Vec (Atom (Vec t/Triple)))
+   at: Int
+   event: t/Triple] -> (Vec (Atom (Vec t/Triple)))
+  (do
+    (swap! (nth cells at) conj event)
+    cells))
+
+(defn- events-reset!
+  [cells: (Vec (Atom (Vec t/Triple)))
+   at: Int
+   events: (Vec t/Triple)] -> (Vec (Atom (Vec t/Triple)))
+  (do
+    (reset! (nth cells at) events)
+    cells))
+
+(defn- open-bucket-build [] -> BucketBuild
+  (->BucketBuild bucket-initial-slots empty-keys empty-event-cells
+    (fresh-position-cells bucket-initial-slots)))
+
+(defn- build-entry [build: BucketBuild key: (Vec Any)] -> Int
+  (let [keys: (Vec (Vec Any)) (bucketbuild-keys build) positions: (Vec Int) (deref (nth (bucketbuild-slots build) (bucket-slot key (bucketbuild-width build))))]
+    (loop [offset: Int 0]
+      (if (>= offset (count positions))
+        -1
+        (let [position: Int (nth positions offset)]
+          (if (= (nth keys position) key)
+            position
+            (recur (inc offset))))))))
+
+(defn- build-rehash! [build: BucketBuild width: Int] -> BucketBuild
+  (let [keys: (Vec (Vec Any)) (bucketbuild-keys build)]
+    (loop [cells: (Vec (Atom (Vec Int))) (fresh-position-cells width) position: Int 0]
+      (if (>= position (count keys))
+        (->BucketBuild width keys (bucketbuild-events build) cells)
+        (recur (cells-add! cells (bucket-slot (nth keys position) width) position)
+          (inc position))))))
+
+(defn- build-append!
+  [build: BucketBuild
+   key: (Vec Any)
+   events: (Vec t/Triple)] -> BucketBuild
+  (let [width: Int (bucketbuild-width build) position: Int (count (bucketbuild-keys build)) keys: (Vec (Vec Any)) (conj (bucketbuild-keys build) key) cells: (Vec (Atom (Vec t/Triple))) (conj (bucketbuild-events build) (atom events)) grown: BucketBuild (->BucketBuild width keys cells (cells-add! (bucketbuild-slots build) (bucket-slot key width) position))]
+    (if (> (count keys) (* bucket-slot-load width))
+      (build-rehash! grown (* 2 width))
+      grown)))
+
+(defn- build-add!
+  [build: BucketBuild
+   key: (Vec Any)
+   event: t/Triple] -> BucketBuild
+  (let [at: Int (build-entry build key)]
+    (if (>= at 0)
+      (->BucketBuild (bucketbuild-width build) (bucketbuild-keys build)
+        (events-add! (bucketbuild-events build) at event)
+        (bucketbuild-slots build))
+      (build-append! build key (one-event event)))))
+
+(defn- build-set!
+  [build: BucketBuild
+   key: (Vec Any)
+   event: t/Triple] -> BucketBuild
+  (let [at: Int (build-entry build key)]
+    (if (>= at 0)
+      (->BucketBuild (bucketbuild-width build) (bucketbuild-keys build)
+        (events-reset! (bucketbuild-events build) at (one-event event))
+        (bucketbuild-slots build))
+      (build-append! build key (one-event event)))))
+
+(defn- close-event-cells [cells: (Vec (Atom (Vec t/Triple)))] -> (Vec (Vec t/Triple))
+  (loop [lists: (Vec (Vec t/Triple)) empty-event-lists position: Int 0]
+    (if (>= position (count cells))
+      lists
+      (recur (conj lists (deref (nth cells position))) (inc position)))))
+
+(defn- close-position-cells [cells: (Vec (Atom (Vec Int)))] -> (Vec (Vec Int))
+  (loop [rows: (Vec (Vec Int)) empty-slot-rows position: Int 0]
+    (if (>= position (count cells))
+      rows
+      (recur (conj rows (deref (nth cells position))) (inc position)))))
+
+(defn- close-bucket-build [build: BucketBuild] -> Bucket
+  (->Bucket (bucketbuild-width build)
+    (bucketbuild-keys build)
+    (close-event-cells (bucketbuild-events build))
+    (close-position-cells (bucketbuild-slots build))))
+
+(defn- build-rotate-add! [build: RotationBuild event: t/Triple] -> RotationBuild
+  (let [proposition: t/Triple (proposition-of (checked-assertion event)) t1: Any (t/triple-t1 proposition) t2: Any (t/triple-t2 proposition) t3: Any (t/triple-t3 proposition)]
+    (->RotationBuild (conj (rotationbuild-events build) event)
+      (build-set! (rotationbuild-by-occurrence build) (occurrence-key (occurrence-of event))
+        event)
+      (build-add! (build-add! (build-add! (rotationbuild-spo build) [t1] event) [t1 t2] event)
+        [t1 t2 t3]
+        event)
+      (build-add! (build-add! (rotationbuild-pos build) [t2] event)
+        [t2 t3]
+        event)
+      (build-add! (build-add! (rotationbuild-osp build) [t3] event)
+        [t3 t1]
+        event))))
+
+(defn project! [ctx: (Atom t/TermStore)] -> Rotation
+  (let [built: RotationBuild (reduce (fn
+                                       [build: RotationBuild
+                                        event: t/Triple] -> RotationBuild (build-rotate-add! build event)) (->RotationBuild empty-events (open-bucket-build) (open-bucket-build) (open-bucket-build) (open-bucket-build)) (store/live-occurrences ctx))]
+    (->Rotation (store/space-id ctx)
+      (store/current-sequence ctx)
+      (rotationbuild-events built)
+      (close-bucket-build (rotationbuild-by-occurrence built))
+      (close-bucket-build (rotationbuild-spo built))
+      (close-bucket-build (rotationbuild-pos built))
+      (close-bucket-build (rotationbuild-osp built)))))
 
 ;; A retraction withdraws the NEWEST live occurrence of its proposition — the
 ;; same choice store/apply-operation-state makes, so the delta cannot drift from

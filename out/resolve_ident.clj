@@ -34,7 +34,7 @@
 (defn graph-ordinals [r] (:ordinals r))
 
 (defn ^Graph graph [store writers]
-  (->Graph store (atom (rot/project store)) writers (atom no-ordinals)))
+  (->Graph store (atom (rot/project! store)) writers (atom no-ordinals)))
 
 (defn ^Graph new-graph [^String space-id]
   (graph (c/new-term-store space-id) {}))

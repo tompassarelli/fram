@@ -22,7 +22,7 @@
 (c/commit-transaction!
  corpus-ctx (mapv c/retract-operation (take-nth 3 corpus)))
 
-(def covering (rot/project corpus-ctx))
+(def covering (rot/project! corpus-ctx))
 (defn- brute [s p o]
   (filterv (fn [event]
              (let [prop (rot/proposition-of event)]
@@ -42,12 +42,12 @@
 
 ;; ------------------------------------------------- B. incremental == fresh
 (def delta-ctx (c/new-term-store "s1-delta"))
-(def pinned-empty (rot/project delta-ctx))
+(def pinned-empty (rot/project! delta-ctx))
 (doseq [batch (partition-all 4 corpus)]
   (c/commit-transaction! delta-ctx (mapv c/assert-operation batch)))
 (c/commit-transaction! delta-ctx (mapv c/retract-operation (take-nth 4 corpus)))
 (def incremental (rot/refresh pinned-empty delta-ctx))
-(def fresh (rot/project delta-ctx))
+(def fresh (rot/project! delta-ctx))
 (check! "delta-updated rotation is VALUE-equal to a from-scratch build"
         (= incremental fresh))
 (check! "a refreshed rotation is pinned to the store it projects"
@@ -58,7 +58,7 @@
 (def dup-ctx (c/new-term-store "s1-duplicates"))
 (def dup (t/triple "x" "same" "value"))
 (c/commit-transaction! dup-ctx [(c/assert-operation dup) (c/assert-operation dup)])
-(def dup-view (rot/project dup-ctx))
+(def dup-view (rot/project! dup-ctx))
 (c/commit-transaction! dup-ctx [(c/retract-operation dup)])
 (def dup-after (rot/refresh dup-view dup-ctx))
 (check! "two equal propositions are two live occurrences"
@@ -70,11 +70,11 @@
 ;; ------------------------------------------------------------ D. discipline
 (check! "a rotation from another space is refused, not silently reused"
         (= :rotation-space-mismatch
-           (try (rot/refresh (rot/project dup-ctx) delta-ctx) nil
+           (try (rot/refresh (rot/project! dup-ctx) delta-ctx) nil
                 (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))
 (check! "a rotation ahead of its store is refused"
         (= :rotation-ahead-of-store
-           (try (rot/refresh (assoc (rot/project dup-ctx) :version 99) dup-ctx) nil
+           (try (rot/refresh (assoc (rot/project! dup-ctx) :version 99) dup-ctx) nil
                 (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))
 
 ;; ----------------------------------------------------------------- E. minting
@@ -100,7 +100,7 @@
  upd-ctx [(c/assert-operation repeated)
           (c/assert-operation (t/triple "n" "single-pred" "other"))
           (c/assert-operation repeated)])
-(def upd-view (rot/project upd-ctx))
+(def upd-view (rot/project! upd-ctx))
 (def compiled (txn/compile-single-update upd-view "n" "single-pred" "new"))
 (check! "one live occurrence -> one retraction, duplicates included"
         (= 4 (count compiled)))
@@ -150,7 +150,7 @@
 
 ;; -------------------------------------------------------------- H. fram.claims
 (def claim-ctx (c/new-term-store "s1-claims"))
-(def sess (s/session claim-ctx))
+(def sess (s/session! claim-ctx))
 (s/setup! sess)
 (s/def-predicate! sess "risk" "single" "literal")
 (def subject (s/mint-node! sess "name" "@assessment"))
