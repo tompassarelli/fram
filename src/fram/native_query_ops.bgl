@@ -1148,7 +1148,16 @@
    snapshot-version: Int
    digest: String] -> PageResult
   (if (nil? page)
-    (->PageResult (rpc-query-rows rows) nil)
+    ;; An unpaged answer nests one Term node per row, so it is bounded by the
+    ;; same codec budget the occurrence path takes; say so here instead of
+    ;; letting the encoder fail on the way out.
+    (if (> (count rows) unpaged-occurrence-limit)
+      (do
+        (record-read-error!
+         context :term-depth-exceeded
+         "unpaged query result exceeds the TermCodecV1 depth bound")
+        (empty-query-page-result))
+      (->PageResult (rpc-query-rows rows) nil))
     (let [limit (page-request-limit! context page)]
       (cond
         [(not (read-context-ok? context)) (empty-query-page-result)]
