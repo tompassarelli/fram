@@ -90,6 +90,7 @@ typedef struct native_m0_type_4 {
   native_m0_type_3 field_2;
   native_m0_type_0 field_3;
   native_m0_type_2 field_4;
+  native_m0_type_3 field_5;
 } native_m0_type_4;
 
 typedef struct native_m0_type_5 {
@@ -105,6 +106,7 @@ typedef struct native_m0_type_6 {
   native_m0_type_2 field_3;
   native_m0_type_4 field_4;
   bool field_5;
+  native_m0_type_2 field_6;
 } native_m0_type_6;
 
 typedef struct native_m0_type_7 {
@@ -121,7 +123,7 @@ native_m0_type_0 fram_stub_generated_abi(void);
 native_m0_type_4 fram_stub_store_boot(
     native_arena *arena, const native_capability *capability,
     native_m0_type_1 canonical_log_path, native_m0_type_1 space_id,
-    native_m0_type_2 log_bytes);
+    native_m0_type_2 log_bytes, native_m0_type_2 snapshot_bytes);
 native_m0_type_6 fram_stub_store_dispatch(
     native_arena *arena, const native_capability *capability,
     native_m0_type_4 store, native_m0_type_5 request,
@@ -159,6 +161,7 @@ typedef native_m0_type_4 fram_server_store_boot_return;
 typedef native_m0_type_1 fram_server_store_boot_arg_0;
 typedef native_m0_type_1 fram_server_store_boot_arg_1;
 typedef native_m0_type_2 fram_server_store_boot_arg_2;
+typedef native_m0_type_2 fram_server_store_boot_arg_3;
 typedef native_m0_type_6 fram_server_store_dispatch_return;
 typedef native_m0_type_4 fram_server_store_dispatch_arg_0;
 typedef native_m0_type_5 fram_server_store_dispatch_arg_1;
@@ -177,9 +180,9 @@ typedef native_m0_type_6 fram_server_codec_release_response_arg_0;
 #define FRAM_SERVER_CALL_GENERATED_ABI(arena, capability)                \
   FRAM_SERVER_SYMBOL_GENERATED_ABI()
 #define FRAM_SERVER_CALL_STORE_BOOT(arena, capability, arg_0, arg_1,     \
-                                    arg_2)                                \
+                                    arg_2, arg_3)                         \
   FRAM_SERVER_SYMBOL_STORE_BOOT((arena), (capability), (arg_0), (arg_1), \
-                                (arg_2))
+                                (arg_2), (arg_3))
 #define FRAM_SERVER_CALL_STORE_DISPATCH(                                 \
     arena, capability, arg_0, arg_1, arg_2)                                  \
   FRAM_SERVER_SYMBOL_STORE_DISPATCH((arena), (capability), (arg_0),      \
@@ -415,26 +418,33 @@ static native_vec *make_vector(native_arena *arena, const uint8_t *bytes,
   return vector;
 }
 
-native_m0_type_0 fram_stub_generated_abi(void) { return INT64_C(2); }
+native_m0_type_0 fram_stub_generated_abi(void) { return INT64_C(3); }
 
 native_m0_type_4 fram_stub_store_boot(
     native_arena *arena, const native_capability *capability,
     native_m0_type_1 canonical_log_path, native_m0_type_1 space_id,
-    native_m0_type_2 log_bytes) {
+    native_m0_type_2 log_bytes, native_m0_type_2 snapshot_bytes) {
   static const uint8_t old_log[] = {'O', 'L', 'D', '!', 'x'};
+  static const uint8_t old_image[] = {'I', 'M', 'G'};
   static const uint8_t boot_bytes[] = {'B', 'O', 'O', 'T'};
+  static const char report[] = "smoke: snapshot boot degraded to full fold";
   native_m0_type_4 result = {FATAL, UINT64_C(0), UINT64_C(0),
-                             INT64_C(0), NULL};
+                             INT64_C(0), NULL, UINT64_C(0)};
+  uint8_t *report_bytes = NULL;
 
   boot_calls += 1u;
   if (capability->token == UINT64_C(1) &&
       text_is(canonical_log_path, "SMOKE_LOG_PATH") &&
       text_is(space_id, "smoke-space") &&
-      vector_is(log_bytes, old_log, sizeof(old_log))) {
+      vector_is(log_bytes, old_log, sizeof(old_log)) &&
+      vector_is(snapshot_bytes, old_image, sizeof(old_image))) {
     result.field_0 = OK;
     result.field_1 = UINT64_C(11);
     result.field_3 = INT64_C(4);
     result.field_4 = make_vector(arena, boot_bytes, sizeof(boot_bytes));
+    result.field_5 = native_text_alloc(arena, (uint64_t)(sizeof(report) - 1u),
+                                       &report_bytes);
+    memcpy(report_bytes, report, sizeof(report) - 1u);
   }
   return result;
 }
@@ -443,13 +453,16 @@ native_m0_type_6 fram_stub_store_dispatch(
     native_arena *arena, const native_capability *capability,
     native_m0_type_4 store, native_m0_type_5 request,
     native_m0_type_0 now_milliseconds) {
+  static int64_t image_items[] = {'I', 'M', 'G', '2'};
+  static native_vec image_write = {image_items, INT64_C(4), INT64_C(4)};
   native_m0_type_6 result = {FATAL,
                              UINT64_C(0),
                              UINT64_C(0),
                              NULL,
                              {FATAL, UINT64_C(0), UINT64_C(0),
-                              INT64_C(0), NULL},
-                             false};
+                              INT64_C(0), NULL, UINT64_C(0)},
+                             false,
+                             NULL};
   (void)arena;
 
   dispatch_calls += 1u;
@@ -461,6 +474,7 @@ native_m0_type_6 fram_stub_store_dispatch(
     result.field_3 = &tail_append;
     result.field_4 = store;
     result.field_5 = true;
+    result.field_6 = &image_write;
   }
   return result;
 }
@@ -625,6 +639,18 @@ static int request_from_bytes(const uint8_t *bytes, size_t length,
   return status;
 }
 
+static bool image_path_is(const char *log_path, const char *expected) {
+  char path[512];
+  size_t length = strlen(log_path);
+
+  if (length + strlen(".snapshot") + 1u > sizeof(path)) {
+    return false;
+  }
+  memcpy(path, log_path, length);
+  memcpy(path + length, ".snapshot", strlen(".snapshot") + 1u);
+  return file_is(path, expected);
+}
+
 int main(int argc, char **argv) {
   fram_server_store *store = NULL;
   fram_server_request *request = NULL;
@@ -638,9 +664,10 @@ int main(int argc, char **argv) {
 
   if (argc != 2 ||
       fram_server_generated_abi() != FRAM_SERVER_GENERATED_ABI ||
-      fram_server_store_boot(argv[1], "smoke-space", &store, error,
-                                 sizeof(error)) != FRAM_SERVER_OK ||
-      store == NULL || error[0] != '\0' || !file_is(argv[1], "OLD!BOOT")) {
+      fram_server_store_boot(argv[1], "smoke-space", UINT64_C(0), &store,
+                                 error, sizeof(error)) != FRAM_SERVER_OK ||
+      store == NULL || error[0] != '\0' || !file_is(argv[1], "OLD!BOOT") ||
+      !image_path_is(argv[1], "IMG")) {
     return 1;
   }
 
@@ -690,7 +717,8 @@ int main(int argc, char **argv) {
       request == NULL ||
       fram_server_store_dispatch(store, request, &response, error,
                                      sizeof(error)) != FRAM_SERVER_OK ||
-      response == NULL || !file_is(argv[1], "OLD!BOOTTAIL")) {
+      response == NULL || !file_is(argv[1], "OLD!BOOTTAIL") ||
+      !image_path_is(argv[1], "IMG2")) {
     return 7;
   }
   fram_server_codec_release_request(request);
@@ -830,12 +858,14 @@ static bool response_is(const fram_buffer *response) {
 
 int main(int argc, char **argv) {
   memory_host storage = {.bytes = {'O', 'L', 'D', '!', 'x'}, .length = 5u};
+  memory_host image = {.bytes = {'I', 'M', 'G'}, .length = 3u};
   fram_host_v1 host = {
       .abi_version = FRAM_ABI_VERSION,
       .struct_size = (uint32_t)sizeof(host),
       .allocation_context = &storage,
       .clock_context = &storage,
       .storage_context = &storage,
+      .snapshot_storage_context = &image,
       .allocate = host_allocate,
       .deallocate = host_deallocate,
       .clock_milliseconds = host_clock,
@@ -882,6 +912,10 @@ int main(int argc, char **argv) {
       storage.syncs != 5u || storage.length != 20u ||
       memcmp(storage.bytes, "OLD!BOOTTAILTAILTAIL", 20u) != 0) {
     return 5;
+  }
+  if (image.closes != 1u || image.syncs != 3u || image.length != 4u ||
+      memcmp(image.bytes, "IMG2", 4u) != 0) {
+    return 7;
   }
   fram_buffer_release(&response);
   if (storage.allocations != 4u || storage.deallocations != 4u) {
@@ -1102,6 +1136,7 @@ cmp "$scratch/expected-exports" "$scratch/actual-exports"
   "$scratch/native_shim.c" "$scratch/generated_stub.c" "$scratch/main.c" \
   -o "$scratch/smoke"
 printf 'OLD!x' >"$scratch/fram.log"
+printf 'IMG' >"$scratch/fram.log.snapshot"
 "$scratch/smoke" "$scratch/fram.log"
 
 "$cc" "${common_flags[@]}" "$repo/native/fram_embed.c" \
@@ -1135,6 +1170,7 @@ stop_host() {
 }
 
 printf 'OLD!x' >"$scratch/fram.log"
+printf 'IMG' >"$scratch/fram.log.snapshot"
 any_port="$("$scratch/host-client" free-port)"
 (
   unset FRAM_BIND FRAM_SERVER_ROLE FRAM_LISTEN_FD FRAM_LOG FRAM_SERVER_PORT \
@@ -1182,8 +1218,11 @@ stop_host "$scratch/any.err"
 grep -Fq "listening on 0.0.0.0:$any_port" "$scratch/any.err"
 printf 'OLD!BOOTTAILTAIL' >"$scratch/any.expected"
 cmp "$scratch/any.expected" "$scratch/fram.log"
+printf 'IMG2' >"$scratch/any.image.expected"
+cmp "$scratch/any.image.expected" "$scratch/fram.log.snapshot"
 
 printf 'OLD!x' >"$scratch/fram.log"
+printf 'IMG' >"$scratch/fram.log.snapshot"
 loopback_port="$("$scratch/host-client" free-port)"
 (
   unset FRAM_BIND FRAM_SERVER_ROLE FRAM_LISTEN_FD FRAM_LOG FRAM_SERVER_PORT \
