@@ -9,7 +9,9 @@
 ;; check replaces it.
 ;;
 ;; The allowlist is deliberately TIGHT — exactly what codegraph rents today
-;; ({fram.store, fram.datalog}, the same generic family north pins). Widening it is a
+;; ({fram.store, fram.datalog, fram.types}, the same generic family north pins).
+;; fram.types is on the list because the store's write surface takes Triples: a
+;; proposition cannot be spelled without the Term constructor. Widening it is a
 ;; conscious seam decision (edit this list), never a silent drift. If codegraph one day
 ;; legitimately needs fram.kernel/fold, that shows up here as a failing guard prompting
 ;; the decision — which is the point.
@@ -17,7 +19,7 @@
 (require '[clojure.string :as str])
 
 (def codegraph-src "codegraph/src")
-(def allowed #{"fram.store" "fram.datalog"})
+(def allowed #{"fram.store" "fram.datalog" "fram.types"})
 
 (def src-files
   (when (.exists (clojure.java.io/file codegraph-src))
