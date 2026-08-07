@@ -430,6 +430,63 @@
             upstreamBeaglePackage = beaglePkg;
           };
         });
+
+      # Answers every tool probe that makes tests/fram_wasm_embed_smoke.sh and
+      # tests/fram_snapshot_boot_test.sh SKIP, from the flake's own inputs.
+      mkDevShell = pkgs: beaglePkg: beagleSource:
+        let
+          # Bound by absolute path, never added to PATH: a cross cc-wrapper
+          # setup hook rebinds CC, which the smoke's native oracle also needs.
+          wasiCC = pkgs.pkgsCross.wasi32.stdenv.cc;
+          # `beagle build` reads its stage sources, shim, and source-fact
+          # projector from <root>/native-core, which the package does not ship.
+          nativeBeagle = pkgs.runCommand
+            "beagle-native-${beagle.shortRev}" {} ''
+            mkdir "$out"
+            cp -r ${beaglePkg}/. "$out/"
+            chmod -R u+w "$out"
+            cp -r ${beagleSource}/native-core "$out/native-core"
+            chmod -R u+w "$out/native-core"
+            # Every bin/ wrapper re-enters its original store root, which has no
+            # native-core; rebase them onto the composed one.
+            grep -rlF "${beaglePkg}" "$out/bin" | while IFS= read -r wrapper; do
+              sed -i "s|${beaglePkg}|$out|g" "$wrapper"
+            done
+            # This root is read-only, so the checkout bytecode gate can only
+            # fail here; its .zo came from beaglePkg's own build.
+            sed -i '1a export BEAGLE_NO_ZO_GATE=1' "$out/bin/beagle"
+          '';
+        in
+        pkgs.mkShell {
+          name = "fram-native";
+          # bin/fram-native-build compiles generated C under its own complete
+          # -Werror flag set; injected hardening flags fail it on warnings a
+          # plain host cc never raises.
+          hardeningDisable = [ "all" ];
+          packages = [
+            # clang links wasm32 objects through a bare `wasm-ld`.
+            pkgs.lld
+            # Reads the linked module for the wasm-embed seam ledger.
+            pkgs.wasm-tools
+            (pkgs.python3.withPackages (ps: [ ps.wasmtime ]))
+            # What .github/workflows/ci.yml installs to run the checkout suites.
+            pkgs.babashka
+            pkgs.clojure
+            pkgs.jdk
+            pkgs.ripgrep
+            pkgs.git
+          ];
+
+          FRAM_WASI_CC = "${wasiCC}/bin/wasm32-unknown-wasi-clang";
+          # bin/fram-native-build freezes every native program through Beagle;
+          # this is the rev flake.nix already pins for the graph-edit runtime.
+          FRAM_BEAGLE = "${nativeBeagle}/bin/beagle";
+
+          meta = {
+            description = "Fram native and wasm-embed development toolchain";
+            platforms = systems;
+          };
+        };
     in
     {
       packages = forAll (system: pkgs: rec {
@@ -437,6 +494,12 @@
         fram-graph-edit-runtime = mkGraphEditRuntime system pkgs fram
           beagle.packages.${system}.default beagle.outPath;
         default = fram;
+      });
+
+      devShells = forAll (system: pkgs: rec {
+        fram-native = mkDevShell pkgs beagle.packages.${system}.default
+          beagle.outPath;
+        default = fram-native;
       });
 
       checks = forAll (system: pkgs:

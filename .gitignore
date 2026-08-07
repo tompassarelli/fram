@@ -22,3 +22,6 @@ private-docs/
 docs/private/
 bench/vs-datascript/.cpcache/
 __pycache__/
+
+# direnv's realized devShell profile (.envrc)
+.direnv/
