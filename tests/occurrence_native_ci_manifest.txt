@@ -1,7 +1,9 @@
 # disposition<TAB>class<TAB>path<TAB>evidence-file#evidence-regex
-# exclude/exclude-gate entries are accepted only when their evidence regex
-# occurs in the named evidence file. Baseline entries run and compare failure sets.
+# exclude/exclude-gate/exclude-runner entries are accepted only when their evidence
+# regex occurs in the named evidence file. Baseline entries run and compare failure sets.
 # aggregate entries name current gates exercised by their toolchain producer.
+# exclude-runner names a current gate whose cost exceeds a hosted runner; it runs
+# in the flake devShell and before a release, and its evidence is the cost source.
 
 run-bb	current-model	tests/cloudflare_json_response_test.clj	-
 run-bb	current-model	tests/cloudflare_runtime_closure_test.clj	-
@@ -51,7 +53,6 @@ run-shell	current-cache	tests/fram_native_build_cache_smoke.sh	-
 run-shell	current-boundary	tests/fram_native_generated_adapter_smoke.sh	-
 run-shell	current-boundary	tests/fram_wasm_embed_smoke.sh	-
 run-shell	current-boundary	tests/fram_do_client_smoke.sh	-
-run-shell	current-boundary	tests/fram_snapshot_boot_test.sh	-
 run-shell	current-model	tests/codegraph_exec_test.sh	-
 run-shell	current-docs	tests/docs_semantics_ratchet.sh	-
 run-shell	current-boundary	tests/occurrence_native_ci_compare_test.sh	-
@@ -61,6 +62,8 @@ run-node	current-cloudflare	tests/cloudflare_worker_client_test.mjs	-
 run-node	current-node-client	tests/node_framrpc_client_test.mjs	-
 aggregate-nix	package-closure	tests/package_server_smoke.sh	flake.nix#package_server_smoke
 baseline-shell	vocab-residue	tests/vocab_ratchet_test.sh	tests/vocab_ratchet_test.sh#REGROWTH
+
+exclude-runner	runner-capacity	tests/fram_snapshot_boot_test.sh	tests/fram_snapshot_boot_test.sh#--host server
 
 exclude-gate	removed-flat-cli	scripts/readme-check.sh	scripts/readme-check.sh#core.engine.loop
 exclude-gate	removed-flat-store	bench/propagation/check-budget.clj	bench/propagation/sweep.clj#fram.schema
