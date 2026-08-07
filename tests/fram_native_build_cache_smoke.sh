@@ -91,7 +91,7 @@ typedef struct native_m0_type_9 {
   uint64_t field_1;
 } native_m0_type_9;
 
-native_m0_type_1 native_m0_fn_2(native_arena *arena, const native_capability *capability, native_m0_type_2 native_v_0, native_m0_type_2 native_v_1, native_m0_type_4 native_v_2);
+native_m0_type_1 native_m0_fn_2(native_arena *arena, const native_capability *capability, native_m0_type_2 native_v_0, native_m0_type_2 native_v_1, native_m0_type_4 native_v_2, native_m0_type_4 native_v_3);
 native_m0_type_9 native_m0_fn_3(native_m0_type_1 native_v_0);
 native_m0_type_6 native_m0_fn_5(native_arena *arena, const native_capability *capability, native_m0_type_5 native_v_0);
 native_m0_type_0 native_m0_fn_7(void);
@@ -109,12 +109,14 @@ native_m0_type_1 native_m0_fn_2(native_arena *arena,
                                   const native_capability *capability,
                                   native_m0_type_2 native_v_0,
                                   native_m0_type_2 native_v_1,
-                                  native_m0_type_4 native_v_2) {
+                                  native_m0_type_4 native_v_2,
+                                  native_m0_type_4 native_v_3) {
   (void)arena;
   (void)capability;
   (void)native_v_0;
   (void)native_v_1;
   (void)native_v_2;
+  (void)native_v_3;
   return (native_m0_type_1){.field_0 = 0};
 }
 
@@ -131,7 +133,7 @@ native_m0_type_6 native_m0_fn_5(native_arena *arena,
                             .field_1 = (native_vec *)0};
 }
 
-native_m0_type_0 native_m0_fn_7(void) { return 2; }
+native_m0_type_0 native_m0_fn_7(void) { return 3; }
 
 native_m0_type_5 native_m0_fn_11(native_arena *arena,
                                    const native_capability *capability,
@@ -292,7 +294,7 @@ uint32_t fram_server_generated_abi(void) {
   native_vec bytes = {0};
   fram_server_store_boot_return boot =
       FRAM_SERVER_CALL_STORE_BOOT(
-          &arena, &capability, "log", "space", &bytes);
+          &arena, &capability, "log", "space", &bytes, &bytes);
   fram_server_codec_read_request_return request =
       FRAM_SERVER_CALL_CODEC_READ_REQUEST(
           &arena, &capability, &bytes);
@@ -330,11 +332,13 @@ uint32_t fram_server_generated_abi(void) {
 
 int fram_server_store_boot(const char *log_path,
                                const char *space_id,
+                               uint64_t memory_budget_bytes,
                                fram_server_store **store_out,
                                char *error,
                                size_t capacity) {
   (void)log_path;
   (void)space_id;
+  (void)memory_budget_bytes;
   *store_out = NULL;
   clear_error(error, capacity);
   return FRAM_SERVER_FATAL;
@@ -443,8 +447,8 @@ symbols_header="$host_artifact/server_symbols.h"
   fail "server symbol header did not contain exactly eight symbol mappings"
 [[ "$(grep -c '^#define FRAM_SERVER_CALL_' "$symbols_header")" == "8" ]] ||
   fail "server symbol header did not contain exactly eight normalized calls"
-[[ "$(grep -Ec '^typedef [A-Za-z_][A-Za-z0-9_]* fram_server_[a-z_]+_(return|arg_[0-9]+);$' "$symbols_header")" == "19" ]] ||
-  fail "server symbol header did not contain all nineteen stable type aliases"
+[[ "$(grep -Ec '^typedef [A-Za-z_][A-Za-z0-9_]* fram_server_[a-z_]+_(return|arg_[0-9]+);$' "$symbols_header")" == "20" ]] ||
+  fail "server symbol header did not contain all twenty stable type aliases"
 required_symbol_lines=(
   '#define FRAM_SERVER_SYMBOL_GENERATED_ABI native_m0_fn_7'
   '#define FRAM_SERVER_SYMBOL_STORE_BOOT native_m0_fn_2'
@@ -458,6 +462,7 @@ required_symbol_lines=(
   'typedef native_m0_type_2 fram_server_store_boot_arg_0;'
   'typedef native_m0_type_2 fram_server_store_boot_arg_1;'
   'typedef native_m0_type_4 fram_server_store_boot_arg_2;'
+  'typedef native_m0_type_4 fram_server_store_boot_arg_3;'
   'typedef native_m0_type_5 fram_server_store_dispatch_return;'
   'typedef native_m0_type_0 fram_server_store_dispatch_arg_2;'
   'typedef native_m0_type_9 fram_server_store_shutdown_return;'
@@ -470,7 +475,7 @@ required_symbol_lines=(
   'typedef native_m0_type_8 fram_server_codec_release_response_return;'
   'typedef native_m0_type_5 fram_server_codec_release_response_arg_0;'
   '#define FRAM_SERVER_CALL_GENERATED_ABI(arena, capability) FRAM_SERVER_SYMBOL_GENERATED_ABI()'
-  '#define FRAM_SERVER_CALL_STORE_BOOT(arena, capability, arg_0, arg_1, arg_2) FRAM_SERVER_SYMBOL_STORE_BOOT((arena), (capability), (arg_0), (arg_1), (arg_2))'
+  '#define FRAM_SERVER_CALL_STORE_BOOT(arena, capability, arg_0, arg_1, arg_2, arg_3) FRAM_SERVER_SYMBOL_STORE_BOOT((arena), (capability), (arg_0), (arg_1), (arg_2), (arg_3))'
   '#define FRAM_SERVER_CALL_STORE_DISPATCH(arena, capability, arg_0, arg_1, arg_2) FRAM_SERVER_SYMBOL_STORE_DISPATCH((arena), (capability), (arg_0), (arg_1), (arg_2))'
   '#define FRAM_SERVER_CALL_STORE_SHUTDOWN(arena, capability, arg_0) FRAM_SERVER_SYMBOL_STORE_SHUTDOWN((arg_0))'
   '#define FRAM_SERVER_CALL_CODEC_READ_REQUEST(arena, capability, arg_0) FRAM_SERVER_SYMBOL_CODEC_READ_REQUEST((arena), (arg_0))'
