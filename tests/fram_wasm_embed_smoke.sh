@@ -108,6 +108,10 @@ awk '$1 == "image" { print $2 }' "$scratch/wasm.transcript" |
   fail "the checkpoint wrote no bytes to the host image object"
 grep -Fq 'image 0 ""' "$scratch/wasm.transcript" ||
   fail "the third pass did not open over the host-held image"
+# The guest holds no stderr capability, so the image object -- not a printed
+# line -- is how this regime shows which boot route ran.
+grep -Fq 'storage_truncate' "$scratch/wasm.tally" ||
+  fail "the image object was never rewritten through the imports"
 for hook in allocate deallocate clock_milliseconds storage_append \
   storage_close storage_read storage_size storage_sync storage_truncate; do
   grep -q "^host $hook " "$scratch/wasm.tally" ||

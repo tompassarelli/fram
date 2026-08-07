@@ -807,9 +807,12 @@ static int read_whole_object(const fram_server_host_v1 *host, void *context,
   return FRAM_SERVER_OK;
 }
 
-/* Formatted through write(2) rather than stdio: the wasm seam ledger pins
-   fd_write and no stdio stat capability. */
+/* Silent in the host-import regime: that guest holds no stderr capability, so
+   its embedder reads the route from the image object instead. */
 static void report_snapshot_line(uint64_t text) {
+#ifdef FRAM_WASM_HOST_IMPORTS
+  (void)text;
+#else
   uint64_t length = native_text_length(text);
   const uint8_t *bytes = native_text_bytes(text);
 
@@ -819,11 +822,15 @@ static void report_snapshot_line(uint64_t text) {
   }
   (void)!write(2, bytes, (size_t)length);
   (void)!write(2, "\n", (size_t)1u);
+#endif
 }
 
 /* Only a host that named a budget gets this line, so a default boot's stderr
    is byte-identical to what it was before limits became derivable. */
 static void report_derived_limits(const fram_server_limits *limits) {
+#ifdef FRAM_WASM_HOST_IMPORTS
+  (void)limits;
+#else
   char line[160];
   int length = snprintf(
       line, sizeof(line),
@@ -838,6 +845,7 @@ static void report_derived_limits(const fram_server_limits *limits) {
                  (size_t)length < sizeof(line) ? (size_t)length
                                                : sizeof(line) - 1u);
   }
+#endif
 }
 
 static int write_snapshot_vector(fram_server_store *store,
