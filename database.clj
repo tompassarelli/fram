@@ -12,6 +12,14 @@
             [fram.store :as term-store]
             [fram.types :as t]))
 
+;; Fork renames a live log, so it takes the same lifetime lock the server does.
+;; Callers reach this file from their own working directory, so the sibling is
+;; located from this file rather than from the process's.
+(load-file
+ (.getPath (java.io.File.
+            (.getParentFile (.getCanonicalFile (java.io.File. (str *file*))))
+            "writer_authority.clj")))
+
 (def ^:private ^"[B" triple-log-magic
   (.getBytes "FRAMLOG\u0000" java.nio.charset.StandardCharsets/UTF_8))
 (def ^:private legacy-fri-magic
@@ -461,6 +469,25 @@
     (.setLength file length)
     (.force (.getChannel file) true)))
 
+(def ^:private fork-marker-suffix ".fork")
+(def ^:private fork-pending-suffix ".fork-new")
+
+(defn- fork-marker-path [store] (str store fork-marker-suffix))
+(defn- fork-pending-path [path] (str path fork-pending-suffix))
+
+(defn- read-fork-marker [store]
+  (let [file (java.io.File. (str (fork-marker-path store)))]
+    (when (.isFile file)
+      (branch/parse-fork-marker
+       (strict-utf8-string (java.nio.file.Files/readAllBytes (.toPath file))
+                           "fork marker")))))
+
+(defn- require-no-pending-fork! [store]
+  (when (.exists (java.io.File. (str (fork-marker-path store))))
+    (fail! :fork-incomplete
+           "a fork of this store was interrupted and has not been completed"
+           {:path (str store) :marker (fork-marker-path store)})))
+
 (defn open-database!
   "Open a FRAMLOG-backed TermStore. A passive reader reports a torn trailing
    frame and refuses later writes. An authority-holding caller may pass
@@ -469,6 +496,7 @@
   ([path expected-space] (open-database! path expected-space {}))
   ([path expected-space {:keys [repair-torn?] :or {repair-torn? false}}]
    (let [canonical (.getPath (.getCanonicalFile (java.io.File. (str path))))
+         _ (require-no-pending-fork! canonical)
          parsed (read-triple-log! canonical)
          space-id (:space-id parsed)]
      (when (and expected-space (not= expected-space space-id))
@@ -548,6 +576,7 @@
   ([store-path branch expected-space
     {:keys [repair-torn?] :or {repair-torn? false}}]
    (let [store (.getPath (.getCanonicalFile (java.io.File. (str store-path))))
+         _ (require-no-pending-fork! store)
          document (read-branch-ref store branch)]
      (cond
        (and (nil? document) (= branch branch/default-branch))
@@ -592,10 +621,53 @@
             :torn-tail (when-not repair-torn? (:torn-tail tail-parsed))
             :recovered-tail (when repair-torn? (:torn-tail tail-parsed))}))))))
 
+(defn- delete-file! [path]
+  (java.nio.file.Files/deleteIfExists (.toPath (java.io.File. (str path)))))
+
+(defn- install-pending! [pending target]
+  (when (.exists (java.io.File. (str pending)))
+    (move-atomically! pending target)))
+
+;; Every file a fork installs is prepared before its marker is written, so a
+;; fork interrupted at any point finishes by replaying the renames below in
+;; this order; each one is skipped when its prepared file is already consumed.
+(defn- complete-fork! [store marker]
+  (let [parent (branch/forkmarker-parent marker)
+        child (branch/forkmarker-child marker)
+        parent-tail (branch/branch-tail-path store parent)
+        child-tail (branch/branch-tail-path store child)
+        parent-ref (branch/ref-path store parent)
+        child-ref (branch/ref-path store child)
+        sealed (branch/segment-path store (branch/forkmarker-segment marker))]
+    (when-not (.exists (java.io.File. (str sealed)))
+      (move-atomically! parent-tail sealed))
+    (install-pending! (fork-pending-path parent-tail) parent-tail)
+    (install-pending! (fork-pending-path parent-ref) parent-ref)
+    (install-pending! (fork-pending-path child-ref) child-ref)
+    (install-pending! (fork-pending-path child-tail) child-tail)
+    ;; The parent's image is derived state whose watermark no longer names the
+    ;; tail it was built beside.
+    (delete-file! (branch/snapshot-path parent-tail))
+    (delete-file! (fork-marker-path store))
+    nil))
+
+(defn- acquire-fork-authority! [paths]
+  (reduce
+   (fn [held path]
+     (if-let [handle (writer-authority/try-acquire! path)]
+       (conj held handle)
+       (do
+         (doseq [previous held] (writer-authority/release! previous))
+         (fail! :writer-authority-held
+                "a writer holds this store; fork runs offline only"
+                {:path path :lock (writer-authority/authority-path path)}))))
+   [] paths))
+
 (defn fork-store!
   "Seal the parent branch's tail into the shared segment chain and give parent
    and child fresh continuation tails that both begin at the next sequence.
-   Offline: no writer may hold either tail while this runs."
+   Offline: fork holds writer authority over the store and both tails for its
+   whole run, and refuses rather than rename a log a writer still holds."
   ([store-path child-branch]
    (fork-store! store-path branch/default-branch child-branch))
   ([store-path parent-branch child-branch]
@@ -607,57 +679,81 @@
      (when (= parent child)
        (fail! :invalid-branch-name "fork requires two different branch names"
               {:branch parent}))
-     (doseq [path [child-tail (branch/ref-path store child)]]
-       (when (.exists (java.io.File. (str path)))
-         (fail! :branch-exists "fork child branch already exists"
-                {:branch child :path path})))
-     (let [opened (open-branch! store parent nil {})
-           parsed (read-triple-log! parent-tail true)]
-       (when (:torn-tail parsed)
-         (fail! :torn-tail-repair-required
-                "fork requires a parent tail with no torn trailing frame"
-                {:branch parent :path parent-tail}))
-       (let [space-id (:space-id parsed)
-             ^bytes content (java.nio.file.Files/readAllBytes
-                             (.toPath (java.io.File. (str parent-tail))))
-             record (branch/->SegmentRecord
-                     (sha256-hex content)
-                     (long (or (:tx-seq (first (:frames parsed))) 0))
-                     (long (alength content)))
-             document (or (read-branch-ref store parent)
-                          (branch/empty-ref space-id))
-             plan (branch/fork-plan
-                   document record
-                   (long (term-store/current-sequence
-                          (:term-store opened))))
-             chain (branch/forkplan-document plan)
-             text (branch/print-ref chain)]
-         (ensure-directory! (branch/segments-directory store))
-         (ensure-directory! (branch/refs-directory store))
-         (when (not= child-tail store)
-           (ensure-directory! (branch/branches-directory store)))
-         (move-atomically! parent-tail
-                           (branch/segment-path
-                            store (branch/segmentrecord-sha256 record)))
-         (write-text-durable! (branch/ref-path store parent) text)
-         (write-text-durable! (branch/ref-path store child) text)
-         (doseq [tail [parent-tail child-tail]]
-           (create-triple-log! tail space-id
-                               {:deflate? (:deflate? parsed)
-                                :continuation? true}))
-         ;; The parent's image is derived state whose watermark no longer names
-         ;; the tail it was built beside.
-         (java.nio.file.Files/deleteIfExists
-          (.toPath (java.io.File. (str (branch/snapshot-path parent-tail)))))
-         {:space-id space-id
-          :fork-sequence (branch/forkplan-fork-sequence plan)
-          :segment (branch/segmentrecord-sha256 record)
-          :chain (mapv branch/segmentrecord-sha256
-                       (branch/refdocument-segments chain))
-          :parent {:branch parent :tail parent-tail
-                   :ref (branch/ref-path store parent)}
-          :child {:branch child :tail child-tail
-                  :ref (branch/ref-path store child)}})))))
+     (let [held (acquire-fork-authority!
+                 (distinct [store parent-tail child-tail]))]
+       (try
+         (when-let [pending (read-fork-marker store)]
+           (complete-fork! store pending))
+         (doseq [path [child-tail (branch/ref-path store child)]]
+           (when (.exists (java.io.File. (str path)))
+             (fail! :branch-exists "fork child branch already exists"
+                    {:branch child :path path})))
+         (let [document (read-branch-ref store parent)]
+           (when (and (nil? document) (not= parent branch/default-branch))
+             (fail! :branch-missing "branch has no ref"
+                    {:branch parent :path (branch/ref-path store parent)}))
+           (let [parsed (read-triple-log! parent-tail true)
+                 space-id (:space-id parsed)
+                 frames (:frames parsed)
+                 base (or document (branch/empty-ref space-id))
+                 chained? (pos? (count (branch/refdocument-segments base)))]
+             (when (:torn-tail parsed)
+               (fail! :torn-tail-repair-required
+                      "fork requires a parent tail with no torn trailing frame"
+                      {:branch parent :path parent-tail}))
+             (when (not= space-id (branch/refdocument-space-id base))
+               (fail! :space-mismatch "FRAMLOG belongs to a different SpaceId"
+                      {:expected (branch/refdocument-space-id base)
+                       :actual space-id :branch parent}))
+             (when (not= chained? (boolean (:continuation? parsed)))
+               (fail! :invalid-branch-chain
+                      (if chained?
+                        "FRAMLOG branch tail must carry the continuation flag"
+                        "FRAMLOG base chain segment must not carry the continuation flag")
+                      {:branch parent :path parent-tail}))
+             (let [^bytes content (java.nio.file.Files/readAllBytes
+                                   (.toPath (java.io.File. (str parent-tail))))
+                   record (branch/->SegmentRecord
+                           (sha256-hex content)
+                           (long (or (:tx-seq (first frames)) 0))
+                           (long (or (:tx-seq (last frames)) 0))
+                           (long (alength content)))
+                   ;; The tail's own last frame, else the chain's recorded end:
+                   ;; a fork reads no sealed segment to learn where it forked.
+                   plan (branch/fork-plan
+                         base record
+                         (long (or (:tx-seq (last frames))
+                                   (branch/chain-end-sequence base))))
+                   chain (branch/forkplan-document plan)
+                   text (branch/print-ref chain)
+                   marker (branch/->ForkMarker
+                           parent child (branch/segmentrecord-sha256 record))
+                   parent-ref (branch/ref-path store parent)
+                   child-ref (branch/ref-path store child)]
+               (ensure-directory! (branch/segments-directory store))
+               (ensure-directory! (branch/refs-directory store))
+               (when (not= child-tail store)
+                 (ensure-directory! (branch/branches-directory store)))
+               (doseq [path [parent-tail child-tail parent-ref child-ref]]
+                 (delete-file! (fork-pending-path path)))
+               (doseq [tail [parent-tail child-tail]]
+                 (create-triple-log! (fork-pending-path tail) space-id
+                                     {:deflate? (:deflate? parsed)
+                                      :continuation? true}))
+               (doseq [ref [parent-ref child-ref]]
+                 (write-text-durable! (fork-pending-path ref) text))
+               (write-text-durable! (fork-marker-path store)
+                                    (branch/print-fork-marker marker))
+               (complete-fork! store marker)
+               {:space-id space-id
+                :fork-sequence (branch/forkplan-fork-sequence plan)
+                :segment (branch/segmentrecord-sha256 record)
+                :chain (mapv branch/segmentrecord-sha256
+                             (branch/refdocument-segments chain))
+                :parent {:branch parent :tail parent-tail :ref parent-ref}
+                :child {:branch child :tail child-tail :ref child-ref}})))
+         (finally
+           (doseq [handle held] (writer-authority/release! handle))))))))
 
 (defn new-database
   "Create an in-memory authoritative database for one immutable SpaceId."

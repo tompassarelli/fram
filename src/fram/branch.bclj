@@ -9,14 +9,19 @@
 (define-mode strict)
 
 (def ref-format: String "framref/v1")
+(def fork-marker-format: String "framfork/v1")
 ;; The unnamed tail at <log> keeps this spelling in <log>.refs/.
 (def default-branch: String "default")
 (def max-branch-name-length: Int 64)
 (def max-chain-length: Int 64)
 
+;; start-sequence and end-sequence are 0 together when the segment holds no
+;; transaction; the ref is the only cheap record of where a sealed chain ends
+;; once the branch tail beside it is empty.
 (defrecord SegmentRecord
   [sha256: String
    start-sequence: Int
+   end-sequence: Int
    byte-count: Int])
 
 (defrecord RefDocument
@@ -36,6 +41,13 @@
   [document: RefDocument
    sealed: SegmentRecord
    fork-sequence: Int])
+
+;; A fork prepares every file it installs before it writes this marker, so the
+;; marker's presence means the remaining renames may be replayed as they stand.
+(defrecord ForkMarker
+  [parent: String
+   child: String
+   segment: String])
 
 (defn- fail [message: String code: Keyword] -> Any
   (throw (ex-info message {:type code :fram/code code})))
@@ -89,6 +101,7 @@
 (defn- segment-line [segment: SegmentRecord] -> String
   (str "segment " (segmentrecord-sha256 segment) " "
        (segmentrecord-start-sequence segment) " "
+       (segmentrecord-end-sequence segment) " "
        (segmentrecord-byte-count segment) "\n"))
 
 (defn print-ref [document: RefDocument] -> String
@@ -109,7 +122,7 @@
 
 (defn- parse-segment-line [line: String known: Any] -> SegmentRecord
   (let [fields: (Vec String) (vec (str/split line #" "))]
-    (if (not= 4 (count fields))
+    (if (not= 5 (count fields))
       (fail (str "branch ref segment line is malformed: " line)
             :invalid-branch-ref)
       (let [sha256: String (nth fields 1)]
@@ -122,9 +135,15 @@
            (fail (str "branch ref lists the same segment twice: " sha256)
                  :invalid-branch-ref)]
           [:else
-           (->SegmentRecord sha256
-                            (parse-count (nth fields 2) "segment start sequence")
-                            (parse-count (nth fields 3) "segment byte count"))])))))
+           (let [start: Int
+                 (parse-count (nth fields 2) "segment start sequence")
+                 end: Int (parse-count (nth fields 3) "segment end sequence")]
+             (if (< end start)
+               (fail (str "branch ref segment ends before it begins: " sha256)
+                     :invalid-branch-ref)
+               (->SegmentRecord sha256 start end
+                                (parse-count (nth fields 4)
+                                             "segment byte count"))))])))))
 
 (defn parse-ref [text: String] -> RefDocument
   (let [lines: (Vec String) (vec (str/split-lines text))]
@@ -176,6 +195,56 @@
 (defn empty-ref [space-id: String] -> RefDocument
   (->RefDocument space-id []))
 
+;; The last transaction the sealed chain names, or 0 when it names none.
+(defn chain-end-sequence [document: RefDocument] -> Int
+  (let [segments: (Vec SegmentRecord) (refdocument-segments document)]
+    (if (zero? (count segments))
+      0
+      (segmentrecord-end-sequence (nth segments (dec (count segments)))))))
+
+(defn print-fork-marker [marker: ForkMarker] -> String
+  (let [body: String
+        (str fork-marker-format "\n"
+             "parent " (forkmarker-parent marker) "\n"
+             "child " (forkmarker-child marker) "\n"
+             "segment " (forkmarker-segment marker) "\n")]
+    (str body "crc " (format "%08x" (crc32-of body)) "\n")))
+
+(defn parse-fork-marker [text: String] -> ForkMarker
+  (let [lines: (Vec String) (vec (str/split-lines text))]
+    (cond
+      [(not= 5 (count lines))
+       (fail "fork marker does not carry its three fields and CRC"
+             :invalid-fork-marker)]
+      [(not= fork-marker-format (nth lines 0))
+       (fail (str "fork marker format is unsupported: " (nth lines 0))
+             :unsupported-fork-marker-version)]
+      [(not (and (str/starts-with? (nth lines 1) "parent ")
+                 (str/starts-with? (nth lines 2) "child ")
+                 (str/starts-with? (nth lines 3) "segment ")))
+       (fail "fork marker does not name its parent, child, and segment"
+             :invalid-fork-marker)]
+      [:else
+       (let [body: String
+             (apply str
+                    (mapv (fn [line: String] -> String (str line "\n"))
+                          (subvec lines 0 4)))
+             parent: String (subs (nth lines 1) 7)
+             child: String (subs (nth lines 2) 6)
+             segment: String (subs (nth lines 3) 8)]
+         (cond
+           [(not= (nth lines 4) (str "crc " (format "%08x" (crc32-of body))))
+            (fail "fork marker CRC does not match" :invalid-fork-marker)]
+           [(not (and (valid-branch-name? parent)
+                      (valid-branch-name? child)
+                      (not= parent child)))
+            (fail "fork marker does not name two usable branches"
+                  :invalid-fork-marker)]
+           [(not (valid-segment-name? segment))
+            (fail "fork marker segment is not a SHA-256 hex digest"
+                  :invalid-fork-marker)]
+           [:else (->ForkMarker parent child segment)]))])))
+
 ;; Fork appends one sealed segment to the parent chain; parent and child then
 ;; name the identical chain and diverge only in their tails.
 (defn fork-plan
@@ -218,6 +287,9 @@
       [(not= (segmentrecord-start-sequence segment)
              (chainmember-start-sequence member))
        "FRAMLOG segment does not begin at its recorded transaction sequence"]
+      [(not= (segmentrecord-end-sequence segment)
+             (chainmember-end-sequence member))
+       "FRAMLOG segment does not end at its recorded transaction sequence"]
       [(chainmember-torn member)
        "FRAMLOG segment ends inside a transaction frame"]
       [(and (pos? index) (not (chainmember-continuation member)))

@@ -48,11 +48,12 @@
 (defrecord FrameDecodeResult [frame: t/TransactionFrame? error: String?])
 
 ;; One member of a branch's fold order: a sealed segment's bytes, or the tail's.
-;; start-sequence is the ref's record of the member's first transaction; 0 says
-;; the ref records none, which the fold then requires the member to honour.
+;; start-sequence and end-sequence are the ref's record of the member's span,
+;; 0 when it records none; the tail is named by no ref and carries 0 for both.
 (defrecord ChainPiece
   [bytes: (Vec Int)
-   start-sequence: Int])
+   start-sequence: Int
+   end-sequence: Int])
 
 (defrecord ChainFold
   [ok: Bool
@@ -603,9 +604,11 @@
    bytes: (Vec Int)
    header-bytes: Int
    start-sequence: Int
+   end-sequence: Int
    sealed: Bool] -> ChainFold
   (loop [position: Int header-bytes
-         first-frame: Bool true]
+         first-frame: Bool true
+         last-sequence: Int 0]
     (let [remaining (- (count bytes) position)
           short-piece
           (if sealed
@@ -614,11 +617,16 @@
             (->ChainFold true position nil))]
       (cond
         [(= remaining 0)
-         (if (and first-frame (> start-sequence 0))
-           (->ChainFold
-            false position
-            "FRAMLOG segment does not begin at its recorded transaction sequence")
-           (->ChainFold true position nil))]
+         (cond
+           [(and first-frame (> start-sequence 0))
+            (->ChainFold
+             false position
+             "FRAMLOG segment does not begin at its recorded transaction sequence")]
+           [(and sealed (not= last-sequence end-sequence))
+            (->ChainFold
+             false position
+             "FRAMLOG segment does not end at its recorded transaction sequence")]
+           [:else (->ChainFold true position nil)])]
         [(< remaining 4) short-piece]
         [:else
          (let [payload-length (u32-le-at bytes position)
@@ -666,7 +674,8 @@
                    (let [replayed
                          (term-store/replay-transaction-result! root frame)]
                      (if (term-store/transactionreplayresult-ok replayed)
-                       (recur (+ position frame-length) false)
+                       (recur (+ position frame-length) false
+                              (t/transactionframe-sequence frame))
                        (->ChainFold
                         false position
                         (or (term-store/transactionreplayresult-message replayed)
@@ -680,6 +689,7 @@
 
 ;; Fold a branch: every sealed segment in ref order, then its tail. A sealed
 ;; segment must consume exactly; only the tail may end inside a frame.
+;; fram.branch/chain-fault states the same rule hosted; both must move together.
 (defn boot-framlog-chain!
   [configured-space-id: String
    segments: (Vec ChainPiece)
@@ -727,13 +737,13 @@
                         (fold-chain-piece!
                          root (chainpiece-bytes piece)
                          (headerfields-header-bytes header)
-                         (chainpiece-start-sequence piece) sealed)]
+                         (chainpiece-start-sequence piece)
+                         (chainpiece-end-sequence piece) sealed)]
                     (if (chainfold-ok folded)
                       (recur (+ index 1) (chainfold-valid-bytes folded))
                       (failed-boot
                        (error-or (chainfold-error folded)
-                                 "FRAMLOG chain fold failed"))))]))))
-         )])))
+                                 "FRAMLOG chain fold failed"))))])))))])))
 
 (defn append-frame-bytes! [frame: t/TransactionFrame] -> BytesResult
   (let [payload (wire/->Encoder (wire/empty-byte-cell) (atom 0)

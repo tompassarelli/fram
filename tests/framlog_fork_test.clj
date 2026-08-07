@@ -93,9 +93,10 @@
              (= [(:segment receipt)]
                 (mapv branch/segmentrecord-sha256
                       (branch/refdocument-segments parent-ref)))))
-(check! "the sealed record carries the segment's start sequence and size"
+(check! "the sealed record carries the segment's sequence span and size"
         (let [record (first (branch/refdocument-segments parent-ref))]
           (and (= 1 (branch/segmentrecord-start-sequence record))
+               (= pre-fork-sequence (branch/segmentrecord-end-sequence record))
                (= (alength pre-fork-bytes)
                   (branch/segmentrecord-byte-count record)))))
 
@@ -222,6 +223,111 @@
            (error-code #(database/fork-store! torn-log "lane"))))
 (check! "a refused fork never seals the torn tail"
         (not (.exists (java.io.File. (branch/segments-directory torn-log)))))
+
+;; ------------------------------------------------------ fork of a sealed tail
+;; A branch whose tail was just sealed holds no transaction of its own, so the
+;; sequence a second fork reports can only come from the ref it already has.
+(def resumed-log (store-path "resumed.framlog"))
+(database/create-triple-log! resumed-log space)
+(let [db (database/open-database! resumed-log space)]
+  (database/assert! db (t/triple "seed" :n 1) {})
+  (database/assert! db (t/triple "seed" :n 2) {}))
+(def first-fork (database/fork-store! resumed-log "lane"))
+(def second-fork (database/fork-store! resumed-log "lane" "lane-2"))
+
+(check! "a fork of an already-sealed branch resumes the recorded sequence"
+        (= [2 2] [(:fork-sequence first-fork) (:fork-sequence second-fork)]))
+(check! "the second fork extends the chain by exactly one empty segment"
+        (= [2 [2 0]]
+           [(count (:chain second-fork))
+            (mapv branch/segmentrecord-end-sequence
+                  (branch/refdocument-segments
+                   (database/read-branch-ref resumed-log "lane-2")))]))
+(check! "a further fork with no write between refuses rather than seal twice"
+        (= :segment-already-sealed
+           (error-code #(database/fork-store! resumed-log "lane" "lane-3"))))
+(check! "the refused fork leaves the branch openable and unnamed"
+        (and (live? (database/open-branch! resumed-log "lane" space)
+                    (t/triple "seed" :n 2))
+             (nil? (database/read-branch-ref resumed-log "lane-3"))))
+
+;; ---------------------------------------------------------- writer authority
+(def locked-log (store-path "locked.framlog"))
+(database/create-triple-log! locked-log space)
+(let [db (database/open-database! locked-log space)]
+  (database/assert! db (t/triple "locked" :n 1) {}))
+(def held (writer-authority/acquire! locked-log))
+
+(check! "fork refuses while a writer holds the store"
+        (= :writer-authority-held
+           (error-code #(database/fork-store! locked-log "lane"))))
+(check! "the refused fork sealed nothing"
+        (not (.exists (java.io.File. (branch/segments-directory locked-log)))))
+(writer-authority/release! held)
+(check! "fork proceeds once writer authority is released"
+        (= 1 (count (:chain (database/fork-store! locked-log "lane")))))
+
+;; ------------------------------------------------------ interrupted forks
+;; Put a completed fork back to the state it passes through between writing its
+;; marker and its last rename: every file it installs is at its pending name.
+(defn- derail-fork! [log child segment]
+  (doseq [path [log
+                (branch/ref-path log branch/default-branch)
+                (branch/ref-path log child)
+                (branch/branch-tail-path log child)]]
+    (java.nio.file.Files/move
+     (.toPath (java.io.File. (str path)))
+     (.toPath (java.io.File. (str path ".fork-new")))
+     (into-array java.nio.file.CopyOption [])))
+  (java.nio.file.Files/write
+   (.toPath (java.io.File. (str log ".fork")))
+   (.getBytes (branch/print-fork-marker
+               (branch/->ForkMarker branch/default-branch child segment))
+              java.nio.charset.StandardCharsets/UTF_8)
+   (into-array java.nio.file.OpenOption
+               [java.nio.file.StandardOpenOption/CREATE
+                java.nio.file.StandardOpenOption/WRITE
+                java.nio.file.StandardOpenOption/TRUNCATE_EXISTING])))
+
+(defn- interrupted-store! [name unseal?]
+  (let [log (store-path name)]
+    (database/create-triple-log! log space)
+    (let [db (database/open-database! log space)]
+      (database/assert! db (t/triple "before" :crash 1) {}))
+    (let [receipt (database/fork-store! log "lane")]
+      (derail-fork! log "lane" (:segment receipt))
+      (when unseal?
+        (java.nio.file.Files/move
+         (.toPath (java.io.File. (branch/segment-path log (:segment receipt))))
+         (.toPath (java.io.File. (str log)))
+         (into-array java.nio.file.CopyOption [])))
+      log)))
+
+(def sealed-crash (interrupted-store! "crash-sealed.framlog" false))
+(def unsealed-crash (interrupted-store! "crash-unsealed.framlog" true))
+
+(check! "an interrupted fork is named on open rather than read as a lost log"
+        (= [:fork-incomplete :fork-incomplete]
+           [(error-code #(database/open-database! sealed-crash space))
+            (error-code #(database/open-branch! sealed-crash "lane" space))]))
+(check! "an interrupted fork that had not sealed yet is named the same way"
+        (= :fork-incomplete
+           (error-code #(database/open-database! unsealed-crash space))))
+(check! "a later fork finishes the interrupted one before refusing a repeat"
+        (= [:branch-exists :branch-exists]
+           [(error-code #(database/fork-store! sealed-crash "lane"))
+            (error-code #(database/fork-store! unsealed-crash "lane"))]))
+(check! "both branches of a resumed fork carry the pre-fork history"
+        (every? (fn [[log name]]
+                  (live? (database/open-branch! log name space)
+                         (t/triple "before" :crash 1)))
+                [[sealed-crash branch/default-branch] [sealed-crash "lane"]
+                 [unsealed-crash branch/default-branch] [unsealed-crash "lane"]]))
+(check! "a resumed fork leaves no marker or pending file behind"
+        (every? (fn [log]
+                  (and (not (.exists (java.io.File. (str log ".fork"))))
+                       (not (.exists (java.io.File. (str log ".fork-new"))))))
+                [sealed-crash unsealed-crash]))
 
 (let [failures (remove second @checks)]
   (if (empty? failures)

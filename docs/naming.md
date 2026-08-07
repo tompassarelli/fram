@@ -28,7 +28,7 @@ Rejected bench:
 - **plane** — collides with infrastructure control/data planes.
 - **reality** — claims truth a world need not have.
 - **universe** — claims totality although a version may be partial.
-- **branch** — describes mechanics but not what is branching, and collides with git.
+- **branch** — describes mechanics but not what is branching, and collides with git. **Superseded 2026-08-08** for a different thing: see [branch](#branch--chosen-2026-08-08), where the mechanics are what is being named.
 
 ## codegraph — chosen 2026-07-26
 
@@ -162,6 +162,40 @@ epochs and range manifests (a ledger-sealing prior, see the
 [glossary](glossary.md#storage-and-query)), the sealed graph-edit runtime, and
 the migration seal. A build stage freezes; a range of history is sealed. Both
 words keep their own prior.
+
+## branch — chosen 2026-08-08
+
+The thing is a named line of appends over a shared segment chain: forking one
+names the parent's sealed segments plus a fresh tail of its own, and the two
+lines then differ only in what they append afterwards. It promises no ordering
+between branches and no merge. It is durable on-disk vocabulary — the
+`fram.branch` module, `<log>.refs/` and `<log>.branches/` beside the store, and
+the `framref/v1` and `framfork/v1` format tags.
+
+This reverses the [world](#world--chosen-2026-07-26-retired-2026-08-07) bench,
+which rejected **branch** as describing mechanics rather than what is branching.
+That ruling was about a query-visibility scope. Here the mechanics are the
+thing, and the git prior — a named ref into one shared immutable history that
+diverges at a point — matches without a correction paragraph, so the former
+collision is the alignment. Sealing a segment keeps fram's existing
+ledger-sealing prior, and **fork** stays the verb for the operation and never
+names its result.
+
+Rejected bench:
+
+- **world**, **version** — retired 2026-08-07 and spent for new naming.
+- **lane** — carries no prior about sharing history with what it came from.
+- **timeline** — imports an ordering across branches that no branch promises.
+- **line** — too weak to carry a module name and a directory name.
+
+**default** names the branch whose tail is the store file itself and which is
+therefore unnamed in `<log>.branches/`. The deciding prior is the starting line
+a reader already expects a checkout to have; **main** and **master** import a
+git-specific argument this engine has no stake in, and **root** names a tree
+position the chain does not have.
+
+Respelling any of these once a store has forked is a data migration, not a
+rename.
 
 ## Appending an entry
 

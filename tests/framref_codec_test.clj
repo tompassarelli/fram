@@ -18,11 +18,18 @@
 (def hash-a (apply str (repeat 64 "a")))
 (def hash-b (apply str (repeat 64 "b")))
 
+;; Hand-built ref and marker text needs the same CRC the codec writes, or every
+;; refusal below would be the CRC's rather than the one under test.
+(defn- sealed-text [body]
+  (let [digest (java.util.zip.CRC32.)]
+    (.update digest (.getBytes body java.nio.charset.StandardCharsets/UTF_8))
+    (str body (format "crc %08x\n" (.getValue digest)))))
+
 (def document
   (branch/->RefDocument
    "ref-codec-space"
-   [(branch/->SegmentRecord hash-a 1 4096)
-    (branch/->SegmentRecord hash-b 9 128)]))
+   [(branch/->SegmentRecord hash-a 1 8 4096)
+    (branch/->SegmentRecord hash-b 9 11 128)]))
 
 (def text (branch/print-ref document))
 
@@ -37,9 +44,13 @@
 (check! "the printed ref names its format, space, segments, and CRC"
         (= ["framref/v1"
             "space ref-codec-space"
-            (str "segment " hash-a " 1 4096")
-            (str "segment " hash-b " 9 128")]
+            (str "segment " hash-a " 1 8 4096")
+            (str "segment " hash-b " 9 11 128")]
            (vec (butlast (clojure.string/split-lines text)))))
+(check! "the chain's end sequence is its last segment's recorded end"
+        (= [11 0]
+           [(branch/chain-end-sequence document)
+            (branch/chain-end-sequence (branch/empty-ref "ref-codec-space"))]))
 
 (check! "an unknown ref format is refused by name"
         (= :unsupported-branch-ref-version
@@ -53,8 +64,25 @@
               (branch/print-ref
                (branch/->RefDocument
                 "ref-codec-space"
-                [(branch/->SegmentRecord hash-a 1 4096)
-                 (branch/->SegmentRecord hash-a 12 128)]))))))
+                [(branch/->SegmentRecord hash-a 1 8 4096)
+                 (branch/->SegmentRecord hash-a 12 14 128)]))))))
+;; The four-field segment line is the shape this ref format had before it
+;; recorded an end sequence; a ref that still carries it must be refused rather
+;; than read as a shorter chain.
+(check! "a ref in the four-field segment shape is refused, not misread"
+        (= :invalid-branch-ref
+           (error-code
+            #(branch/parse-ref
+              (sealed-text (str "framref/v1\nspace ref-codec-space\n"
+                                "segment " hash-a " 1 4096\n"))))))
+(check! "a segment that ends before it begins is refused"
+        (= :invalid-branch-ref
+           (error-code
+            #(branch/parse-ref
+              (branch/print-ref
+               (branch/->RefDocument
+                "ref-codec-space"
+                [(branch/->SegmentRecord hash-a 8 1 4096)]))))))
 (check! "a malformed segment name is refused"
         (= :invalid-branch-ref
            (error-code
@@ -69,12 +97,17 @@
         (= :invalid-branch-ref
            (error-code
             #(branch/parse-ref
-              (clojure.string/replace text "1 4096" "1 4096x")))))
+              (sealed-text
+               (clojure.string/replace
+                (clojure.string/join
+                 "\n" (conj (vec (butlast (clojure.string/split-lines text)))
+                            ""))
+                "8 4096" "8 4096x"))))))
 (check! "an edited ref whose CRC no longer matches is refused"
         (= :invalid-branch-ref
            (error-code
             #(branch/parse-ref
-              (clojure.string/replace text "9 128" "9 129")))))
+              (clojure.string/replace text "11 128" "11 129")))))
 (check! "a missing CRC line is refused"
         (= :invalid-branch-ref
            (error-code
@@ -118,6 +151,13 @@
             [(member 1 8 4096 false "ref-codec-space" false)
              (member 9 11 128 true "ref-codec-space" false)]
             (member 12 14 96 true "other-space" false))))
+(check! "a segment whose end sequence differs from its record is refused"
+        (= "FRAMLOG segment does not end at its recorded transaction sequence"
+           (branch/chain-fault
+            document
+            [(member 1 7 4096 false "ref-codec-space" false)
+             (member 9 11 128 true "ref-codec-space" false)]
+            (member 12 14 96 true "ref-codec-space" false))))
 (check! "a segment whose size differs from its record is refused"
         (= "FRAMLOG segment size does not match its branch ref record"
            (branch/chain-fault
@@ -136,8 +176,8 @@
            (branch/chain-fault
             (branch/->RefDocument
              "ref-codec-space"
-             [(branch/->SegmentRecord hash-a 1 4096)
-              (branch/->SegmentRecord hash-b 12 128)])
+             [(branch/->SegmentRecord hash-a 1 8 4096)
+              (branch/->SegmentRecord hash-b 12 14 128)])
             [(member 1 8 4096 false "ref-codec-space" false)
              (member 12 14 128 true "ref-codec-space" false)]
             (member 15 15 96 true "ref-codec-space" false))))
@@ -184,14 +224,57 @@
                   (branch/forkplan-document
                    (branch/fork-plan
                     (branch/->RefDocument
-                     "ref-codec-space" [(branch/->SegmentRecord hash-a 1 4096)])
-                    (branch/->SegmentRecord hash-b 9 128)
+                     "ref-codec-space"
+                     [(branch/->SegmentRecord hash-a 1 8 4096)])
+                    (branch/->SegmentRecord hash-b 9 11 128)
                     11))))))
 (check! "a fork plan refuses a segment the parent chain already names"
         (= :segment-already-sealed
            (error-code
             #(branch/fork-plan
-              document (branch/->SegmentRecord hash-b 20 64) 19))))
+              document (branch/->SegmentRecord hash-b 20 22 64) 19))))
+
+;; A fork marker is read only after a crash, so it must name the exact fork it
+;; belongs to or be refused; a guessed parent renames the wrong log.
+(def marker (branch/->ForkMarker "default" "lane" hash-a))
+(def marker-text (branch/print-fork-marker marker))
+
+(check! "a printed fork marker parses back to the identical marker"
+        (= marker (branch/parse-fork-marker marker-text)))
+(check! "the printed marker names its format, parent, child, segment, and CRC"
+        (= ["framfork/v1" "parent default" "child lane" (str "segment " hash-a)]
+           (vec (butlast (clojure.string/split-lines marker-text)))))
+(check! "an unknown marker format is refused by name"
+        (= :unsupported-fork-marker-version
+           (error-code
+            #(branch/parse-fork-marker
+              (clojure.string/replace marker-text
+                                      "framfork/v1" "framfork/v2")))))
+(check! "an edited marker whose CRC no longer matches is refused"
+        (= :invalid-fork-marker
+           (error-code
+            #(branch/parse-fork-marker
+              (clojure.string/replace marker-text "child lane"
+                                      "child other")))))
+(check! "a marker naming one branch twice is refused"
+        (= :invalid-fork-marker
+           (error-code
+            #(branch/parse-fork-marker
+              (sealed-text
+               (str "framfork/v1\nparent lane\nchild lane\nsegment "
+                    hash-a "\n"))))))
+(check! "a marker whose segment is not a digest is refused"
+        (= :invalid-fork-marker
+           (error-code
+            #(branch/parse-fork-marker
+              (sealed-text
+               (str "framfork/v1\nparent default\nchild lane\nsegment "
+                    (subs hash-a 1) "\n"))))))
+(check! "a marker missing a field is refused"
+        (= :invalid-fork-marker
+           (error-code
+            #(branch/parse-fork-marker
+              (sealed-text "framfork/v1\nparent default\nchild lane\n")))))
 
 (check! "branch names that cannot address a ref file are refused"
         (= [false false false false false true true]
