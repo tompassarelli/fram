@@ -13,10 +13,13 @@ run-bb	current-model	tests/core_code_blind_test.clj	-
 run-bb	current-model	tests/datalog_fn_test.clj	-
 run-bb	current-model	tests/datalog_predicate_test.clj	-
 run-bb	current-model	tests/fold_occurrence_test.clj	-
+run-bb	current-model	tests/framlog_chain_boot_test.clj	-
 run-bb	current-model	tests/framlog_deflate_test.clj	-
+run-bb	current-model	tests/framlog_fork_test.clj	-
 run-bb	current-model	tests/fram_promotion_test.clj	-
 run-bb	current-model	tests/fram_rpc_v1_test.clj	-
 run-bb	current-model	tests/framlog_torn_sweep_test.clj	-
+run-bb	current-model	tests/framref_codec_test.clj	-
 run-bb	current-model	tests/framrpc_latency_convoy_test.clj	-
 run-bb	current-model	tests/framrpc_write_conc_test.clj	-
 run-bb	current-model	tests/fri_cache_v2_test.clj	-
