@@ -11,6 +11,7 @@ src/fram/query.bgl
 src/fram/native_wire_codec.bgl
 src/commit_plan.bgl
 src/fram/log_codec.bgl
+src/fram/snapshot_codec.bgl
 src/fram/native_lease_ops.bgl
 src/fram/native_query_ops.bgl
 src/fram/native_dispatch.bgl
