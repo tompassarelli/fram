@@ -84,28 +84,15 @@
    space-id: String
    log-bytes: (Vec Int)
    report: String] -> StoreResult
-  (let [byte-count (count log-bytes)
-        streamed
-        (loop [position 0
-               stream (log/start-framlog-stream space-id)]
-          (if (or (>= position byte-count)
-                  (log/bootstream-complete stream)
-                  (log/bootstream-error stream))
-            stream
-            (let [remaining (- byte-count position)
-                  chunk-size
-                  (if (> remaining log/framlog-stream-max-chunk-bytes)
-                    log/framlog-stream-max-chunk-bytes remaining)
-                  chunk-end (+ position chunk-size)]
-              (recur
-               chunk-end
-               (log/feed-framlog-stream!
-                stream (subvec log-bytes position chunk-end) false)))))
-        completed
-        (if (or (log/bootstream-complete streamed)
-                (log/bootstream-error streamed))
-          streamed
-          (log/feed-framlog-stream! streamed empty-bytes true))
+  ;; The whole log is already borrowed here; slicing it into chunks would copy
+  ;; every byte again.
+  (let [completed
+        (if (log/valid-byte-vector? log-bytes)
+          (log/consume-framlog-header!
+           (log/start-framlog-stream space-id) log-bytes true)
+          (log/failed-boot-stream
+           (log/start-framlog-stream space-id)
+           "FRAMLOG byte vector contains a value outside u8"))
         root (log/bootstream-store completed)
         error (log/bootstream-error completed)]
     (if (and (nil? error)
