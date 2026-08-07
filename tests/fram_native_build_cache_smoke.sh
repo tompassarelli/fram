@@ -173,6 +173,15 @@ typedef struct native_arena { int marker; } native_arena;
 typedef struct native_capability { int marker; } native_capability;
 typedef struct native_vec { int64_t length; } native_vec;
 
+#define NATIVE_TRAP_INVALID_ARGUMENT UINT32_C(1)
+#define NATIVE_TRAP_OVERFLOW UINT32_C(2)
+#define NATIVE_TRAP_ARENA_EXHAUSTED UINT32_C(3)
+#define NATIVE_TRAP_OUT_OF_RANGE UINT32_C(4)
+#define NATIVE_TRAP_IO UINT32_C(5)
+
+typedef void (*native_trap_reporter)(uint32_t code);
+void native_set_trap_reporter(native_trap_reporter reporter);
+
 int fake_native_shim(void);
 #endif
 C
@@ -183,6 +192,7 @@ C
   cat >"$out/native_shim.c" <<'C'
 #include "native_shim.h"
 int fake_native_shim(void) { return 0; }
+void native_set_trap_reporter(native_trap_reporter reporter) { (void)reporter; }
 C
   missing_symbol=0
   duplicate_symbol=0
