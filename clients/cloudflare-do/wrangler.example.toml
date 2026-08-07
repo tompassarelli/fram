@@ -1,0 +1,32 @@
+# wrangler.example.toml — the deployment shape a Durable Object needs to carry
+# a Fram engine. Copy it next to your own worker and edit the names.
+#
+#   scripts/build-wasm.sh          # produces lib/libfram.wasm + provenance.json
+#   wrangler deploy
+name = "fram-do"
+main = "src/worker.mjs"
+compatibility_date = "2025-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The engine ships as a module in the bundle, not as a fetched asset: a Worker
+# cannot compile wasm at runtime.
+[[rules]]
+type = "CompiledWasm"
+globs = ["**/*.wasm"]
+fallthrough = true
+
+# One Durable Object owns one FRAMLOG and its snapshot image. Fram assumes a
+# single writer for the whole open-to-close lifetime, which is exactly what a
+# Durable Object already guarantees.
+[[durable_objects.bindings]]
+name = "FRAM"
+class_name = "FramLog"
+
+# SQLite-backed storage is what gives the object a transactional KV; the two
+# chunked key ranges (framlog/, framimage/) are published in one transaction.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["FramLog"]
+
+[vars]
+FRAM_SPACE_ID = "cloudflare-do"

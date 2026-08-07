@@ -1,0 +1,42 @@
+{
+  "name": "@tompassarelli/fram-cloudflare-do",
+  "version": "0.1.0",
+  "description": "Embed the Fram engine inside a Cloudflare Durable Object over the wasm-embed host seam",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./src/adapter.mjs"
+    },
+    "./seams": {
+      "import": "./src/seams.mjs"
+    }
+  },
+  "files": [
+    "src/adapter.mjs",
+    "src/seams.mjs",
+    "scripts/build-wasm.sh",
+    "scripts/check-seams.mjs",
+    "wrangler.example.toml",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "check:seams": "node scripts/check-seams.mjs",
+    "pack:frames": "node test/pack-frames.mjs",
+    "test:node": "node test/run-node.mjs lib/libfram.wasm ../../tests/wasm_embed/frames",
+    "test:workerd": "node test/run-matrix.mjs test/out"
+  },
+  "devDependencies": {
+    "miniflare": "^5.20260801.0-alpha"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tompassarelli/fram.git",
+    "directory": "clients/cloudflare-do"
+  },
+  "license": "MIT OR Apache-2.0"
+}

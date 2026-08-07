@@ -1,0 +1,221 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// The workers-runtime half of the harness: workerd through miniflare, over real
+// DurableObjectStorage. Prints the same transcript as the native oracle so the
+// two can be compared byte for byte.
+//
+//   node test/run-matrix.mjs OUT-DIR [ORACLE-TRANSCRIPT] [DEPTH-ORACLE]
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Miniflare } from "miniflare";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, "..");
+const [outDirArgument, oraclePath, depthOraclePath] = process.argv.slice(2);
+const outDir = outDirArgument ?? `${here}/out`;
+const budgetMs = Number(process.env.FRAM_DO_BUDGET_MS ?? 600000);
+
+mkdirSync(outDir, { recursive: true });
+
+const watchdog = setTimeout(() => {
+  process.stderr.write(`run-matrix: no verdict within ${budgetMs} ms\n`);
+  process.exit(3);
+}, budgetMs);
+
+const mf = new Miniflare({
+  modulesRoot: root,
+  modules: [
+    { type: "ESModule", path: `${root}/test/worker/worker.mjs` },
+    { type: "ESModule", path: `${root}/src/adapter.mjs` },
+    { type: "ESModule", path: `${root}/src/seams.mjs` },
+    { type: "CompiledWasm", path: `${root}/lib/libfram.wasm` },
+    { type: "Data", path: `${root}/test/bundle/frames.bin` },
+    { type: "Text", path: `${root}/test/bundle/frames.json` },
+  ],
+  scriptPath: `${root}/test/worker/worker.mjs`,
+  // No cf metadata fetch: this row must run with no network and leave no
+  // .wrangler cache in the checkout.
+  cf: false,
+  compatibilityDate: "2025-06-01",
+  compatibilityFlags: ["nodejs_compat"],
+  durableObjects: { FRAM: { className: "FramLog", useSQLite: true } },
+});
+
+const failures = [];
+const notes = [];
+
+function check(condition, detail) {
+  if (condition) {
+    notes.push(`  ok   ${detail}`);
+  } else {
+    failures.push(detail);
+    notes.push(`  FAIL ${detail}`);
+  }
+}
+
+async function call(path, id, extra = "") {
+  const response = await mf.dispatchFetch(
+    `http://localhost${path}?id=${id}${extra}`,
+  );
+  const body = await response.json();
+  if (body.fatal) throw new Error(`${path}[${id}]: ${body.fatal}`);
+  return body;
+}
+
+// A frame's status is the oracle's business, so a nonzero one is only checked
+// here when no oracle transcript is supplied to compare against.
+async function transcript(id, passes, oracle) {
+  const lines = [];
+  for (const [label, manifest] of passes) {
+    const body = await call("/pass", id, `&label=${label}&manifest=${manifest}`);
+    lines.push(...body.out);
+    if (oracle) {
+      notes.push(`  note ${id} pass ${label}: ${body.failures} nonzero frames`);
+    } else {
+      check(
+        body.failures === 0,
+        `${id} pass ${label}: ${body.failures} frame failures`,
+      );
+    }
+  }
+  const log = new Uint8Array(
+    await (await mf.dispatchFetch(`http://localhost/dump?id=${id}&range=log`))
+      .arrayBuffer(),
+  );
+  const image = new Uint8Array(
+    await (await mf.dispatchFetch(`http://localhost/dump?id=${id}&range=image`))
+      .arrayBuffer(),
+  );
+  lines.push(`log ${log.length}`, `image ${image.length}`);
+  return { text: `${lines.join("\n")}\n`, log, image };
+}
+
+function compare(name, produced, oracle) {
+  if (!oracle) {
+    notes.push(`  skip ${name}: no oracle transcript supplied`);
+    return;
+  }
+  const expected = readFileSync(oracle, "utf8");
+  if (expected === produced) {
+    notes.push(`  ok   ${name} is identical to the native oracle`);
+    return;
+  }
+  failures.push(`${name} diverges from the native oracle`);
+  const wanted = expected.split("\n");
+  const found = produced.split("\n");
+  for (let i = 0; i < Math.max(wanted.length, found.length); i++) {
+    if (wanted[i] !== found[i]) {
+      notes.push(`  FAIL ${name} line ${i + 1}`);
+      notes.push(`    native  ${String(wanted[i]).slice(0, 120)}`);
+      notes.push(`    workerd ${String(found[i]).slice(0, 120)}`);
+      break;
+    }
+  }
+}
+
+try {
+  await (await mf.dispatchFetch("http://localhost/ready?id=warm")).json();
+
+  // 1. The frame matrix, three passes, against the native oracle.
+  const matrix = await transcript(
+    "matrix",
+    [
+      ["open", "manifest.txt"],
+      ["reopen", "manifest-reopen.txt"],
+      ["image", "manifest-image.txt"],
+    ],
+    oraclePath,
+  );
+  writeFileSync(`${outDir}/workerd.transcript`, matrix.text);
+  writeFileSync(`${outDir}/workerd.framlog`, matrix.log);
+  writeFileSync(`${outDir}/workerd.framimage`, matrix.image);
+  compare("matrix transcript", matrix.text, oraclePath);
+  check(
+    matrix.image.length > 0,
+    `the checkpoint wrote ${matrix.image.length} bytes to the image range`,
+  );
+
+  // 2. The unpaged-bound matrix, same three-pass shape.
+  const depth = await transcript(
+    "depth",
+    [
+      ["open", "manifest-depth.txt"],
+      ["reopen", "manifest-depth-reopen.txt"],
+      ["image", "manifest-depth-image.txt"],
+    ],
+    depthOraclePath,
+  );
+  writeFileSync(`${outDir}/workerd-depth.transcript`, depth.text);
+  writeFileSync(`${outDir}/workerd-depth.framlog`, depth.log);
+  compare("depth transcript", depth.text, depthOraclePath);
+
+  // 3. Multi-chunk coverage: a log past one 64 KiB chunk, read back whole.
+  const target = 96 * 1024;
+  const grown = await call("/grow", "multichunk", `&bytes=${target}`);
+  check(
+    grown.reached && grown.failures === 0,
+    `grew the log to ${grown.guestLogBytes} bytes in ${grown.rounds} rounds`,
+  );
+  const inventory = await call("/keys", "multichunk", "&prefix=framlog/");
+  const chunkKeys = inventory.keys.filter((key) => !key.endsWith("meta"));
+  const expectedChunks = Math.ceil(inventory.meta.length / 65536);
+  check(
+    inventory.meta.length > 65536,
+    `the durable log is ${inventory.meta.length} bytes, past one chunk`,
+  );
+  check(
+    chunkKeys.length === expectedChunks && expectedChunks > 1,
+    `${chunkKeys.length} chunk keys for ${inventory.meta.length} bytes ` +
+      `(expected ${expectedChunks})`,
+  );
+  // Queries only: a checkpoint over this much bulk state grows guest linear
+  // memory past the wasm32 ceiling, which is an engine budget question rather
+  // than a chunking one. The image range is covered by the two matrices above.
+  const reread = await transcript("multichunk", [
+    ["reopen", "manifest-depth-image.txt"],
+  ]);
+  check(
+    reread.log.length >= inventory.meta.length,
+    `the multi-chunk log reopened at ${reread.log.length} bytes ` +
+      `(was ${inventory.meta.length})`,
+  );
+  const rechecked = await call("/keys", "multichunk", "&prefix=framlog/");
+  check(
+    rechecked.keys.filter((key) => !key.endsWith("meta")).length ===
+      Math.ceil(rechecked.meta.length / 65536),
+    `the chunk inventory still matches the length after reopen`,
+  );
+  check(
+    reread.log.length === inventory.meta.length,
+    `the reopened multi-chunk log is unchanged by a read-only pass`,
+  );
+
+  // 4. Concurrent boot: many demands in one turn, one instance.
+  const raced = await call("/concurrent-boot", "race", "&width=8");
+  check(
+    raced.identical && raced.distinct === 1,
+    `8 concurrent boots produced ${raced.distinct} instance(s)`,
+  );
+  check(
+    raced.statuses.every((status) => status === 0),
+    `every racer answered a status frame: ${raced.statuses.join(",")}`,
+  );
+
+  process.stdout.write(`${notes.join("\n")}\n`);
+  if (failures.length) {
+    process.stdout.write(`run-matrix: FAIL\n${failures.join("\n")}\n`);
+    process.exitCode = 1;
+  } else {
+    process.stdout.write(
+      `run-matrix: PASS matrix-log=${matrix.log.length} ` +
+        `matrix-image=${matrix.image.length} depth-log=${depth.log.length}\n`,
+    );
+  }
+} catch (error) {
+  process.stdout.write(`${notes.join("\n")}\n`);
+  process.stdout.write(`run-matrix: FAIL ${error.stack ?? error.message}\n`);
+  process.exitCode = 1;
+} finally {
+  clearTimeout(watchdog);
+  await mf.dispose();
+}
