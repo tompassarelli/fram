@@ -64,11 +64,16 @@
   (if (nil? callee) nil (if (not= ck callee) [ck callee] nil)))) mentions))))]
   {:defns defns :by-name by-name :edges edges}))
 
-(defn blast-radius [edges]
-  (rsv/blast-closure edges))
-
 (defn ^String key->str [k]
   (str (nth k 0) "#" (nth k 1)))
+
+(defn key-index [edges]
+  (reduce (fn [m e] (assoc (assoc m (key->str (nth e 0)) (nth e 0)) (key->str (nth e 1)) (nth e 1))) {} (vec edges)))
+
+(defn blast-radius [edges]
+  (let [key-of (key-index edges)
+   closure (rsv/blast-closure (mapv (fn [e] [(key->str (nth e 0)) (key->str (nth e 1))]) (vec edges)))]
+  {:reaches (set (mapv (fn [r] [(get key-of (nth r 0)) (get key-of (nth r 1))]) (vec (:reaches closure)))) :blast (reduce (fn [m kv] (assoc m (get key-of (nth kv 0)) (set (mapv (fn [x] (get key-of x)) (vec (nth kv 1)))))) {} (vec (:blast closure)))}))
 
 (defn -main [& args]
   (let [facts-path (str (nth (vec args) 0))
