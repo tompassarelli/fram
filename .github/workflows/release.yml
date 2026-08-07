@@ -72,14 +72,13 @@ jobs:
         run: |
           _BEAGLE_RACKET="$(command -v racket)"
           export _BEAGLE_RACKET
-          export _BEAGLE_ZO_CHECKED=1
-          # Package linking owns collection resolution in this step.
-          export _BEAGLE_SCOPE_ROOT="$BEAGLE_HOME"
-          source "$BEAGLE_HOME/bin/_beagle-racket"
-          "$RACO" pkg install --auto --link \
+          # Link first: sourcing _beagle-racket runs a raco-make gate that
+          # cannot resolve the beagle collection until these links exist.
+          "$(dirname "$_BEAGLE_RACKET")/raco" pkg install --auto --link \
             "$BEAGLE_HOME/beagle-lib/" \
             "$BEAGLE_HOME/beagle-test/" \
             "$BEAGLE_HOME/beagle/"
+          source "$BEAGLE_HOME/bin/_beagle-racket"
           echo "FRAM_RACKET=$RACKET" >> "$GITHUB_ENV"
           echo "_BEAGLE_RACKET=$RACKET" >> "$GITHUB_ENV"
 
