@@ -2,13 +2,16 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "fram.h"
+#include "native_shim.h"
 #include "server_host.h"
 
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 struct fram_database {
   fram_server_store *store;
@@ -70,6 +73,31 @@ static fram_status public_status(int status) {
     return FRAM_OUT_OF_MEMORY;
   default:
     return FRAM_ENGINE_ERROR;
+  }
+}
+
+static fram_status trap_public_status(uint32_t code) {
+  switch (code) {
+  case NATIVE_TRAP_ARENA_EXHAUSTED:
+    return FRAM_OUT_OF_MEMORY;
+  case NATIVE_TRAP_IO:
+    return FRAM_HOST_ERROR;
+  default:
+    return FRAM_ENGINE_ERROR;
+  }
+}
+
+/* Formats into a buffer and writes the fd directly: a stdio stream would ask
+   the wasm host for fd_fdstat_get, a capability the seam ledger does not pin. */
+static void report_trap(uint32_t code) {
+  char line[96];
+  int length = snprintf(line, sizeof(line),
+                        "fram: engine trap code=%lu status=%d\n",
+                        (unsigned long)code, (int)trap_public_status(code));
+
+  if (length > 0) {
+    (void)!write(2, line, (size_t)length < sizeof(line) ? (size_t)length
+                                                        : sizeof(line) - 1u);
   }
 }
 
@@ -304,6 +332,7 @@ fram_status fram_open(const fram_open_options_v1 *options,
               "Fram open options or host ABI are invalid");
     return FRAM_INVALID_ARGUMENT;
   }
+  native_set_trap_reporter(report_trap);
   if (fram_server_generated_abi() != FRAM_SERVER_GENERATED_ABI) {
     set_error(error, FRAM_ENGINE_ERROR,
               "generated Fram engine ABI does not match the embedding host");
