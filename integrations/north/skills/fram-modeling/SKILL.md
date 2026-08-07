@@ -2,74 +2,91 @@
 name: fram-modeling
 description: >-
   Use when BUILDING a program, app, or tool on the Fram engine — modeling
-  data/logic as recursive Triples + Datalog instead of SQL/records/imperative
-state. Covers append-only occurrence history, live-view queries, and Datalog
-derivation. Formerly named fact-modeling. NOT for one-off store reads.
+  data as recursive Terms/Triples and querying it through FRAMRPC structured
+  plans instead of SQL/records/imperative state. Covers append-only occurrence
+  history, immutable snapshots, paging, and Datalog derivation. NOT for
+  one-off store reads or graph-authoring edits.
 ---
 
-# Fram modeling — building on the Fram engine (triples + Datalog)
+# Fram modeling — building on the Fram engine (recursive triples + FRAMRPC)
 
-The thesis (ADR 0001, archived in `fram:docs/archive/`): **the program/app/work IS a
-graph of triples.** Data, logic, and structure live as triples, so each is *reasoned*
-(Datalog: blast radius, transitive closure) and *repaired* (graph edits) the same
-uniform way. Text and SQL are projections, never the truth. For **greenfield**, the
-triple store is the backend — not SQL (persisting to SQL then rebuilding a graph to
-ask relational questions reintroduces the reconstruction tax the engine exists to
-kill).
+The current contract is in `fram:README.md`, `fram:docs/architecture.md`,
+`fram:docs/query-reference.md`, `fram:docs/ontology.md`, and
+`fram:docs/guarantees.md`. Documents under `fram:docs/archive/` are historical
+provenance and must not drive a design. Fram’s semantic model is recursive:
+`Atom := String | Int | Float | Bool | Keyword | Instant`, `Term := Atom | Triple`,
+and `Triple := (Term, Term, Term)`. Positions are neutral; domain roles come
+from asserted vocabulary, not a privileged subject/predicate/object schema.
 
-## 0. The surface is GENERATED — never trust a static list
+For greenfield work, model domain state as live Triples and let history,
+identity coordinates, and metadata use the same recursive vocabulary. SQL,
+records, maps, and text may be projections or local control data, but they are
+not a second semantic source of truth.
 
-Like beagle-authoring ("the compiler is the source of truth"), the Fram API churns.
-Inspect the source-head `fram:README.md`, `fram:docs/query-reference.md`, and the
-typed definitions under `fram:src/fram/` instead of relying on a static cheatsheet.
+## 0. Re-ground before designing
 
-## 1. The operating model (this does not churn)
+Read the current documentation named above, then inspect the typed definitions
+under `fram:src/fram/` and the official client under `fram:clients/node/`.
+The public data boundary is FRAMRPC v1, not an incidental internal Clojure
+function. The checkout CLI requires `FRAM_SPACE_ID` and routes data commands
+through `fram:bin/fram`; Node applications use `fram:clients/node/framrpc.mjs`.
+The native-first server is the default launcher; `jvm-dev` and `jvm-oracle` are
+explicit development routes.
 
-- **Rent the engine from bb:** `bb -cp "$FRAM_OUT" your.clj` (`FRAM_OUT` defaults to
-  `fram:out`); `(require '[fram.store :as c] '[fram.types :as t] '[fram.datalog :as d])`.
-- **Append-only — never mutate.** The unit of write is a proposition, `(t/triple s p
-  o)`, wrapped in `c/assert-operation` and committed with `c/commit-transaction!` on a
-  `c/new-term-store` context. An **update is a retraction plus an assertion in one
-  transaction** (`c/retract-operation` + `c/assert-operation`): the kernel records the
-  withdrawal link between the two occurrences itself, so nothing at the user level
-  reifies "supersedes". The old assertion stays, marked not live — so **history/audit
-  is intrinsic**, free.
-- **Query the LIVE view.** `c/live-propositions` returns the live view only; the
-  history surface is `c/semantic-history`, `c/live-occurrences`, and
-  `c/withdrawal-triples`. Any Atom is a Term, so a node is named by the thing it
-  already is — there is no id-minting step and no reverse map to keep.
-- **Reason with Datalog, not imperative walks** — *when the question is
-  relational/recursive*. A transitive closure ("what does X transitively depend on /
-  what breaks if I change X") is two `d/rule`s over `d/triple-relation`, run with
-  `d/run-rules!` and read with `d/facts`; ready/blocked-style derivation is
-  `d/negated-literal` + `d/run-strata!` (stratified negation). The graph is always
-  current; the answer is scope-correct (binding identity, not name match).
-- **Know when NOT to.** A flat per-row filter (no joins/recursion) is fine as plain
-  code — expressing it as Datalog is a *tax* (you re-state predicate schema the index
-  already owns, and it measured net-negative when tried). Datalog earns its keep on
-  the *relational/recursive* questions.
-- **No schema/migrations.** Predicates are open; adding a field is just a new fact —
-  no `CREATE TABLE`/`ALTER`.
+## 1. The operating model
 
-## 2. Ground-truth examples (read these, don't reinvent)
+- **Write through the public boundary.** `fram:bin/fram tell`, `retract`, and
+  `validate` are convenient CLI projections. For applications, use the Node
+  client’s `assert`, `retract`, or atomic `batch` methods. Every mutation is
+  append-only; replacing a value is a retraction plus an assertion in one
+  transaction. Never edit FRAMLOG or generated `fram:out/` directly.
+- **History is intrinsic.** An assertion creates an occurrence coordinate.
+  Retraction records a withdrawal Triple targeting the exact occurrence; the
+  old proposition remains addressable in history but is absent from the live
+  view. Transaction sequence plus operation ordinal define logical order; wall
+  clock time is metadata.
+- **Query immutable views.** Use `bin/fram query` or the Node client’s `query`,
+  with `current`, `asOf`, or `since` selectors. Base relations are
+  `triple(t1,t2,t3)` for live propositions and
+  `occurrence(coordinate,action,proposition)` for history. Queries are
+  structured plans, never query-text parsing; page nontrivial results and carry
+  the opaque cursor unchanged so the snapshot stays pinned.
+- **Use Datalog for joins and recursion.** Multiple rules reach a semi-naive
+  fixpoint; stratified negation belongs in ordered strata. The query reference
+  also defines predicates, arithmetic, aggregates, and the five positive text
+  relations (`text-match`, `text-phrase`, `text-substring`, `text-stem`,
+  `text-search`). A flat filter is ordinary application code when no join or
+  recursion is involved.
+- **No schema migrations.** Predicates are open. Adding a domain property is a
+  new Triple; cardinality, uniqueness, and replacement policy are explicit
+  domain rules, not implied by Triple positions.
 
-- **Update as retract-plus-assert, with the superseded assertion still queryable:**
-  `fram:codegraph/src/rename.bclj` and `fram:codegraph/src/supersession_check.bclj`.
-- **Transitive closure as two rules over the live propositions:**
-  `fram:codegraph/src/codegraph.bclj` (`closure-line!`), checked against an in-process
-  closure over the same edges.
-- **Reason/repair over code:** `fram:out/resolve.clj` (refers_to, rename/delete/callgraph) — and the **code-as-facts** skill for querying a Beagle tree relationally.
+## 2. Ground-truth examples (read these, don’t reinvent)
+
+- **Recursive terms and occurrence semantics:** `fram:README.md` and
+  `fram:docs/ontology.md`.
+- **Structured recursive query:** `fram:docs/query-reference.md` and
+  `fram:clients/node/README.md`.
+- **Executable contracts:** `fram:tests/triple_kernel_test.clj`,
+  `fram:tests/triple_query_test.clj`, and
+  `fram:tests/native_rpc_server_test.clj`.
+- **Beagle-authored engine code:** `fram:src/` is authoritative; generated
+  Clojure in `fram:out/` is a build projection. For editing that source, use
+  the `beagle-authoring` skill and its compiler-first loop.
 
 ## 3. Discipline (the smell tests)
-- If you reach for a mutable map/atom of records as the app's data model, stop — that
-  data should be facts (you lose history + reasoning otherwise). That's the
-  SQL-vs-facts mistake, in-process.
-- If you hand-roll a transitive closure with `loop/recur`, stop — it's a 2-rule
-  `reaches`. (The one place imperative is right: flat filters.)
-- If you find yourself minting ids for nodes, stop — the store interns Terms itself,
-  so hand it the name the thing already has and read it straight back.
 
-The family: Beagle text edits → beagle-authoring · graph-upstream files and
-relational code queries (edit channel + blast zone) → code-as-facts · building
-apps on the engine → fram-modeling. Loop vocabulary:
-`beagle:docs/authoring-loops.md`.
+- If a mutable map or record is standing in for durable domain state, stop: put
+  that state in Triples so history and recursive queries remain available.
+- If you hand-roll a relational or transitive walk, express it as a structured
+  Datalog rule set and verify it against the query contract. Keep flat filters
+  and presentation logic imperative.
+- If you mint opaque ids for values that already have identity as Terms, stop.
+  Use the Term directly; occurrence coordinates are created by the engine for
+  history, not by the application as a reverse map.
+- If you bypass FRAMRPC to reach an internal store helper, stop and confirm that
+  the task is engine implementation work rather than application modeling.
+
+The family: Beagle text edits → `beagle-authoring`; graph-upstream files and
+relational code queries → `code-as-facts`; applications on the engine → this
+skill. The source loop is documented in `beagle:docs/authoring-loops.md`.
