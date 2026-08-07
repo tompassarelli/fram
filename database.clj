@@ -7,6 +7,7 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [framrpc :as framrpc]
+            [fram.branch :as branch]
             [fram.kernel :as kernel]
             [fram.store :as term-store]
             [fram.types :as t]))
@@ -22,6 +23,9 @@
 ;; Header flag bit 0: every frame payload in this generation is
 ;; Deflate-compressed; the CRC still covers the stored (compressed) bytes.
 (def ^:private deflate-flag 1)
+;; Header flag bit 1: this generation continues a sealed segment chain and is
+;; not a whole store on its own, so every single-file open must refuse it.
+(def ^:private continuation-flag 2)
 (def ^:private triple-log-manifest-version
   "fram-triple-log-migration-manifest/v1")
 (def ^:private max-term-depth 256)
@@ -241,7 +245,9 @@
        (java.util.Arrays/equals
         prefix (java.util.Arrays/copyOfRange bytes 0 (alength prefix)))))
 
-(defn- parse-triple-log-bytes [^bytes bytes path]
+(defn- parse-triple-log-bytes
+  ([^bytes bytes path] (parse-triple-log-bytes bytes path false))
+  ([^bytes bytes path allow-continuation?]
   (when (or (bytes-prefix? bytes legacy-fri-magic)
             (bytes-prefix? bytes legacy-v2-edn-prefix))
     (fail! :migration-v2-cache-not-source
@@ -261,7 +267,12 @@
             flags (bit-and 65535 (int (.getShort buffer)))
             space-length (read-u32 buffer "SpaceId length")]
         (when-not (and (= triple-log-version version)
-                       (contains? #{triple-log-flags deflate-flag} flags))
+                       (contains? (if allow-continuation?
+                                    #{triple-log-flags deflate-flag
+                                      continuation-flag
+                                      (bit-or deflate-flag continuation-flag)}
+                                    #{triple-log-flags deflate-flag})
+                                  flags))
           (fail! :unsupported-log-version
                  "FRAMLOG version or flags are unsupported"
                  {:path path :version version :flags flags}))
@@ -272,7 +283,8 @@
         (let [space-bytes (byte-array (int space-length))
               _ (.get buffer space-bytes)
               space-id (strict-utf8-string space-bytes "SpaceId")
-              deflate? (= deflate-flag flags)
+              deflate? (pos? (bit-and deflate-flag flags))
+              continuation? (pos? (bit-and continuation-flag flags))
               header-bytes (.position buffer)]
           (loop [frames [] valid-bytes header-bytes prefix-ends {}]
             (let [offset (.position buffer)
@@ -280,12 +292,14 @@
               (cond
                 (zero? remaining)
                 {:space-id space-id :deflate? deflate? :frames frames
+                 :continuation? continuation?
                  :valid-bytes valid-bytes
                  :header-bytes header-bytes :prefix-ends prefix-ends
                  :torn-tail nil}
 
                 (< remaining 4)
                 {:space-id space-id :deflate? deflate? :frames frames
+                 :continuation? continuation?
                  :valid-bytes valid-bytes
                  :header-bytes header-bytes :prefix-ends prefix-ends
                  :torn-tail {:offset offset :bytes remaining
@@ -297,7 +311,9 @@
                     (fail! :corrupt-triple-log "FRAMLOG frame exceeds JVM bounds"
                            {:path path :offset offset :length payload-length}))
                   (if (< (.remaining buffer) (+ payload-length 4))
-                    {:space-id space-id :frames frames :valid-bytes valid-bytes
+                    {:space-id space-id :frames frames
+                     :continuation? continuation?
+                     :valid-bytes valid-bytes
                      :header-bytes header-bytes :prefix-ends prefix-ends
                      :torn-tail {:offset offset :bytes (- (alength bytes) offset)
                                  :reason :torn-transaction-frame}}
@@ -323,17 +339,19 @@
         (if (instance? clojure.lang.ExceptionInfo error)
           (throw error)
           (fail! :corrupt-triple-log "FRAMLOG header is truncated"
-                 {:path path :cause (.getMessage error)}))))))
+                 {:path path :cause (.getMessage error)})))))))
 
 (defn read-triple-log!
   "Read and validate a FRAMLOG generation without accepting any legacy shape."
-  [path]
-  (let [file (.getCanonicalFile (java.io.File. (str path)))]
-    (when-not (.isFile file)
-      (fail! :triple-log-missing "FRAMLOG source is missing"
-             {:path (.getPath file)}))
-    (parse-triple-log-bytes
-     (java.nio.file.Files/readAllBytes (.toPath file)) (.getPath file))))
+  ([path] (read-triple-log! path false))
+  ([path allow-continuation?]
+   (let [file (.getCanonicalFile (java.io.File. (str path)))]
+     (when-not (.isFile file)
+       (fail! :triple-log-missing "FRAMLOG source is missing"
+              {:path (.getPath file)}))
+     (parse-triple-log-bytes
+      (java.nio.file.Files/readAllBytes (.toPath file)) (.getPath file)
+      allow-continuation?))))
 
 (defn require-triple-log-header!
   "Return the immutable SpaceId of a validated FRAMLOG generation."
@@ -377,7 +395,8 @@
   "Atomically create a header-only FRAMLOG generation for SPACE-ID.
    {:deflate? true} creates a generation whose frames are Deflate-compressed."
   ([path space-id] (create-triple-log! path space-id {}))
-  ([path space-id {:keys [deflate?] :or {deflate? false}}]
+  ([path space-id {:keys [deflate? continuation?]
+                   :or {deflate? false continuation? false}}]
   (let [target (.getCanonicalFile (java.io.File. (str path)))
         parent (.getParentFile target)]
     (when-not (and (.isAbsolute target) parent (.isDirectory parent))
@@ -394,7 +413,9 @@
         (with-open [file-out (java.io.FileOutputStream. (.toFile tmp))
                     out (java.io.BufferedOutputStream. file-out)]
           (write-header! out space-id
-                         (if deflate? deflate-flag triple-log-flags))
+                         (bit-or (if deflate? deflate-flag triple-log-flags)
+                                 (if continuation?
+                                   continuation-flag triple-log-flags)))
           (.flush out)
           (.force (.getChannel file-out) true))
         (java.nio.file.Files/move
@@ -465,6 +486,178 @@
         :mutation-state (atom {:status :ready})
         :torn-tail (when-not repair-torn? (:torn-tail parsed))
         :recovered-tail (when repair-torn? (:torn-tail parsed))}))))
+
+(defn- sha256-hex [^bytes content]
+  (apply str (map #(format "%02x" (bit-and % 255))
+                  (.digest (java.security.MessageDigest/getInstance "SHA-256")
+                           content))))
+
+(defn- ensure-directory! [path]
+  (java.nio.file.Files/createDirectories
+   (.toPath (java.io.File. (str path)))
+   (make-array java.nio.file.attribute.FileAttribute 0))
+  (str path))
+
+(defn- move-atomically! [source target]
+  (java.nio.file.Files/move
+   (.toPath (java.io.File. (str source))) (.toPath (java.io.File. (str target)))
+   (into-array java.nio.file.CopyOption
+               [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+  (str target))
+
+(defn- write-text-durable! [path text]
+  (let [^bytes content (strict-utf8-bytes text "branch ref")
+        temporary (str path ".tmp")]
+    (with-open [file-out (java.io.FileOutputStream. (str temporary))
+                out (java.io.BufferedOutputStream. file-out)]
+      (.write out content)
+      (.flush out)
+      (.force (.getChannel file-out) true))
+    (move-atomically! temporary path)))
+
+(defn read-branch-ref
+  "Read a branch ref, or nil when the branch has no sealed chain on disk."
+  [store-path branch]
+  (let [file (java.io.File. (str (branch/ref-path (str store-path) branch)))]
+    (when (.isFile file)
+      (branch/parse-ref
+       (strict-utf8-string (java.nio.file.Files/readAllBytes (.toPath file))
+                           "branch ref")))))
+
+(defn- chain-member [parsed byte-count]
+  (branch/->ChainMember
+   (long (or (:tx-seq (first (:frames parsed))) 0))
+   (long (or (:tx-seq (last (:frames parsed))) 0))
+   (long byte-count)
+   (boolean (:continuation? parsed))
+   (:space-id parsed)
+   (some? (:torn-tail parsed))))
+
+(defn- read-chain-member! [path]
+  (let [parsed (read-triple-log! path true)]
+    [parsed (chain-member parsed (.length (java.io.File. (str path))))]))
+
+(defn open-branch!
+  "Open one branch of a store: fold its sealed segment chain in ref order, then
+   its tail. A store with no ref for the default branch boots exactly as an
+   unforked FRAMLOG does."
+  ([store-path branch] (open-branch! store-path branch nil {}))
+  ([store-path branch expected-space]
+   (open-branch! store-path branch expected-space {}))
+  ([store-path branch expected-space
+    {:keys [repair-torn?] :or {repair-torn? false}}]
+   (let [store (.getPath (.getCanonicalFile (java.io.File. (str store-path))))
+         document (read-branch-ref store branch)]
+     (cond
+       (and (nil? document) (= branch branch/default-branch))
+       (open-database! store expected-space {:repair-torn? repair-torn?})
+
+       (nil? document)
+       (fail! :branch-missing "branch has no ref"
+              {:branch branch :path (branch/ref-path store branch)})
+
+       :else
+       (let [tail-path (branch/branch-tail-path store branch)
+             space-id (branch/refdocument-space-id document)
+             sealed (mapv (fn [segment]
+                            (read-chain-member!
+                             (branch/segment-path
+                              store (branch/segmentrecord-sha256 segment))))
+                          (branch/refdocument-segments document))
+             [tail-parsed tail-member] (read-chain-member! tail-path)
+             fault (branch/chain-fault document (mapv second sealed) tail-member)]
+         (when (and expected-space (not= expected-space space-id))
+           (fail! :space-mismatch "FRAMLOG belongs to a different SpaceId"
+                  {:expected expected-space :actual space-id :branch branch}))
+         (when fault
+           (fail! :invalid-branch-chain fault
+                  {:branch branch :path tail-path
+                   :ref (branch/ref-path store branch)}))
+         (let [context (term-store/new-term-store space-id)]
+           (doseq [[parsed _] sealed]
+             (replay-frames! context (:frames parsed)))
+           (replay-frames! context (:frames tail-parsed))
+           (when (and (:torn-tail tail-parsed) repair-torn?)
+             (truncate-log! tail-path (:valid-bytes tail-parsed)))
+           {:term-store context
+            :space-id space-id
+            :deflate? (:deflate? tail-parsed)
+            :log tail-path
+            :branch branch
+            :segments (mapv branch/segmentrecord-sha256
+                            (branch/refdocument-segments document))
+            :lock (Object.)
+            :mutation-state (atom {:status :ready})
+            :torn-tail (when-not repair-torn? (:torn-tail tail-parsed))
+            :recovered-tail (when repair-torn? (:torn-tail tail-parsed))}))))))
+
+(defn fork-store!
+  "Seal the parent branch's tail into the shared segment chain and give parent
+   and child fresh continuation tails that both begin at the next sequence.
+   Offline: no writer may hold either tail while this runs."
+  ([store-path child-branch]
+   (fork-store! store-path branch/default-branch child-branch))
+  ([store-path parent-branch child-branch]
+   (let [store (.getPath (.getCanonicalFile (java.io.File. (str store-path))))
+         parent (branch/require-branch-name! parent-branch)
+         child (branch/require-branch-name! child-branch)
+         parent-tail (branch/branch-tail-path store parent)
+         child-tail (branch/branch-tail-path store child)]
+     (when (= parent child)
+       (fail! :invalid-branch-name "fork requires two different branch names"
+              {:branch parent}))
+     (doseq [path [child-tail (branch/ref-path store child)]]
+       (when (.exists (java.io.File. (str path)))
+         (fail! :branch-exists "fork child branch already exists"
+                {:branch child :path path})))
+     (let [opened (open-branch! store parent nil {})
+           parsed (read-triple-log! parent-tail true)]
+       (when (:torn-tail parsed)
+         (fail! :torn-tail-repair-required
+                "fork requires a parent tail with no torn trailing frame"
+                {:branch parent :path parent-tail}))
+       (let [space-id (:space-id parsed)
+             ^bytes content (java.nio.file.Files/readAllBytes
+                             (.toPath (java.io.File. (str parent-tail))))
+             record (branch/->SegmentRecord
+                     (sha256-hex content)
+                     (long (or (:tx-seq (first (:frames parsed))) 0))
+                     (long (alength content)))
+             document (or (read-branch-ref store parent)
+                          (branch/empty-ref space-id))
+             plan (branch/fork-plan
+                   document record
+                   (long (term-store/current-sequence
+                          (:term-store opened))))
+             chain (branch/forkplan-document plan)
+             text (branch/print-ref chain)]
+         (ensure-directory! (branch/segments-directory store))
+         (ensure-directory! (branch/refs-directory store))
+         (when (not= child-tail store)
+           (ensure-directory! (branch/branches-directory store)))
+         (move-atomically! parent-tail
+                           (branch/segment-path
+                            store (branch/segmentrecord-sha256 record)))
+         (write-text-durable! (branch/ref-path store parent) text)
+         (write-text-durable! (branch/ref-path store child) text)
+         (doseq [tail [parent-tail child-tail]]
+           (create-triple-log! tail space-id
+                               {:deflate? (:deflate? parsed)
+                                :continuation? true}))
+         ;; The parent's image is derived state whose watermark no longer names
+         ;; the tail it was built beside.
+         (java.nio.file.Files/deleteIfExists
+          (.toPath (java.io.File. (str (branch/snapshot-path parent-tail)))))
+         {:space-id space-id
+          :fork-sequence (branch/forkplan-fork-sequence plan)
+          :segment (branch/segmentrecord-sha256 record)
+          :chain (mapv branch/segmentrecord-sha256
+                       (branch/refdocument-segments chain))
+          :parent {:branch parent :tail parent-tail
+                   :ref (branch/ref-path store parent)}
+          :child {:branch child :tail child-tail
+                  :ref (branch/ref-path store child)}})))))
 
 (defn new-database
   "Create an in-memory authoritative database for one immutable SpaceId."
