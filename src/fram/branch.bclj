@@ -11,7 +11,7 @@
 (def ref-format: String "framref/v1")
 (def fork-marker-format: String "framfork/v1")
 ;; The unnamed tail at <log> keeps this spelling in <log>.refs/.
-(def default-branch: String "default")
+(def default-branch: String "main")
 (def max-branch-name-length: Int 64)
 (def max-chain-length: Int 64)
 

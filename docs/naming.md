@@ -188,11 +188,23 @@ Rejected bench:
 - **timeline** — imports an ordering across branches that no branch promises.
 - **line** — too weak to carry a module name and a directory name.
 
-**default** names the branch whose tail is the store file itself and which is
-therefore unnamed in `<log>.branches/`. The deciding prior is the starting line
-a reader already expects a checkout to have; **main** and **master** import a
-git-specific argument this engine has no stake in, and **root** names a tree
-position the chain does not have.
+**main** names the branch whose tail is the store file itself and which is
+therefore unnamed in `<log>.branches/`. **Reversed 2026-08-08, same day, by
+operator call:** the original bench picked **default** over **main** on the
+theory that a git-specific argument was a cost, not a prior; the operator
+overruled that in favor of the git prior itself — a reader arriving at this
+engine from git already expects a checkout's starting line to be called
+`main`, and that expectation outweighs the naming-neutrality this module
+otherwise wants. **root** still names a tree position the chain does not
+have.
+
+Rejected bench:
+
+- **default** — rejected 2026-08-08; treated the git-specific argument for
+  **main** as a cost rather than the deciding prior. No store has forked yet,
+  so this reverses cleanly with no stored spelling to migrate.
+- **master** — imports a git-specific argument this engine has no stake in
+  beyond the starting-line prior **main** already carries.
 
 Respelling any of these once a store has forked is a data migration, not a
 rename.

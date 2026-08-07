@@ -7,7 +7,7 @@
 
 (def ^String fork-marker-format "framfork/v1")
 
-(def ^String default-branch "default")
+(def ^String default-branch "main")
 
 (def max-branch-name-length 64)
 
