@@ -55,7 +55,7 @@
         (and (integer? (t/triple-t3 value)) (>= (t/triple-t3 value) 0))))))
 
 (defn mint! [builder: (Atom Builder)] -> t/Triple
-  (let [before: Builder (deref builder) ordinal (builder-minted before)]
+  (let [before: Builder (deref builder) ordinal: Int (builder-minted before)]
     (do
       (swap! builder assoc :minted (inc ordinal))
       (mint-coordinate (builder-coordinate before) ordinal))))
@@ -67,7 +67,7 @@
    appended: (Vec t/CommitOperation)] -> t/Triple
   (if (empty? appended)
     (throw (ex-info "fram: an empty operation vector has no write identity" {:type :empty-operation-vector}))
-    (let [before: Builder (deref builder) start (count (builder-operations before))]
+    (let [before: Builder (deref builder) start: Int (count (builder-operations before))]
       (do
         (swap! builder
           assoc

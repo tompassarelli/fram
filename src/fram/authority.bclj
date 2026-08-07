@@ -139,8 +139,8 @@
    optional: (Vec String)
    path: String] -> (Map String Any)
   (if (map? value)
-    (let [m: (Map String Any) value keys0 (vec (sort (set (keys m)))) allowed (vec (concat required optional)) missing (filterv (fn
-                                                                                                                                  [key: String] -> Bool (not (contains? m key))) required) unknown (filterv (fn
+    (let [m: (Map String Any) value keys0: (Vec String) (vec (sort (set (keys m)))) allowed: (Vec String) (vec (concat required optional)) missing: (Vec String) (filterv (fn
+                                                                                                                                  [key: String] -> Bool (not (contains? m key))) required) unknown: (Vec Any) (filterv (fn
                                                                                                                                                                                                               [key: Any] -> Bool (or (not (string? key)) (not (some (fn
                                                                                                                                                                                                                                                                       [allowed-key: String] -> Bool (= allowed-key key)) allowed)))) keys0)]
       (do
@@ -196,7 +196,7 @@
 
 (defn- string-object! [value: Any path: String] -> (Map String Any)
   (if (map? value)
-    (let [m: (Map String Any) value bad (filterv (fn [key: Any] -> Bool (not (clean-authority-string? key))) (vec (sort (set (keys m)))))]
+    (let [m: (Map String Any) value bad: (Vec Any) (filterv (fn [key: Any] -> Bool (not (clean-authority-string? key))) (vec (sort (set (keys m)))))]
       (do
         (ensure-authority! (empty? bad)
           "invalid-object-key"
@@ -904,7 +904,7 @@
         "receipt-outcome"
         "receipt.outcome"
         "outcome is outside the closed receipt vocabulary")
-      (let [spec: (Map String Any) spec-value detail-codes (vector-value! (get spec "detailCodes") "receipt.transition.detailCodes")]
+      (let [spec: (Map String Any) spec-value detail-codes: (Vec Any) (vector-value! (get spec "detailCodes") "receipt.transition.detailCodes")]
         (do
           (ensure-authority! (= (get prepare "status") (get spec "prepare"))
             "receipt-transition"

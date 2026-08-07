@@ -560,7 +560,7 @@
         "read-error"
         :suggestion
         "fix the malformed form so the module parses"}]
-      (let [env (parse-ns-env forms) defs (collect-defs forms) errs: (Atom Any) (atom [])]
+      (let [env: Any (parse-ns-env forms) defs: Any (collect-defs forms) errs: (Atom Any) (atom [])]
         (doseq [form forms :when (and (seq? form) (symbol? (first form)) (contains? def-heads (first form)))]
           (walk-body-with-state! arity-check?
             module

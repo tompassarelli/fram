@@ -153,11 +153,11 @@
     (if (string? raw) raw (str raw))))
 
 (defn register-predicate! [s: Session spelling: String] -> Any
-  (let [candidate (resolve-predicate s spelling) canonical (if (some? candidate) (predicate-name s candidate) spelling) default-alias (str ":" canonical) alias-ids: (Vec Any) (predicate-ids s default-alias)]
+  (let [candidate: Any (resolve-predicate s spelling) canonical: String (if (some? candidate) (predicate-name s candidate) spelling) default-alias: String (str ":" canonical) alias-ids: (Vec Any) (predicate-ids s default-alias)]
     (do
       (when (and (not (empty? alias-ids)) (or (nil? candidate) (not (and (= 1 (count alias-ids)) (= candidate (first alias-ids))))))
         (throw (ex-info (str "predicate alias collision: " default-alias) {:predicate canonical :alias default-alias :ids alias-ids})))
-      (let [pid (if (some? candidate) candidate spelling) named: (Vec t/Triple) (rot/by-t12 (view s) pid predicate-name-predicate) builder: (Atom txn/Builder) (txn/open (store-of s))]
+      (let [pid: Any (if (some? candidate) candidate spelling) named: (Vec t/Triple) (rot/by-t12 (view s) pid predicate-name-predicate) builder: (Atom txn/Builder) (txn/open (store-of s))]
         (do
           (when (empty? named)
             (txn/assert! builder
@@ -169,7 +169,7 @@
           pid)))))
 
 (defn cardinality [s: Session pname: String] -> String
-  (let [pid (resolve-predicate s pname) card (resolve-predicate s cardinality-predicate) events: (Vec t/Triple) (if (and (some? pid) (some? card)) (rot/by-t12 (view s) pid card) [])]
+  (let [pid: Any (resolve-predicate s pname) card: Any (resolve-predicate s cardinality-predicate) events: (Vec t/Triple) (if (and (some? pid) (some? card)) (rot/by-t12 (view s) pid card) [])]
     (if (empty? events)
       multi
       (let [value: Any (t/triple-t3 (rot/proposition-of (first events)))]
@@ -180,7 +180,7 @@
    subject: Any
    pname: String
    value: Any] -> t/Triple
-  (let [pid (register-predicate! s pname) builder: (Atom txn/Builder) (txn/open (store-of s)) occurrence: t/Triple (if (= single (cardinality s pname)) (txn/update-single! builder (view s) subject pid value) (txn/assert! builder (t/triple subject pid value)))]
+  (let [pid: Any (register-predicate! s pname) builder: (Atom txn/Builder) (txn/open (store-of s)) occurrence: t/Triple (if (= single (cardinality s pname)) (txn/update-single! builder (view s) subject pid value) (txn/assert! builder (t/triple subject pid value)))]
     (do (commit! s builder) occurrence)))
 
 ;; A Term store has one slot-2 vocabulary, so a ref IS a value; link! survives
@@ -232,7 +232,7 @@
   [s: Session
    pname: String
    value: Any] -> Any
-  (let [pid (register-predicate! s pname) builder: (Atom txn/Builder) (txn/open (store-of s)) node: t/Triple (txn/mint! builder)]
+  (let [pid: Any (register-predicate! s pname) builder: (Atom txn/Builder) (txn/open (store-of s)) node: t/Triple (txn/mint! builder)]
     (do
       (txn/assert! builder (t/triple node pid value))
       (commit! s builder)
@@ -255,11 +255,11 @@
   [s: Session
    spelling: String
    alias: String] -> Any
-  (let [resolved (resolve-predicate s spelling) ids-before: (Vec Any) (predicate-ids s alias)]
+  (let [resolved: Any (resolve-predicate s spelling) ids-before: (Vec Any) (predicate-ids s alias)]
     (do
       (when (and (not (empty? ids-before)) (or (nil? resolved) (not (and (= 1 (count ids-before)) (= resolved (first ids-before))))))
         (throw (ex-info (str "predicate spelling collision: " alias) {:predicate spelling :alias alias :ids ids-before})))
-      (let [pid (register-predicate! s spelling) ids: (Vec Any) (predicate-ids s alias)]
+      (let [pid: Any (register-predicate! s spelling) ids: (Vec Any) (predicate-ids s alias)]
         (do
           (when (empty? ids)
             (let [builder: (Atom txn/Builder) (txn/open (store-of s))]
@@ -273,7 +273,7 @@
   [s: Session
    spelling: String
    new-name: String] -> Any
-  (let [resolved (resolve-predicate s spelling) name-ids: (Vec Any) (predicate-ids s new-name) default-alias (str ":" new-name) alias-ids: (Vec Any) (predicate-ids s default-alias)]
+  (let [resolved: Any (resolve-predicate s spelling) name-ids: (Vec Any) (predicate-ids s new-name) default-alias: String (str ":" new-name) alias-ids: (Vec Any) (predicate-ids s default-alias)]
     (do
       (when (and (not (empty? name-ids)) (or (nil? resolved) (not (and (= 1 (count name-ids)) (= resolved (first name-ids))))))
         (throw (ex-info (str "predicate spelling collision: " new-name) {:predicate spelling :new-name new-name :ids name-ids})))

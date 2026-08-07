@@ -431,7 +431,7 @@
   [start: String
    target: String
    edges: (Map String (Set String))] -> Bool
-  (loop [frontier (vec (get edges start (empty-string-set)))
+  (loop [frontier: (Vec String) (vec (get edges start (empty-string-set)))
          position: Int 0
          seen: (Set String) (empty-string-set)]
     (if (>= position (count frontier))
@@ -833,9 +833,9 @@
             (t/instant-nanos instant-value) ";"))]
     [(t/triple? value)
      (let [triple-value: t/Triple value
-           t1 (term-key (t/triple-t1 triple-value))
-           t2 (term-key (t/triple-t2 triple-value))
-           t3 (term-key (t/triple-t3 triple-value))]
+           t1: String (term-key (t/triple-t1 triple-value))
+           t2: String (term-key (t/triple-t2 triple-value))
+           t3: String (term-key (t/triple-t3 triple-value))]
        (str "t" (count t1) ":" t1
             (count t2) ":" t2
             (count t3) ":" t3))]
@@ -947,7 +947,7 @@
         (let [spec (nth specs index)]
           (if (contains? numeric-aggregate-operators (aggregatespec-operator spec))
             (let [position: Int (or (aggregatespec-argument spec) 0)
-                  bad (nonnumeric-row? rows position)]
+                  bad: Bool (nonnumeric-row? rows position)]
               (if bad
                 (query-error :query-nonnumeric-aggregate
                              (str "aggregate position " position
@@ -963,7 +963,7 @@
                   current (get groups key-text)]
               (if (some? current)
                 (let [group: AggregateGroup current
-                      updated (->AggregateGroup
+                      updated: AggregateGroup (->AggregateGroup
                                (aggregategroup-key group)
                                (conj (aggregategroup-members group) row))]
                   (->AggregateGroups (assoc groups key-text updated)
@@ -1009,7 +1009,7 @@
            (empty-string-set) rows)))
 
 (defn- aggregate-value [rows: (Vec d/Tuple) spec: AggregateSpec] -> NumericAtom
-  (let [operator (aggregatespec-operator spec)
+  (let [operator: Keyword (aggregatespec-operator spec)
         position: Int (or (aggregatespec-argument spec) 0)]
     (cond
       [(= operator :count) (count rows)]
@@ -1081,14 +1081,14 @@
                 aggregated
                 (reduce
                  (fn [acc: (Vec d/Tuple) group-key: String] -> (Vec d/Tuple)
-                   (let [group-value (get (aggregategroups-by-key groups) group-key)
+                   (let [group-value: Any (get (aggregategroups-by-key groups) group-key)
                          group: AggregateGroup
                          (if (some? group-value)
                            (let [present: AggregateGroup group-value] present)
                            (->AggregateGroup [] []))
-                         key (aggregategroup-key group)
-                         members (aggregategroup-members group)
-                         values (aggregate-values members (findspec-aggregates find))]
+                         key: d/Tuple (aggregategroup-key group)
+                         members: (Vec d/Tuple) (aggregategroup-members group)
+                         values: (Vec NumericAtom) (aggregate-values members (findspec-aggregates find))]
                      (conj acc (append-aggregate-values key values))))
                  [] (aggregategroups-order groups))
                 survivors
@@ -1139,8 +1139,8 @@
    control: d/QueryControl?] -> QueryExecutionResult
   (let [projection-result: ProjectionResult
         (project-with-occurrences-result propositions occurrences)
-        projection-value (projection-result-projection projection-result)
-        error-value (projection-result-error projection-result)]
+        projection-value: Projection? (projection-result-projection projection-result)
+        error-value: d/QueryEvaluationError? (projection-result-error projection-result)]
     (cond
       [(some? projection-value)
        (run-plan-projected-result! projection-value plan control)]

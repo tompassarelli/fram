@@ -113,7 +113,7 @@
 
 (defn word-tokens [value: String] -> (Vec String)
   (let [parts: (Vec String) (str/split value WORD-SEPARATOR-RE)]
-    (loop [index 0 tokens: (Vec String) []]
+    (loop [index: Int 0 tokens: (Vec String) []]
       (if (>= index (count parts))
         tokens
         (let [token: String (nth parts index)]
@@ -200,7 +200,7 @@
   (set (mapv (fn [token: String] -> String (english-stem token)) tokens)))
 
 (defn- trigrams [value: String] -> (Set String)
-  (loop [index 0 grams: (Set String) #{}]
+  (loop [index: Int 0 grams: (Set String) #{}]
     (if (> (+ index 3) (count value))
       grams
       (recur (inc index) (conj grams (subs value index (+ index 3)))))))
@@ -248,7 +248,7 @@
     nil))
 
 (defn- build-state [rows: (Vec t/Triple)] -> SearchBuildState
-  (loop [handle 0
+  (loop [handle: Int 0
          state: SearchBuildState (->SearchBuildState [] [] {} {})]
     (if (>= handle (count rows))
       state
@@ -424,7 +424,7 @@
   (let [empty-handles: (Vec Int) []]
     (if (empty? vectors)
       empty-handles
-      (loop [index 1
+      (loop [index: Int 1
              best: (Vec Int) (nth vectors 0)]
         (if (>= index (count vectors))
           best
@@ -752,7 +752,7 @@
   [source: TextSearchSource
    needle: Any
    candidates: (Vec Int)] -> TextSearchHandlesResult
-  (loop [position 0 matches: (Vec Int) []]
+  (loop [position: Int 0 matches: (Vec Int) []]
     (if (>= position (count candidates))
       (handles-ok matches)
       (let [handle: Int (nth candidates position)
@@ -832,7 +832,7 @@
    needle: Any
    handles: (Vec Int)] -> TextSearchRowsResult
   (let [source-rows: (Vec t/Triple) (textsearchsource-rows source)]
-    (loop [position 0 result-rows: (Vec (Vec Any)) []]
+    (loop [position: Int 0 result-rows: (Vec (Vec Any)) []]
       (if (>= position (count handles))
         (rows-ok result-rows)
         (let [handle: Int (nth handles position)

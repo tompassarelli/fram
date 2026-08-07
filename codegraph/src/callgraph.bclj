@@ -42,9 +42,9 @@
 (require resolve :as rsv)
 
 (defn parse-corpus [path: String] -> (Vec (Map Keyword Any))
-  (let [skips: (Atom Int) (atom 0) lines (str/split-lines (slurp path)) acc (reduce (fn
+  (let [skips: (Atom Int) (atom 0) lines: (Vec String) (str/split-lines (slurp path)) acc: (Map Keyword Any) (reduce (fn
                                                                                       [st: (Map Keyword Any)
-                                                                                       l: String] -> (Map Keyword Any) (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (get st :cur)) (get st :out) (conj (vec (get st :out)) (get st :cur)))} (if (str/starts-with? l "[") (let [t (try (edn/read-string l) (catch Exception e nil))] (if (nil? t) (let [_ (swap! skips inc)] st) (assoc st :cur (assoc (get st :cur) :triples (conj (vec (get (get st :cur) :triples)) t))))) st))) {:cur {} :out []} lines) blocks (if (empty? (get acc :cur)) (vec (get acc :out)) (conj (vec (get acc :out)) (get acc :cur)))]
+                                                                                       l: String] -> (Map Keyword Any) (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (get st :cur)) (get st :out) (conj (vec (get st :out)) (get st :cur)))} (if (str/starts-with? l "[") (let [t (try (edn/read-string l) (catch Exception e nil))] (if (nil? t) (let [_ (swap! skips inc)] st) (assoc st :cur (assoc (get st :cur) :triples (conj (vec (get (get st :cur) :triples)) t))))) st))) {:cur {} :out []} lines) blocks: (Vec (Map Keyword Any)) (if (empty? (get acc :cur)) (vec (get acc :out)) (conj (vec (get acc :out)) (get acc :cur)))]
     (if (pos? (deref skips))
       (binding [*out* *err*]
         (println "  (skipped" (deref skips) "EDN-unparseable leaf literals)"))

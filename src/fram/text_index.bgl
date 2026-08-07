@@ -136,7 +136,7 @@
         ;; assoc dominated the build at corpus scale.
         postings: (Map String (Vec Int))
         (persistent!
-         (loop [handle 0 current: Any (transient empty-postings)]
+         (loop [handle: Int 0 current: Any (transient empty-postings)]
            (if (>= handle row-count)
              current
              (let [value: Any (t/triple-t3 (nth rows handle))]
@@ -181,7 +181,7 @@
   (let [empty-handles: (Vec Int) []]
     (if (empty? posting-vectors)
       empty-handles
-      (loop [position 1
+      (loop [position: Int 1
              best: (Vec Int) (nth posting-vectors 0)]
         (if (>= position (count posting-vectors))
           best
@@ -232,7 +232,7 @@
       (let [tokens: (Vec String) (textneedleresult-tokens needle-result)
             rows: (Vec t/Triple) (textcandidatesource-rows source)
             handles: (Vec Int)
-            (loop [handle 0 matches: (Vec Int) []]
+            (loop [handle: Int 0 matches: (Vec Int) []]
               (if (>= handle (count rows))
                 matches
                 (let [value: Any (t/triple-t3 (nth rows handle))

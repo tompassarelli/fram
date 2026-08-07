@@ -105,7 +105,7 @@
       (if (some? identity) identity (str "@" spelling)))))
 
 (defn- predicate-name [registry: PredicateRegistry spelling: String] -> String
-  (let [identity (predicate-id registry spelling)
+  (let [identity: String (predicate-id registry spelling)
         canonical: String?
         (get (predicateregistry-canonical registry) identity)]
     (if (some? canonical) canonical (strip-at identity))))
@@ -171,27 +171,27 @@
       value)))
 
 (defn thread-md [triples: (Vec t/Triple) subject: String] -> String
-  (let [registry (predicate-registry triples)
-        selected (subject-triples triples subject)
-        present
+  (let [registry: PredicateRegistry (predicate-registry triples)
+        selected: (Vec t/Triple) (subject-triples triples subject)
+        present: (Vec String)
         (distinct-strings
          (mapv (fn [value: t/Triple] -> String
                  (predicate-name registry (triple-predicate value)))
                selected))
-        ordered (filterv (fn [predicate: String] -> Bool
+        ordered: (Vec String) (filterv (fn [predicate: String] -> Bool
                            (vec-contains? present predicate))
                          order)
-        extra
+        extra: (Vec String)
         (vec (sort (filterv (fn [predicate: String] -> Bool
                               (and (not (vec-contains? order predicate))
                                    (not (= predicate "body"))))
                             present)))
-        predicates (vec (concat ordered extra))
+        predicates: (Vec String) (vec (concat ordered extra))
         lines: (Vec String)
         (reduce
          (fn [acc: (Vec String) predicate: String] -> (Vec String)
-           (let [identity (predicate-id registry predicate)
-                 values
+           (let [identity: String (predicate-id registry predicate)
+                 values: (Vec String)
                  (mapv
                   (fn [value: t/Triple] -> String (triple-right value))
                   (filterv
@@ -207,12 +207,12 @@
                                 values)))))
          []
          predicates)
-        body-id (predicate-id registry "body")
-        bodies
+        body-id: String (predicate-id registry "body")
+        bodies: (Vec t/Triple)
         (filterv (fn [value: t/Triple] -> Bool
                    (= body-id
                       (predicate-id registry (triple-predicate value))))
                  selected)
         maybe-body: String? (if (empty? bodies) nil (triple-right (first bodies)))
-        body (if (some? maybe-body) maybe-body "")]
+        body: String (if (some? maybe-body) maybe-body "")]
     (str subject "\n" (str/join "\n" lines) "\n---\n" body)))

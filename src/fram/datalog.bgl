@@ -369,7 +369,7 @@
     nil
     (if (not (= (count arguments) (count tuple)))
       nil
-      (loop [position 0 current: (U Substitution Nil) subst]
+      (loop [position: Int 0 current: (U Substitution Nil) subst]
         (if (or (nil? current) (>= position (count arguments)))
           current
           (recur (+ position 1)
@@ -456,10 +456,10 @@
   [operator: Keyword
    left: Any
    right: Any] -> BuiltinValueResult
-  (let [left-int (integer-value left)
-        right-int (integer-value right)
-        left-number (numeric-value left)
-        right-number (numeric-value right)
+  (let [left-int: (U Int Nil) (integer-value left)
+        right-int: (U Int Nil) (integer-value right)
+        left-number: (U Double Nil) (numeric-value left)
+        right-number: (U Double Nil) (numeric-value right)
         invalid: BuiltinValueResult (->BuiltinValueResult nil nil)]
     (cond
       [(= operator :mod)
@@ -546,7 +546,7 @@
    tuples: (Vec Tuple)
    subst: Substitution
    context: QueryEvaluationContext] -> (Vec Substitution)
-  (loop [remaining tuples results: (Vec Substitution) []]
+  (loop [remaining: (Vec Tuple) tuples results: (Vec Substitution) []]
     (if (or (empty? remaining)
             (not (query-evaluation-context-open? context)))
       results
@@ -675,7 +675,7 @@
    literal: Literal
    substitutions: (Vec Substitution)
    context: QueryEvaluationContext] -> (Vec Substitution)
-  (loop [remaining substitutions results: (Vec Substitution) []]
+  (loop [remaining: (Vec Substitution) substitutions results: (Vec Substitution) []]
     (if (or (empty? remaining)
             (not (query-evaluation-context-open? context)))
       (if (query-evaluation-context-open? context) results [])
@@ -692,7 +692,7 @@
    body: (Vec Literal)
    seed: Substitution
    context: QueryEvaluationContext] -> (Vec Substitution)
-  (loop [remaining body substitutions: (Vec Substitution) [seed]]
+  (loop [remaining: (Vec Literal) body substitutions: (Vec Substitution) [seed]]
     (cond
       [(not (query-evaluation-context-open? context)) []]
       [(empty? remaining) substitutions]
@@ -802,9 +802,9 @@
    tuple: Tuple
    order: (Vec Int)
    handle: Int] -> HandleTrie
-  (let [first-key (nth tuple (nth order 0))
-        second-key (nth tuple (nth order 1))
-        third-key (nth tuple (nth order 2))
+  (let [first-key: Any (nth tuple (nth order 0))
+        second-key: Any (nth tuple (nth order 1))
+        third-key: Any (nth tuple (nth order 2))
         first-node: HandleTrieBranch (get trie first-key {})
         second-node: HandleTrieLeaf (get first-node second-key {})
         leaf: (Vec Int) (get second-node third-key [])]
@@ -911,7 +911,7 @@
   [relation: String
    source: CandidateSource
    tuple: Tuple] -> CandidateSource
-  (let [handle (count (candidatesource-rows source))
+  (let [handle: Int (count (candidatesource-rows source))
         with-row: CandidateSource
         (assoc source :rows (conj (candidatesource-rows source) tuple))]
     (if (and (= relation triple-relation) (= 3 (count tuple)))
@@ -948,8 +948,8 @@
    delta: Db
    relations: (Vec String)] -> CandidateSources
   (reduce (fn [current: CandidateSources relation: String] -> CandidateSources
-            (let [tuples (get delta relation #{})
-                  existing (get current relation)
+            (let [tuples: (Set Tuple) (get delta relation #{})
+                  existing: Any (get current relation)
                   base: CandidateSource
                   (if (instance? CandidateSource existing)
                     existing
@@ -993,7 +993,7 @@
   (let [result: text-search/TextSearchSourceResult
         (text-search/build-source-result
          propositions text-index/text-index-max-bytes)
-        source (text-search/source-result-source result)]
+        source: text-search/TextSearchSource? (text-search/source-result-source result)]
     (if (some? source)
       (->CandidateSourcesResult (text-candidate-sources source) nil)
       (->CandidateSourcesResult
@@ -1009,7 +1009,7 @@
   [arguments: (Vec QueryTerm)
    order: (Vec Int)
    subst: Substitution] -> (Vec Any)
-  (loop [remaining order prefix: (Vec Any) []]
+  (loop [remaining: (Vec Int) order prefix: (Vec Any) []]
     (if (empty? remaining)
       prefix
       (let [value (bound-term-value (nth arguments (first remaining)) subst)]
@@ -1039,7 +1039,7 @@
   [source: CandidateSource
    arguments: (Vec QueryTerm)
    subst: Substitution] -> (U (Vec Int) Nil)
-  (loop [position 0 best: (Vec Int) [] found false]
+  (loop [position: Int 0 best: (Vec Int) [] found: Bool false]
     (if (>= position (count arguments))
       (if found best nil)
       (let [value (bound-term-value (nth arguments position) subst)]
@@ -1112,7 +1112,7 @@
                        (bound-term-value (nth arguments 1) subst)
                        (bound-term-value (nth arguments 2) subst))
          (rotationcandidatesource-lower-exclusive rotation))]
-    (loop [remaining events
+    (loop [remaining: (Vec t/Triple) events
            seen: (Set t/Triple) #{}
            results: (Vec Substitution) []]
       (if (or (empty? remaining)
@@ -1136,8 +1136,8 @@
    literal: Literal
    subst: Substitution
    context: QueryEvaluationContext] -> (Vec Substitution)
-  (let [relation (literal-relation literal)
-        arguments (literal-arguments literal)
+  (let [relation: String (literal-relation literal)
+        arguments: (Vec QueryTerm) (literal-arguments literal)
         source: (U CandidateSource VirtualCandidateSource Nil)
         (get sources relation)]
     (if (literal-negated literal)
@@ -1167,7 +1167,7 @@
                    handles (source-handles source relation arguments subst)]
                (if (nil? handles)
                  (unify-tuples-controlled! arguments rows-value subst context)
-                 (loop [remaining handles results: (Vec Substitution) []]
+                 (loop [remaining: (Vec Int) handles results: (Vec Substitution) []]
                    (if (or (empty? remaining)
                            (not (query-evaluation-context-open? context)))
                      results
@@ -1203,7 +1203,7 @@
    literal: Literal
    substitutions: (Vec Substitution)
    context: QueryEvaluationContext] -> (Vec Substitution)
-  (loop [remaining substitutions results: (Vec Substitution) []]
+  (loop [remaining: (Vec Substitution) substitutions results: (Vec Substitution) []]
     (if (or (empty? remaining)
             (not (query-evaluation-context-open? context)))
       (if (query-evaluation-context-open? context) results [])
@@ -1220,7 +1220,7 @@
    body: (Vec Literal)
    seed: Substitution
    context: QueryEvaluationContext] -> (Vec Substitution)
-  (loop [remaining body substitutions: (Vec Substitution) [seed]]
+  (loop [remaining: (Vec Literal) body substitutions: (Vec Substitution) [seed]]
     (cond
       [(not (query-evaluation-context-open? context)) []]
       [(empty? remaining) substitutions]
@@ -1247,7 +1247,7 @@
 (defn- delta-relation-positions
   [body: (Vec Literal)
    delta-relations: (Set String)] -> (Vec Int)
-  (loop [position 0 remaining body positions: (Vec Int) []]
+  (loop [position: Int 0 remaining: (Vec Literal) body positions: (Vec Int) []]
     (if (empty? remaining)
       positions
       (let [literal (first remaining)]
@@ -1279,7 +1279,7 @@
    body: (Vec Literal)
    pin: Int
    context: QueryEvaluationContext] -> (Vec Substitution)
-  (loop [position 0 remaining body substitutions: (Vec Substitution) [{}]]
+  (loop [position: Int 0 remaining: (Vec Literal) body substitutions: (Vec Substitution) [{}]]
     (if (or (empty? remaining)
             (not (query-evaluation-context-open? context)))
       (if (query-evaluation-context-open? context) substitutions [])
@@ -1304,7 +1304,7 @@
    context: QueryEvaluationContext] -> (Set Tuple)
   (let [head (rule-head-arguments value)
         body (rule-body value)]
-    (loop [remaining (delta-relation-positions body delta-relations)
+    (loop [remaining: (Vec Int) (delta-relation-positions body delta-relations)
            derived: (Set Tuple) #{}]
       (if (or (empty? remaining)
               (not (query-evaluation-context-open? context)))
@@ -1374,7 +1374,7 @@
   (let [delta-set (set delta-relations)
         delta-sources (build-candidate-sources delta delta-relations {})
         candidate
-        (loop [remaining rules current: Db {}]
+        (loop [remaining: (Vec Rule) rules current: Db {}]
           (if (or (empty? remaining)
                   (not (query-evaluation-context-open? context)))
             current
@@ -1542,7 +1542,7 @@
    [] stratum))
 
 (defn strata-violations [strata: (Vec (Vec Rule))] -> (Vec String)
-  (loop [index 0 lower: (Set String) base-relations problems: (Vec String) []]
+  (loop [index: Int 0 lower: (Set String) base-relations problems: (Vec String) []]
     (if (>= index (count strata))
       problems
       (let [stratum (nth strata index)

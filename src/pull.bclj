@@ -261,8 +261,8 @@
                             (if (some? asof)
                               nil
                               (withdrawal-for occurrence))
-                            recorded-at (recorded-at-of occurrence)
-                            base
+                            recorded-at: Any (recorded-at-of occurrence)
+                            base: (Map Keyword Any)
                             (cond->
                               {:val value
                                :cid occurrence
@@ -393,7 +393,7 @@
                                           (let [right: Any
                                                 (t/triple-t3
                                                   (event-proposition event))
-                                                target-name
+                                                target-name: Any
                                                 (s/name-of schema right)]
                                             (if (nil? target-name)
                                               right

@@ -111,7 +111,7 @@
       (if (some? identity) identity (str "@" spelling)))))
 
 (defn- predicate-name [registry: PredicateRegistry spelling: String] -> String
-  (let [identity (predicate-id registry spelling)
+  (let [identity: String (predicate-id registry spelling)
         canonical: String?
         (get (predicateregistry-canonical registry) identity)]
     (if (some? canonical) canonical (strip-at identity))))
@@ -153,7 +153,7 @@
       (if (fallback-ref? registry predicate) "ref" "literal"))))
 
 (defn- normalize-predicate-triples [triples: (Vec t/Triple)] -> (Vec t/Triple)
-  (let [registry (predicate-registry triples)
+  (let [registry: PredicateRegistry (predicate-registry triples)
         normalized: (Vec t/Triple)
         (mapv
          (fn [value: t/Triple] -> t/Triple
@@ -193,9 +193,9 @@
           (warn (str path " — no @subject line found in head; dropping " n
                      " head line(s)")))
         [])
-      (let [subject (str/trim (nth lines subject-index))
+      (let [subject: String (str/trim (nth lines subject-index))
             triples: (Vec t/Triple)
-            (loop [i (+ subject-index 1) acc: (Vec t/Triple) []]
+            (loop [i: Int (+ subject-index 1) acc: (Vec t/Triple) []]
               (if (>= i n)
                 acc
                 (let [line (str/trim (nth lines i))]
@@ -207,7 +207,7 @@
                                    (t/triple subject
                                              (nth pair 0)
                                              (parse-obj (nth pair 1))))))))))
-            body (doc-body doc)]
+            body: String (doc-body doc)]
         (if (str/blank? body)
           triples
           (conj triples (t/triple subject "body" body)))))))
@@ -220,7 +220,7 @@
       [])))
 
 (defn- number-frames [triples: (Vec t/Triple)] -> (Vec t/TransactionFrame)
-  (loop [position 0 frames: (Vec t/TransactionFrame) []]
+  (loop [position: Int 0 frames: (Vec t/TransactionFrame) []]
     (if (>= position (count triples))
       frames
       (recur (+ position 1)
@@ -230,7 +230,7 @@
                     [(store/assert-operation (nth triples position))]))))))
 
 (defn load-corpus [threads-dir: String] -> (Vec t/TransactionFrame)
-  (let [files (fram.rt/list-md threads-dir)
+  (let [files: (Vec String) (fram.rt/list-md threads-dir)
         triples: (Vec t/Triple)
         (reduce
          (fn [acc: (Vec t/Triple) path: String] -> (Vec t/Triple)

@@ -63,7 +63,7 @@
     (if (empty? remaining) (dissoc bucket key) (assoc bucket key remaining))))
 
 (defn- rotate-add [rotation: Rotation event: t/Triple] -> Rotation
-  (let [proposition: t/Triple (proposition-of (checked-assertion event)) t1 (t/triple-t1 proposition) t2 (t/triple-t2 proposition) t3 (t/triple-t3 proposition)]
+  (let [proposition: t/Triple (proposition-of (checked-assertion event)) t1: Any (t/triple-t1 proposition) t2: Any (t/triple-t2 proposition) t3: Any (t/triple-t3 proposition)]
     (->Rotation (rotation-space-id rotation)
       (rotation-version rotation)
       (conj (rotation-events rotation) event)
@@ -79,7 +79,7 @@
         event))))
 
 (defn- rotate-del [rotation: Rotation event: t/Triple] -> Rotation
-  (let [proposition: t/Triple (proposition-of (checked-assertion event)) t1 (t/triple-t1 proposition) t2 (t/triple-t2 proposition) t3 (t/triple-t3 proposition)]
+  (let [proposition: t/Triple (proposition-of (checked-assertion event)) t1: Any (t/triple-t1 proposition) t2: Any (t/triple-t2 proposition) t3: Any (t/triple-t3 proposition)]
     (->Rotation (rotation-space-id rotation)
       (rotation-version rotation)
       (without-event (rotation-events rotation) event)
@@ -208,7 +208,7 @@
    space-id: String
    frame: t/TransactionFrame] -> Rotation
   (let [coordinate: t/Triple (t/transaction-coordinate space-id (t/transactionframe-sequence frame)) operations: (Vec t/CommitOperation) (t/transactionframe-operations frame)]
-    (loop [current: Rotation rotation ordinal 0]
+    (loop [current: Rotation rotation ordinal: Int 0]
       (if (>= ordinal (count operations))
         current
         (let [operation: t/CommitOperation (nth operations ordinal) proposition: t/Triple (t/commitoperation-proposition operation)]
@@ -230,7 +230,7 @@
   (apply-frame rotation space-id (t/->TransactionFrame sequence operations)))
 
 (defn refresh [rotation: Rotation ctx: (Atom t/TermStore)] -> Rotation
-  (let [space: String (store/space-id ctx) target (store/current-sequence ctx) pinned (rotation-version rotation)]
+  (let [space: String (store/space-id ctx) target: Int (store/current-sequence ctx) pinned: Int (rotation-version rotation)]
     (if (not (= space (rotation-space-id rotation)))
       (throw (ex-info "fram: rotation belongs to a different space" {:type :rotation-space-mismatch}))
       (if (> pinned target)

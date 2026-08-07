@@ -48,7 +48,7 @@
       (println (str "[" l " " (pr-str ps) " " r "]")))))
 
 (defn -main [& args] -> Nil
-  (let [edn-path (str (nth (vec args) 0)) ctx (c/new-store) tx (c/begin-tx! ctx "code") cache: (Atom (Map Any Any)) (atom {}) lines (str/split-lines (slurp edn-path))]
+  (let [edn-path: String (str (nth (vec args) 0)) ctx: Any (c/new-store) tx: Int (c/begin-tx! ctx "code") cache: (Atom (Map Any Any)) (atom {}) lines: (Vec String) (str/split-lines (slurp edn-path))]
     (doseq [line lines]
       (if (str/starts-with? line "[") (load-line! ctx tx cache line) nil))
     (binding [*out* *err*]

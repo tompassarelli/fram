@@ -61,7 +61,7 @@
     (if (empty? hits) 0 (nth hits 0))))
 
 (defn -main [& args] -> Nil
-  (let [ctx (c/new-store) tx (c/begin-tx! ctx "author") SUP (c/value! ctx "supersedes") _ (c/set-supersedes-pred! ctx SUP) cache: (Atom (Map Any Any)) (atom {}) _ (doseq [line (str/split-lines (slurp "/tmp/trap.edn"))] (if (str/starts-with? line "[") (load-line! ctx tx cache line) nil)) Vp (c/value! ctx "v") KIND (c/value! ctx "kind") SYM (c/value! ctx "symbol") OLDv (c/value-id ctx "red") NEWv (c/value! ctx "crimson") old (first-sym-fact ctx Vp KIND SYM (if (nil? OLDv) 0 (int OLDv))) e (fact-l ctx old) new (c/fact! ctx e Vp NEWv tx) sup (c/fact! ctx new SUP old tx)]
+  (let [ctx: Any (c/new-store) tx: Int (c/begin-tx! ctx "author") SUP: Int (c/value! ctx "supersedes") _: Any (c/set-supersedes-pred! ctx SUP) cache: (Atom (Map Any Any)) (atom {}) _: Any (doseq [line (str/split-lines (slurp "/tmp/trap.edn"))] (if (str/starts-with? line "[") (load-line! ctx tx cache line) nil)) Vp: Int (c/value! ctx "v") KIND: Int (c/value! ctx "kind") SYM: Int (c/value! ctx "symbol") OLDv: Any (c/value-id ctx "red") NEWv: Int (c/value! ctx "crimson") old: Int (first-sym-fact ctx Vp KIND SYM (if (nil? OLDv) 0 (int OLDv))) e: Int (fact-l ctx old) new: Int (c/fact! ctx e Vp NEWv tx) sup: Int (c/fact! ctx new SUP old tx)]
     (println "entity (the symbol node):" e)
     (println)
     (println "OLD value-fact  cid="

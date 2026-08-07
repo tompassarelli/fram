@@ -892,7 +892,7 @@
           rpc-list-end (reverse values)))
 
 (defn rpc-list-values! [value: Any] -> (Vec Any)
-  (loop [cursor value result: (Vec Any) [] count-value 0]
+  (loop [cursor: Any value result: (Vec Any) [] count-value: Int 0]
     (cond
       [(= cursor rpc-list-end) result]
       [(>= count-value rpc-v1-max-term-nodes)

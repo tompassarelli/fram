@@ -75,7 +75,7 @@
    pid: Int?] -> Int?
   (if (nil? pid)
     nil
-    (let [fcid (first (live-cids-lp ctx cid pid)) f (if (nil? fcid) nil (c/fact-of ctx fcid)) r: Any (if (nil? f) nil (get f :r))]
+    (let [fcid: Int? (first (live-cids-lp ctx cid pid)) f: Any (if (nil? fcid) nil (c/fact-of ctx fcid)) r: Any (if (nil? f) nil (get f :r))]
       (if (int? r) r nil))))
 
 (defn withdrawal-of [ctx: (Atom fram.types/TermStore) cid: Int] -> Any
@@ -118,7 +118,7 @@
         sel (s/resolve-predicate session "selects")]
     (if (or (nil? ve) (nil? sel))
       nil
-      (reduce (fn [acc: (Set Int) cid: Int] -> (Set Int) (let [f (c/fact-of ctx cid) r: Any (if (nil? f) nil (get f :r))] (if (int? r) (conj acc r) acc)))
+      (reduce (fn [acc: (Set Int) cid: Int] -> (Set Int) (let [f: Any (c/fact-of ctx cid) r: Any (if (nil? f) nil (get f :r))] (if (int? r) (conj acc r) acc)))
         #{}
         (live-cids-lp ctx ve sel)))))
 

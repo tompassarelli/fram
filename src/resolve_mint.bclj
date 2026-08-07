@@ -164,7 +164,7 @@
             (number? d)
             (mint-leaf-on! m builder src "number" (str d))
             (or (list? d) (seq? d) (vector? d) (map? d))
-            (let [ctx (:ctx m) head: Any (cond (vector? d) [(symbol "#%brackets")] (map? d) [(symbol "#%map")] :else []) elems (vec (concat head (if (map? d) (apply concat (seq d)) (seq d)))) e (register! m src (ri/mint! ctx builder))]
+            (let [ctx: Any (:ctx m) head: Any (cond (vector? d) [(symbol "#%brackets")] (map? d) [(symbol "#%map")] :else []) elems: (Vec Any) (vec (concat head (if (map? d) (apply concat (seq d)) (seq d)))) e: Any (register! m src (ri/mint! ctx builder))]
               (do
                 (ri/assert-on! builder e (:KIND m) (ri/literal! "list"))
                 (doseq [i: Int (range (count elems))]
@@ -264,16 +264,16 @@
                 []
                 after-name)))
           (contains? rc/LET-FORMS h)
-          (let [bracket (nth kids 1 nil) pairs (if (and (some? bracket) (brk? bracket)) (rb/let-bind-pairs ctx view bracket) []) acc0: (Vec Any) [scope []] st (reduce (fn
+          (let [bracket: Any (nth kids 1 nil) pairs: (Vec Any) (if (and (some? bracket) (brk? bracket)) (rb/let-bind-pairs ctx view bracket) []) acc0: (Vec Any) [scope []] st: (Vec Any) (reduce (fn
                                                                                                                                                                          [a: (Vec Any)
-                                                                                                                                                                          p: Any] -> (Vec Any) (let [sc: (Vec Any) (nth a 0) caps: (Vec Any) (nth a 1) bsyms (nth p 0) vnode (nth p 1) orvals (nth p 2) c1 (reduce (fn
+                                                                                                                                                                          p: Any] -> (Vec Any) (let [sc: (Vec Any) (nth a 0) caps: (Vec Any) (nth a 1) bsyms: Any (nth p 0) vnode: Any (nth p 1) orvals: Any (nth p 2) c1: (Vec Any) (reduce (fn
                                                                                                                                                                                                                                                                                                                      [x: (Vec Any)
-                                                                                                                                                                                                                                                                                                                      o: Any] -> (Vec Any) (into x (capture-refs m o sc B newnm))) caps orvals) c2 (if (some? vnode) (into c1 (capture-refs m vnode sc B newnm)) c1)] [(push (rb/frame-of ctx view bsyms) sc) c2])) acc0 pairs) final: (Vec Any) (nth st 0) vcaps: (Vec Any) (nth st 1)]
+                                                                                                                                                                                                                                                                                                                      o: Any] -> (Vec Any) (into x (capture-refs m o sc B newnm))) caps orvals) c2: (Vec Any) (if (some? vnode) (into c1 (capture-refs m vnode sc B newnm)) c1)] [(push (rb/frame-of ctx view bsyms) sc) c2])) acc0 pairs) final: (Vec Any) (nth st 0) vcaps: (Vec Any) (nth st 1)]
             (reduce (fn [acc: (Vec Any) b: Any] -> (Vec Any) (into acc (capture-refs m b final B newnm)))
               vcaps
               (vec (drop 2 kids))))
           (contains? rc/FOR-FORMS h)
-          (let [bracket (nth kids 1 nil) entries (if (and (some? bracket) (brk? bracket)) (rb/for-bind-pairs ctx view bracket) []) acc0: (Vec Any) [scope []] st (reduce (fn
+          (let [bracket: Any (nth kids 1 nil) entries: (Vec Any) (if (and (some? bracket) (brk? bracket)) (rb/for-bind-pairs ctx view bracket) []) acc0: (Vec Any) [scope []] st: (Vec Any) (reduce (fn
                                                                                                                                                                            [a: (Vec Any)
                                                                                                                                                                             e: Any] -> (Vec Any) (let [sc: (Vec Any) (nth a 0) caps: (Vec Any) (nth a 1)] (if (= :expr (nth e 0)) [sc (into caps (capture-refs m (nth e 1) sc B newnm))] (let [bsyms (nth e 1) vnode (nth e 2) orvals (nth e 3) c1 (reduce (fn
                                                                                                                                                                                                                                                                                                                                                                                                              [x: (Vec Any)
@@ -367,7 +367,7 @@
    wrap: Any
    e: Any
    cid: Any] -> Any
-  (let [ctx (:ctx m) view (:view m) ps: Any (ri/predicate-at ctx cid) r: Any (ri/value-at ctx cid)]
+  (let [ctx: Any (:ctx m) view: Any (:view m) ps: Any (ri/predicate-at ctx cid) r: Any (ri/value-at ctx cid)]
     (cond
       (and (some? wrap) (= e wrap) (string? ps) (rc/ord-pos? ps) (not= ps "f0"))
       nil
@@ -387,12 +387,12 @@
       (str "[" (ri/ordinal ctx e) " " (pr-str ps) " " (ri/ordinal ctx r) "]"))))
 
 (defn extract-lines [m: Emit src: String] -> (Vec Any)
-  (let [ctx (:ctx m) wrapf (:wrapper-of m) desc (:descendants m) dforms (:deleted-forms m) dsub (:deleted-subtree m) wrap: Any (wrapf src) root: Any (if (empty? dforms) (wrapf src) nil) live (if (some? root) (desc root) nil) ents (vec (get (:ents m) src [])) rows (reduce (fn
+  (let [ctx: Any (:ctx m) wrapf: Any (:wrapper-of m) desc: Any (:descendants m) dforms: Any (:deleted-forms m) dsub: Any (:deleted-subtree m) wrap: Any (wrapf src) root: Any (if (empty? dforms) (wrapf src) nil) live: Any (if (some? root) (desc root) nil) ents: (Vec Any) (vec (get (:ents m) src [])) rows: (Vec Any) (reduce (fn
                                                                                                                                                                                                                                                                                   [acc: (Vec Any)
                                                                                                                                                                                                                                                                                    e: Any] -> (Vec Any) (if (or (contains? dsub e) (and (some? live) (not (contains? live e)))) acc (reduce (fn
                                                                                                                                                                                                                                                                                                                                                                                               [a: (Vec Any)
-                                                                                                                                                                                                                                                                                                                                                                                               cid: Any] -> (Vec Any) (let [line (emit-line m wrap e cid)] (if (nil? line) a (conj a line)))) acc (ri/by-subject ctx e)))) [] ents) forms (if (some? wrap) (vec (remove (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          [f: Any] -> Bool (contains? dforms f)) (vec (rest (rr/ordered-children ctx wrap))))) []) formlines (mapv (fn
+                                                                                                                                                                                                                                                                                                                                                                                               cid: Any] -> (Vec Any) (let [line: Any (emit-line m wrap e cid)] (if (nil? line) a (conj a line)))) acc (ri/by-subject ctx e)))) [] ents) forms: (Vec Any) (if (some? wrap) (vec (remove (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          [f: Any] -> Bool (contains? dforms f)) (vec (rest (rr/ordered-children ctx wrap))))) []) formlines: (Vec Any) (mapv (fn
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        [i: Int] -> Any (str "[" (ri/ordinal ctx wrap) " \"f" (+ i 1) "\" " (ri/ordinal ctx (nth forms i)) "]")) (vec (range (count forms))))]
     (into (into [(str "@file " src)] rows) formlines)))
 
