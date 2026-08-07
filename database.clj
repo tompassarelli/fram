@@ -1456,6 +1456,24 @@
       (recur (next remaining) (:tx row))))
   rows)
 
+;; File order is authoritative: renumbering contiguous runs preserves both every
+;; last-writer and the transaction grouping the source already chose.
+(defn- renumber-legacy-transactions [rows]
+  (let [renumbered
+        (reduce (fn [[out sequence previous] row]
+                  (let [original (:tx row)
+                        sequence (if (and (some? previous) (= original previous))
+                                   sequence
+                                   (inc sequence))]
+                    [(conj out (assoc row :tx sequence)) sequence original]))
+                [[] 0 nil]
+                rows)]
+    {:rows (first renumbered)
+     :renumbered {:transactions (second renumbered)
+                  :rows (count rows)
+                  :original-range (when (seq rows)
+                                    [(:tx (first rows)) (:tx (peek rows))])}}))
+
 (defn- reconcile-torn-transaction! [rows tail line-number byte-offset]
   (let [tail-tx (torn-transaction-sequence! tail line-number byte-offset)
         last-tx (some-> rows peek :tx)
@@ -1482,7 +1500,7 @@
       {:rows rows :torn-tail (assoc report :dropped-complete-rows 0
                                     :reason :torn-later-transaction)})))
 
-(defn- parse-legacy-flat [^bytes bytes]
+(defn- parse-legacy-flat [^bytes bytes renumber?]
   (when (bytes-prefix? bytes legacy-fri-magic)
     (migration-fail! :migration-v2-cache-not-source
                      "FRI cache is not an authoritative migration source" {}))
@@ -1497,10 +1515,19 @@
         tail (when-not terminal-lf? (last pieces))]
     (loop [remaining (seq complete) line-number 1 byte-offset 0 rows []]
       (if (nil? remaining)
-        (let [ordered (validate-legacy-transaction-order! rows)]
-          (if tail
-            (reconcile-torn-transaction! ordered tail line-number byte-offset)
-            {:rows ordered :torn-tail nil}))
+        (if renumber?
+          (do
+            ;; A torn tail carries one original coordinate; renumbering has already
+            ;; moved every complete row off that scale, so it cannot be reconciled.
+            (when tail
+              (migration-fail! :migration-renumber-torn-unsupported
+                               "renumbered migration requires a complete final row"
+                               {:line line-number :byte-offset byte-offset}))
+            (assoc (renumber-legacy-transactions rows) :torn-tail nil))
+          (let [ordered (validate-legacy-transaction-order! rows)]
+            (if tail
+              (reconcile-torn-transaction! ordered tail line-number byte-offset)
+              {:rows ordered :torn-tail nil})))
         (let [line (first remaining)
               line-bytes (alength ^bytes (strict-utf8-bytes line "legacy line"))]
           (when (str/blank? line)
@@ -1826,13 +1853,15 @@
 
 (defn- migration-options! [options]
   (when-not (and (map? options)
-                 (every? #{:deflate?} (keys options))
-                 (or (not (contains? options :deflate?))
-                     (instance? Boolean (:deflate? options))))
+                 (every? #{:deflate? :renumber?} (keys options))
+                 (every? #(or (not (contains? options %))
+                              (instance? Boolean (get options %)))
+                         [:deflate? :renumber?]))
     (migration-fail! :migration-options-invalid
-                     "migration options accept only a Boolean :deflate? value"
+                     "migration options accept only Boolean :deflate? and :renumber? values"
                      {:options options}))
-  (boolean (:deflate? options)))
+  {:deflate? (boolean (:deflate? options))
+   :renumber? (boolean (:renumber? options))})
 
 (defn migrate-legacy-flat-log!
   "Seal one frozen canonical flat log into FRAMLOG. The converter is the only
@@ -1840,13 +1869,13 @@
   ([source space-id target]
    (migrate-legacy-flat-log! source space-id target {}))
   ([source space-id target options]
-   (let [deflate? (migration-options! options)
+   (let [{:keys [deflate? renumber?]} (migration-options! options)
          space-bytes (strict-utf8-bytes space-id "SpaceId")]
      (when (zero? (alength ^bytes space-bytes))
        (migration-fail! :migration-space-id-required
                         "SpaceId must be a nonempty UTF-8 String" {}))
      (let [frozen (frozen-source! source)
-           parsed (parse-legacy-flat (:bytes frozen))
+           parsed (parse-legacy-flat (:bytes frozen) renumber?)
            target-file (java.io.File. (str target))
            canonical-target (.getCanonicalFile target-file)
            manifest-file (java.io.File. (str (.getPath canonical-target)
@@ -1873,6 +1902,10 @@
              (sorted-map
               :diagnostics (:diagnostics written)
               :format triple-log-manifest-version
+              :legacy-coordinates (if-let [renumbered (:renumbered parsed)]
+                                    (into (sorted-map :disposition :renumbered-in-file-order)
+                                          renumbered)
+                                    (sorted-map :disposition :preserved))
               :output (into (sorted-map) output)
               :source (sorted-map :bytes (:byte-count frozen)
                                   :file-key (:file-key frozen)

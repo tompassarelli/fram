@@ -2267,12 +2267,14 @@
 
       "migrate-triple-log"
       (let [[options positional]
-            (if (= "--deflate" (first command-arguments))
-              [{:deflate? true} (rest command-arguments)]
-              [{} command-arguments])]
+            (loop [options {} remaining command-arguments]
+              (case (first remaining)
+                "--deflate" (recur (assoc options :deflate? true) (rest remaining))
+                "--renumber" (recur (assoc options :renumber? true) (rest remaining))
+                [options remaining]))]
         (when-not (= 3 (count positional))
           (server-fail! :migration-arguments-invalid
-                        "expected [--deflate] SOURCE SPACE_ID TARGET"
+                        "expected [--deflate] [--renumber] SOURCE SPACE_ID TARGET"
                         {:arguments command-arguments}))
         (println (pr-str
                   (apply database/migrate-legacy-flat-log!

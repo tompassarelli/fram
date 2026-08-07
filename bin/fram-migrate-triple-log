@@ -1,21 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${1:-}" == "--deflate" ]]; then
-  deflate=true
+flags=()
+while [[ "${1:-}" == "--deflate" || "${1:-}" == "--renumber" ]]; do
+  flags+=("$1")
   shift
-else
-  deflate=false
-fi
+done
 
 if [[ $# -ne 3 ]]; then
-  echo "usage: fram-migrate-triple-log [--deflate] SOURCE SPACE_ID TARGET" >&2
+  echo "usage: fram-migrate-triple-log [--deflate] [--renumber] SOURCE SPACE_ID TARGET" >&2
   exit 2
 fi
 
 HERE="${BASH_SOURCE[0]%/*}/.."
 cd "$HERE"
-if [[ "$deflate" == true ]]; then
-  exec clojure -M "$HERE/server.clj" migrate-triple-log --deflate "$1" "$2" "$3"
-fi
-exec clojure -M "$HERE/server.clj" migrate-triple-log "$1" "$2" "$3"
+exec clojure -M "$HERE/server.clj" migrate-triple-log "${flags[@]}" "$1" "$2" "$3"
