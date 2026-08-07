@@ -78,8 +78,9 @@ declare their payload length and write straight into the output encoder,
 with `finish-record!` CRCing the range it just wrote and refusing a writer
 whose bytes disagree with its declaration. After the fix, the same
 checkpoint costs +2.04 GB over serving baseline and writes a
-100,863,531-byte image in 42.7 s, run against the same store on a second
-boot fold below (161.6 s / 6.25 GB serving). The fixed encoder's image has
+100,863,531-byte image in 42.7 s, run against a store folded in the same
+encode-fix session — the 159.7 s / 6.55 GB fold that is also the image-boot
+comparison baseline below. The fixed encoder's image has
 the same fingerprint as the main-tip encoder's image on the same store,
 modulo the sidecar stamp — a cross-encoder check on the fixed generation,
 not a before/after comparison against the pre-fix encoder, which produced no
@@ -135,16 +136,19 @@ under the gate, confirming it catches the class it was built for.
 Both CI workflows sourced Beagle's `bin/_beagle-racket` before `raco pkg
 install --link` registered the checkout, so the raco-make freshness gate
 inside it ran against an unlinked collection and died on "collection not
-found for module path: beagle/lang/reader-impl" — every push since the
-Beagle pin landed, including the v0.5.0 tag push itself. The fix links the
+found for module path: beagle/lang/reader-impl" — every push from
+2026-08-05 through the repair, including the v0.5.0 tag push itself
+(GitHub runs 31163165620 and 31219968815; first green after the fix,
+31222644762). The fix links the
 packages first and sources `_beagle-racket` after, so the gate resolves and
 warms every `.zo` outside the per-row timeouts the suite applies
 (`.github/workflows/ci.yml`, link-before-source step).
 
 Separately, `tests/fram_snapshot_boot_test.sh` builds the complete native
-server through `bin/fram-native-build --host server`, which takes 9m18s on a
-24-core machine; a 2-core hosted runner cannot fit that inside the 240s
-per-row timeout under any honest reading. The manifest now carries a new
+server through `bin/fram-native-build --host server`, measured in the
+release-readiness pass at 9m18s under concurrent load and 560 s uncontended
+on a 24-core workstation; a 2-core hosted runner cannot fit that inside the
+240s per-row timeout under any honest reading. The manifest now carries a new
 disposition, `exclude-runner`, for a gate whose cost exceeds a hosted
 runner: the row is excluded from the hosted CI run, its evidence is the
 `--host server` build it drives, and it still runs in the flake devShell and
