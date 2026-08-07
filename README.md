@@ -56,6 +56,7 @@ type. See the [naming ledger](docs/naming.md).
 - [Naming ledger](docs/naming.md) — durable naming verdicts and rejected alternatives.
 - [Node FRAMRPC client](clients/node/README.md) — the complete direct builder and application data plane.
 - [Isolation and deployment](docs/isolation-and-deployment.md) — trust domains, the three deployment shapes, and the wasm embed contract.
+- [Coming from Datomic](docs/coming-from-datomic.md) — the datom-to-occurrence bridge, the exact-difference table, and the honest not-yet list.
 - [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
 
 The rationale and positioning essays, plus the old pull, claims, and Codegraph documents, live under
