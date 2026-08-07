@@ -128,6 +128,10 @@
    operations: (Vec OperationRow)
    withdrawal-targets: (Vec Int)
    active-buckets: (Vec ActiveBucket)
+   ;; While fold-open these carry every bucket's positions and the
+   ;; ActiveBucket rows carry only their handle.
+   active-cells: (Vec (Atom (Vec Int)))
+   fold-open: Bool
    atom-slots: slots/TermSlots
    triple-slots: slots/TermSlots
    active-slots: slots/TermSlots])

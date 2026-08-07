@@ -406,7 +406,8 @@
                  (consume-framlog-frames!
                   (->BootStream
                    (bootstream-configured-space-id stream)
-                   (term-store/new-term-store space-id)
+                   (term-store/open-fold!
+                    (term-store/new-term-store space-id))
                    [] header-bytes true false [] nil)
                   bytes header-bytes final)]))]))])))
 
@@ -449,7 +450,7 @@
   [root: (Atom t/TermStore)
    valid-log-bytes: Int
    boot-append: (Vec Int)] -> BootResult
-  (->BootResult status-ok (canonical-store-copy! root)
+  (->BootResult status-ok (canonical-store-copy! (term-store/close-fold! root))
                 valid-log-bytes boot-append nil))
 
 (defn replay-complete-frames!
@@ -554,7 +555,9 @@
                    (failed-boot "FRAMLOG belongs to a different SpaceId")]
                   [:else
                    (replay-complete-frames!
-                    decoder (term-store/new-term-store space-id)
+                    decoder
+                    (term-store/open-fold!
+                     (term-store/new-term-store space-id))
                     (deref (wire/decoder-position decoder)))]))]))))]))
 
 (defn- failed-header [message: String] -> HeaderFields
@@ -707,8 +710,9 @@
        (failed-boot
         "FRAMLOG base chain member must not carry the continuation flag")]
       [:else
-       (let [root (term-store/new-term-store
-                   (headerfields-space-id first-header))
+       (let [root (term-store/open-fold!
+                   (term-store/new-term-store
+                    (headerfields-space-id first-header)))
              total (+ (count segments) 1)]
          (loop [index: Int 0 tail-valid-bytes: Int 0]
            (if (>= index total)

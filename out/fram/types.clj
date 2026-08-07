@@ -199,7 +199,7 @@
 
 (defn transactionframe-operations [r] (:operations r))
 
-(defrecord TermStore [space-id next-sequence atoms triples transactions operations withdrawal-targets active-buckets atom-slots triple-slots active-slots])
+(defrecord TermStore [space-id next-sequence atoms triples transactions operations withdrawal-targets active-buckets active-cells fold-open atom-slots triple-slots active-slots])
 
 (defn termstore-space-id [r] (:space-id r))
 
@@ -216,6 +216,10 @@
 (defn termstore-withdrawal-targets [r] (:withdrawal-targets r))
 
 (defn termstore-active-buckets [r] (:active-buckets r))
+
+(defn termstore-active-cells [r] (:active-cells r))
+
+(defn termstore-fold-open [r] (:fold-open r))
 
 (defn termstore-atom-slots [r] (:atom-slots r))
 

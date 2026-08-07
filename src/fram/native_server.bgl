@@ -112,10 +112,11 @@
              (log/bootstream-complete completed)
              root)
       (let [valid-log-bytes (log/bootstream-valid-log-bytes completed)
-            boot-append (log/bootstream-boot-append completed)]
+            boot-append (log/bootstream-boot-append completed)
+            closed (term-store/close-fold! root)]
         (->StoreResult
          status-ok
-         (->Store canonical-log-path (schema/session! root)
+         (->Store canonical-log-path (schema/session! closed)
                   (+ valid-log-bytes (count boot-append)))
          nil
          valid-log-bytes
@@ -154,8 +155,8 @@
                     (str (term-store/termstoreloadresult-code loaded))))
               (let [tail
                     (log/consume-framlog-frames!
-                     (log/->BootStream space-id root [] watermark true false
-                                       [] nil)
+                     (log/->BootStream space-id (term-store/open-fold! root)
+                                       [] watermark true false [] nil)
                      log-bytes watermark true)
                     error (log/bootstream-error tail)]
                 (if (or (some? error) (not (log/bootstream-complete tail)))
@@ -166,7 +167,8 @@
                   (let [valid-log-bytes (log/bootstream-valid-log-bytes tail)]
                     (->StoreResult
                      status-ok
-                     (->Store canonical-log-path (schema/session! root)
+                     (->Store canonical-log-path
+                              (schema/session! (term-store/close-fold! root))
                               valid-log-bytes)
                      nil
                      valid-log-bytes

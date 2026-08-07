@@ -14,6 +14,7 @@
 (def empty-commit-operations: (Vec t/CommitOperation) [])
 (def empty-transaction-frames: (Vec t/TransactionFrame) [])
 (def empty-active-buckets: (Vec t/ActiveBucket) [])
+(def empty-active-cells: (Vec (Atom (Vec Int))) [])
 (def term-store-dump-version: Int 2)
 (def max-transaction-sequence: Int 9223372036854775806)
 
@@ -80,7 +81,7 @@
     (atom (t/->TermStore
            space-id 1 empty-atoms empty-triple-rows
            empty-transaction-rows empty-operation-rows empty-ids
-           empty-active-buckets
+           empty-active-buckets empty-active-cells false
            (slots/fresh-slots initial-slots)
            (slots/fresh-slots initial-slots)
            (slots/fresh-slots initial-slots)))
@@ -346,20 +347,28 @@
 (defn- active-positions [store: t/TermStore handle: Int] -> (Vec Int)
   (let [position (find-active-bucket-position store handle)]
     (if (>= position 0)
-      (t/activebucket-positions (nth (t/termstore-active-buckets store) position))
+      (if (t/termstore-fold-open store)
+        (deref (nth (t/termstore-active-cells store) position))
+        (t/activebucket-positions (nth (t/termstore-active-buckets store) position)))
       empty-ids)))
 
 (defn- set-active-positions!
   [store: t/TermStore
    handle: Int
    positions: (Vec Int)] -> t/TermStore
-  (let [known (find-active-bucket-position store handle)]
+  (let [folding: Bool (t/termstore-fold-open store)
+        known: Int (find-active-bucket-position store handle)]
     (if (>= known 0)
-      (assoc store :active-buckets
-             (assoc (t/termstore-active-buckets store) known
-                    (t/->ActiveBucket handle positions)))
+      (if folding
+        (do
+          (reset! (nth (t/termstore-active-cells store) known) positions)
+          store)
+        (assoc store :active-buckets
+               (assoc (t/termstore-active-buckets store) known
+                      (t/->ActiveBucket handle positions))))
       (let [buckets: (Vec t/ActiveBucket)
-            (conj (t/termstore-active-buckets store) (t/->ActiveBucket handle positions))
+            (conj (t/termstore-active-buckets store)
+                  (t/->ActiveBucket handle (if folding empty-ids positions)))
             position: Int (dec (count buckets))
             slots: slots/TermSlots
             (slots/slot-add! (t/termstore-active-slots store)
@@ -367,11 +376,74 @@
                                        (count (t/termstore-active-slots store)))
                             position)
             store-with-bucket: t/TermStore
-            (assoc store :active-buckets buckets)]
+            (if folding
+              (assoc store :active-buckets buckets
+                     :active-cells
+                     (conj (t/termstore-active-cells store) (atom positions)))
+              (assoc store :active-buckets buckets))]
         (if (> (count buckets) (* slot-load (count slots)))
           (assoc store-with-bucket :active-slots
                  (build-active-slots! buckets (* 2 (count slots))))
           store-with-bucket)))))
+
+;; Cells are legal only while one owner holds the store: close before any
+;; caller can fork-session off it.
+(defn- open-fold-state [store: t/TermStore] -> t/TermStore
+  (if (t/termstore-fold-open store)
+    store
+    (let [buckets: (Vec t/ActiveBucket) (t/termstore-active-buckets store)
+          opened: (Vec t/ActiveBucket)
+          (loop [built: (Vec t/ActiveBucket) empty-active-buckets position: Int 0]
+            (if (>= position (count buckets))
+              built
+              (recur
+               (conj built
+                     (t/->ActiveBucket
+                      (t/activebucket-triple-handle (nth buckets position))
+                      empty-ids))
+               (inc position))))
+          cells: (Vec (Atom (Vec Int)))
+          (loop [built: (Vec (Atom (Vec Int))) empty-active-cells position: Int 0]
+            (if (>= position (count buckets))
+              built
+              (recur
+               (conj built
+                     (atom (t/activebucket-positions (nth buckets position))))
+               (inc position))))]
+      (assoc store
+             :active-buckets opened
+             :active-cells cells
+             :fold-open true))))
+
+(defn- close-fold-state [store: t/TermStore] -> t/TermStore
+  (if (not (t/termstore-fold-open store))
+    store
+    (let [buckets: (Vec t/ActiveBucket) (t/termstore-active-buckets store)
+          cells: (Vec (Atom (Vec Int))) (t/termstore-active-cells store)
+          closed: (Vec t/ActiveBucket)
+          (loop [built: (Vec t/ActiveBucket) empty-active-buckets position: Int 0]
+            (if (>= position (count buckets))
+              built
+              (recur
+               (conj built
+                     (t/->ActiveBucket
+                      (t/activebucket-triple-handle (nth buckets position))
+                      (deref (nth cells position))))
+               (inc position))))]
+      (assoc store
+             :active-buckets closed
+             :active-cells empty-active-cells
+             :fold-open false))))
+
+(defn open-fold! [ctx: (Atom t/TermStore)] -> (Atom t/TermStore)
+  (do
+    (reset! ctx (open-fold-state (deref ctx)))
+    ctx))
+
+(defn close-fold! [ctx: (Atom t/TermStore)] -> (Atom t/TermStore)
+  (do
+    (reset! ctx (close-fold-state (deref ctx)))
+    ctx))
 
 (defn- apply-operation-state!
   [store: t/TermStore
@@ -1000,17 +1072,21 @@
 
 (defn- rebuild-operation-state! [store: t/TermStore] -> t/TermStore
   (let [base: t/TermStore
-        (assoc store
-               :withdrawal-targets empty-ids
-               :active-buckets empty-active-buckets
-               :active-slots (slots/fresh-slots initial-slots))]
-    (loop [current: t/TermStore base position: Int 0]
-      (if (>= position (count (t/termstore-operations current)))
-        current
-        (recur
-         (apply-operation-state!
-          current position (nth (t/termstore-operations current) position))
-         (inc position))))))
+        (open-fold-state
+         (assoc store
+                :withdrawal-targets empty-ids
+                :active-buckets empty-active-buckets
+                :active-cells empty-active-cells
+                :fold-open false
+                :active-slots (slots/fresh-slots initial-slots)))]
+    (close-fold-state
+     (loop [current: t/TermStore base position: Int 0]
+       (if (>= position (count (t/termstore-operations current)))
+         current
+         (recur
+          (apply-operation-state!
+           current position (nth (t/termstore-operations current) position))
+          (inc position)))))))
 
 (defn- term-store-load-ok [] -> TermStoreLoadResult
   (->TermStoreLoadResult true nil nil))
@@ -1056,7 +1132,7 @@
             (let [loaded: t/TermStore
                   (t/->TermStore
                    dump-space next-sequence-value atoms rows transactions operations
-                   empty-ids empty-active-buckets
+                   empty-ids empty-active-buckets empty-active-cells false
                    (build-atom-term-slots! atoms (term-slots-width-for (count atoms)))
                    (build-triple-term-slots! rows (term-slots-width-for (count rows)))
                    (slots/fresh-slots initial-slots))]
