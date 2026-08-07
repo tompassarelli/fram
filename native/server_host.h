@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define FRAM_SERVER_GENERATED_ABI 2u
+#define FRAM_SERVER_GENERATED_ABI 3u
 #define FRAM_SERVER_HOST_ABI 1u
 #define FRAM_SERVER_ERROR_CAPACITY 512u
 
@@ -43,10 +43,15 @@ typedef int (*fram_server_storage_sync_fn)(void *context, char *error,
 typedef int (*fram_server_storage_close_fn)(void *context, char *error,
                                             size_t error_capacity);
 
+/* snapshot_context is the second storage object served by the SAME seven
+   storage callbacks; NULL means this host offers no snapshot object.
+   memory_budget_bytes of zero means the host named no budget. */
 typedef struct fram_server_host_v1 {
   uint32_t abi_version;
   uint32_t struct_size;
   void *context;
+  void *snapshot_context;
+  uint64_t memory_budget_bytes;
   fram_server_clock_fn clock_milliseconds;
   fram_server_storage_size_fn storage_size;
   fram_server_storage_read_fn storage_read;
@@ -59,9 +64,11 @@ typedef struct fram_server_host_v1 {
 /* The adapter verifies and invokes the eight generated-module hooks. */
 uint32_t fram_server_generated_abi(void);
 
-/* SPACE_ID is NULL when the deployed flat-log service did not configure one. */
+/* SPACE_ID is NULL when the deployed flat-log service did not configure one.
+   The snapshot image is opened beside the log as CANONICAL_LOG_PATH.snapshot. */
 int fram_server_store_boot(const char *canonical_log_path,
                            const char *space_id,
+                           uint64_t memory_budget_bytes,
                            fram_server_store **store_out, char *error,
                            size_t error_capacity);
 

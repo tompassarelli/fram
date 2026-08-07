@@ -8,6 +8,7 @@
 
 #include "fram.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 
 /* The import module IS the fram_host_v1 struct, field for field: one hook is
@@ -38,14 +39,15 @@ int fram_host_import_storage_sync(void *context);
 FRAM_HOST_IMPORT(storage_close)
 int fram_host_import_storage_close(void *context);
 
-/* Contexts stay NULL: per-instance identity is the wasm instance itself, so
-   one instance binds one host database and multiplexing is not offered. */
+/* One instance binds one host database, so a context is only an object
+   discriminator: 0 is the FRAMLOG and 1 is the snapshot image. */
 static const fram_host_v1 import_host = {
     .abi_version = FRAM_ABI_VERSION,
     .struct_size = (uint32_t)sizeof(fram_host_v1),
     .allocation_context = NULL,
     .clock_context = NULL,
     .storage_context = NULL,
+    .snapshot_storage_context = (void *)(uintptr_t)1u,
     .allocate = fram_host_import_allocate,
     .deallocate = fram_host_import_deallocate,
     .clock_milliseconds = fram_host_import_clock_milliseconds,

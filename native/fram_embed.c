@@ -13,10 +13,19 @@
 #include <string.h>
 #include <unistd.h>
 
+/* One seam per storage object: the adapter passes a seam back as its context,
+   so the same seven embedder callbacks serve the log and the image. */
+typedef struct storage_seam {
+  struct fram_database *database;
+  void *context;
+} storage_seam;
+
 struct fram_database {
   fram_server_store *store;
   fram_host_v1 host;
   pthread_mutex_t mutex;
+  storage_seam log_seam;
+  storage_seam snapshot_seam;
 };
 
 static void clear_error(fram_error *error) {
@@ -134,7 +143,8 @@ static bool valid_host(const fram_host_v1 *host) {
 
 static int embedded_clock(void *context, int64_t *milliseconds_out,
                           char *error, size_t error_capacity) {
-  fram_database *database = context;
+  storage_seam *seam = context;
+  fram_database *database = seam->database;
 
   if (database->host.clock_milliseconds(database->host.clock_context,
                                          milliseconds_out) != 0 ||
@@ -148,10 +158,9 @@ static int embedded_clock(void *context, int64_t *milliseconds_out,
 
 static int embedded_storage_size(void *context, uint64_t *size_out,
                                  char *error, size_t error_capacity) {
-  fram_database *database = context;
+  storage_seam *seam = context;
 
-  if (database->host.storage_size(database->host.storage_context, size_out) !=
-      0) {
+  if (seam->database->host.storage_size(seam->context, size_out) != 0) {
     set_internal_error(error, error_capacity,
                        "embedded host storage-size failed");
     return FRAM_SERVER_HOST_ERROR;
@@ -162,12 +171,11 @@ static int embedded_storage_size(void *context, uint64_t *size_out,
 static int embedded_storage_read(void *context, uint64_t offset,
                                  uint8_t *destination, size_t length,
                                  char *error, size_t error_capacity) {
-  fram_database *database = context;
+  storage_seam *seam = context;
 
   if (length != 0u &&
-      database->host.storage_read(database->host.storage_context, offset,
-                                  destination,
-                                  length) != 0) {
+      seam->database->host.storage_read(seam->context, offset, destination,
+                                        length) != 0) {
     set_internal_error(error, error_capacity,
                        "embedded host storage-read failed");
     return FRAM_SERVER_HOST_ERROR;
@@ -177,10 +185,9 @@ static int embedded_storage_read(void *context, uint64_t offset,
 
 static int embedded_storage_truncate(void *context, uint64_t length,
                                      char *error, size_t error_capacity) {
-  fram_database *database = context;
+  storage_seam *seam = context;
 
-  if (database->host.storage_truncate(database->host.storage_context, length) !=
-      0) {
+  if (seam->database->host.storage_truncate(seam->context, length) != 0) {
     set_internal_error(error, error_capacity,
                        "embedded host storage-truncate failed");
     return FRAM_SERVER_HOST_ERROR;
@@ -191,11 +198,10 @@ static int embedded_storage_truncate(void *context, uint64_t length,
 static int embedded_storage_append(void *context, const uint8_t *bytes,
                                    size_t length, char *error,
                                    size_t error_capacity) {
-  fram_database *database = context;
+  storage_seam *seam = context;
 
   if (length != 0u &&
-      database->host.storage_append(database->host.storage_context, bytes,
-                                    length) != 0) {
+      seam->database->host.storage_append(seam->context, bytes, length) != 0) {
     set_internal_error(error, error_capacity,
                        "embedded host storage-append failed");
     return FRAM_SERVER_HOST_ERROR;
@@ -205,9 +211,9 @@ static int embedded_storage_append(void *context, const uint8_t *bytes,
 
 static int embedded_storage_sync(void *context, char *error,
                                  size_t error_capacity) {
-  fram_database *database = context;
+  storage_seam *seam = context;
 
-  if (database->host.storage_sync(database->host.storage_context) != 0) {
+  if (seam->database->host.storage_sync(seam->context) != 0) {
     set_internal_error(error, error_capacity,
                        "embedded host storage-sync failed");
     return FRAM_SERVER_HOST_ERROR;
@@ -217,9 +223,9 @@ static int embedded_storage_sync(void *context, char *error,
 
 static int embedded_storage_close(void *context, char *error,
                                   size_t error_capacity) {
-  fram_database *database = context;
+  storage_seam *seam = context;
 
-  if (database->host.storage_close(database->host.storage_context) != 0) {
+  if (seam->database->host.storage_close(seam->context) != 0) {
     set_internal_error(error, error_capacity,
                        "embedded host storage-close failed");
     return FRAM_SERVER_HOST_ERROR;
@@ -360,6 +366,10 @@ fram_status fram_open(const fram_open_options_v1 *options,
   }
   memset(database, 0, sizeof(*database));
   database->host = allocation_host;
+  database->log_seam.database = database;
+  database->log_seam.context = allocation_host.storage_context;
+  database->snapshot_seam.database = database;
+  database->snapshot_seam.context = allocation_host.snapshot_storage_context;
   if (pthread_mutex_init(&database->mutex, NULL) != 0) {
     allocation_host.deallocate(allocation_host.allocation_context, database);
     set_error(error, FRAM_ENGINE_ERROR,
@@ -371,6 +381,7 @@ fram_status fram_open(const fram_open_options_v1 *options,
 #ifndef FRAM_WASM_HOST_IMPORTS
   if (host == NULL) {
     status = fram_server_store_boot(log_label, options->space_id,
+                                    options->memory_budget_bytes,
                                     &database->store, detail, sizeof(detail));
   } else
 #endif
@@ -378,7 +389,11 @@ fram_status fram_open(const fram_open_options_v1 *options,
     server_host = (fram_server_host_v1){
         .abi_version = FRAM_SERVER_HOST_ABI,
         .struct_size = (uint32_t)sizeof(server_host),
-        .context = database,
+        .context = &database->log_seam,
+        .snapshot_context = allocation_host.snapshot_storage_context != NULL
+                                ? &database->snapshot_seam
+                                : NULL,
+        .memory_budget_bytes = options->memory_budget_bytes,
         .clock_milliseconds = embedded_clock,
         .storage_size = embedded_storage_size,
         .storage_read = embedded_storage_read,

@@ -40,6 +40,7 @@ typedef struct server_config {
   const char *space_id;
   server_bind bind;
   const char *bind_text;
+  uint64_t memory_budget_bytes;
 } server_config;
 
 typedef struct writer_authority {
@@ -122,6 +123,7 @@ static int load_config(int argc, char **argv, server_config *config) {
   const char *port_text;
   const char *log_path;
   const char *space_id;
+  const char *budget_text;
 
   if (index < argc && strcmp(argv[index], "serve") == 0) {
     index += 1;
@@ -151,6 +153,23 @@ static int load_config(int argc, char **argv, server_config *config) {
                  ? argv[index + 2]
                  : getenv("FRAM_SPACE_ID");
   config->space_id = nonempty(space_id) ? space_id : NULL;
+
+  budget_text = getenv("FRAM_MEMORY_BUDGET_BYTES");
+  config->memory_budget_bytes = UINT64_C(0);
+  if (nonempty(budget_text)) {
+    char *end = NULL;
+    unsigned long long parsed;
+
+    errno = 0;
+    parsed = strtoull(budget_text, &end, 10);
+    if (errno != 0 || end == budget_text || *end != '\0') {
+      fprintf(stderr,
+              "fram-server-native: FRAM_MEMORY_BUDGET_BYTES is not a byte "
+              "count\n");
+      return -1;
+    }
+    config->memory_budget_bytes = (uint64_t)parsed;
+  }
   return parse_bind(config);
 }
 
@@ -868,8 +887,9 @@ int main(int argc, char **argv) {
 
   error[0] = '\0';
   status = fram_server_store_boot(authority.canonical_log_path,
-                                      config.space_id, &store, error,
-                                      sizeof(error));
+                                      config.space_id,
+                                      config.memory_budget_bytes, &store,
+                                      error, sizeof(error));
   terminate_hook_error(error);
   if (status != FRAM_SERVER_OK || store == NULL) {
     fprintf(stderr,

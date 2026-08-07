@@ -71,12 +71,15 @@ typedef int (*fram_storage_append_fn)(void *context, const uint8_t *bytes,
 typedef int (*fram_storage_sync_fn)(void *context);
 typedef int (*fram_storage_close_fn)(void *context);
 
+/* snapshot_storage_context names a SECOND storage object served by the same
+   seven storage callbacks; NULL means this host offers no snapshot image. */
 typedef struct fram_host_v1 {
   uint32_t abi_version;
   uint32_t struct_size;
   void *allocation_context;
   void *clock_context;
   void *storage_context;
+  void *snapshot_storage_context;
   fram_allocate_fn allocate;
   fram_deallocate_fn deallocate;
   fram_clock_milliseconds_fn clock_milliseconds;
@@ -88,12 +91,14 @@ typedef struct fram_host_v1 {
   fram_storage_close_fn storage_close;
 } fram_host_v1;
 
+/* memory_budget_bytes of zero leaves every engine memory limit at its default. */
 typedef struct fram_open_options_v1 {
   uint32_t abi_version;
   uint32_t struct_size;
   const char *space_id;
   const char *log_path;
   const fram_host_v1 *host;
+  uint64_t memory_budget_bytes;
 } fram_open_options_v1;
 
 FRAM_API uint32_t fram_abi_version(void);
@@ -126,6 +131,8 @@ FRAM_API fram_status fram_snapshot(fram_database *database,
                                    fram_slice request,
                                    fram_buffer *response,
                                    fram_error *error);
+/* rpc/checkpoint writes the image to the snapshot storage object and answers
+   with its sequence, watermark, stamp, fingerprint, and byte count. */
 
 /* BUFFER remains owned until this function; it may outlive DATABASE. */
 FRAM_API void fram_buffer_release(fram_buffer *buffer);
@@ -137,7 +144,9 @@ FRAM_API fram_status fram_close(fram_database *database, fram_error *error);
 /*
  * This build has no POSIX storage: HOST == NULL selects nine named imports of
  * wasm module "fram_host_v1", one per fram_host_v1 callback, each named for
- * its field and typed by the wasm32 lowering of the prototype above. LOG_PATH
+ * its field and typed by the wasm32 lowering of the prototype above. The
+ * import host passes storage context 0 for the FRAMLOG and 1 for the snapshot
+ * image, so both objects ride those same nine imports. LOG_PATH
  * is then a diagnostic label, host contexts are 0, and the embedder owns
  * FRAMLOG exclusivity. An import reports failure by returning nonzero; a
  * trapping import unwinds the guest uncleaned, so a trap is instance-fatal.
