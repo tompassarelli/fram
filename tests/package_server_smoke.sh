@@ -18,7 +18,7 @@ case "$package_root" in /nix/store/*) ;; *)
 runtime="$package_root/libexec/fram"
 required=(
   "$package_root/bin/fram" "$package_root/bin/fram-server"
-  "$package_root/bin/fram-mcp" "$package_root/bin/fram-primer"
+  "$package_root/bin/fram-mcp"
   "$runtime/bin/fram-fast.clj" "$runtime/bin/fram-migrate-triple-log"
   "$runtime/database.clj" "$runtime/server.clj"
   "$runtime/writer_authority.clj" "$runtime/rotations.clj"
@@ -255,10 +255,6 @@ wait_ready >/dev/null
 [[ ! -e "$state_dir/facts.log" && ! -e "$state_dir/coordination.log" ]] || {
   echo "fram package smoke: default state created a retired log" >&2; exit 1; }
 stop_server
-
-primer_output="$("$env_bin" -i HOME="$home" "$package_root/bin/fram-primer" --beagle-catalog)"
-"$grep_bin" -Fq "define STDLIB-FRAM" <<<"$primer_output" || {
-  echo "fram package smoke: primer did not read packaged sources" >&2; exit 1; }
 
 echo "fram package smoke: native version $restart_version"
 echo "fram package smoke: exact-epoch $lease_receipt"

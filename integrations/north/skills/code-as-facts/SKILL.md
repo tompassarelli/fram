@@ -117,7 +117,7 @@ structurally cannot compute a transitive closure.
    (AST, any #lang)                  EDN triples                (interned graph)      (transitive closure)
 ```
 
-Current entry points (`bb fram:bin/fram-primer` prints the live cheatsheet):
+Current entry points:
 
 ```sh
 # turn the stack on for a project dir — also writes <dir>/.fram/corpus.facts

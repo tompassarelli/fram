@@ -18,9 +18,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The catalog currency gate (catalog_current_test.clj) diffs the GENERATED beagle
-      # fram-API catalog (stdlib-fram.rkt) against fram's source — checkout beagle to enable it.
-      - name: Checkout beagle (for the stdlib-fram.rkt currency gate)
+      - name: Checkout beagle (the toolchain FRAM_BEAGLE and the Racket link step use)
         uses: actions/checkout@v4
         with:
           repository: Autonymy/beagle
@@ -71,8 +69,6 @@ jobs:
         run: clojure -P
 
       - name: Occurrence-native component and boundary suites
-        env:
-          BEAGLE: ${{ github.workspace }}/.beagle
         run: |
           set -uo pipefail
           manifest=tests/occurrence_native_ci_manifest.txt

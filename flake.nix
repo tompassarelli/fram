@@ -164,7 +164,7 @@
               # but require an external Beagle toolchain and are not advertised
               # as self-contained package commands.
               case "$name" in
-                fram|fram-cutover|fram-server|fram-mcp|fram-primer) ;;
+                fram|fram-cutover|fram-server|fram-mcp) ;;
                 *) continue ;;
               esac
               chmod +x "$s"
@@ -543,7 +543,6 @@
           fram = mkApp "fram";
           fram-server = mkApp "fram-server";
           fram-mcp = mkApp "fram-mcp";
-          fram-primer = mkApp "fram-primer";
           fram-graph-edit-runtime = {
             type = "app";
             program = "${self.packages.${system}.fram-graph-edit-runtime}/bin/fram-graph-edit-runtime";
