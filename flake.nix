@@ -447,6 +447,10 @@
             chmod -R u+w "$out"
             cp -r ${beagleSource}/native-core "$out/native-core"
             chmod -R u+w "$out/native-core"
+            # facts-roundtrip (native_code_reader_test, projection_lifecycle_test)
+            # loads selfhost/main.bb from <root>/self-host, which the package omits.
+            cp -r ${beagleSource}/self-host "$out/self-host"
+            chmod -R u+w "$out/self-host"
             # Every bin/ wrapper re-enters its original store root, which has no
             # native-core; rebase them onto the composed one.
             grep -rlF "${beaglePkg}" "$out/bin" | while IFS= read -r wrapper; do
