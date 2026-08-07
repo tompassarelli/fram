@@ -138,7 +138,7 @@
 ;; Every record is length-prefixed and CRC-checked on its own, so one damaged
 ;; row is detected without trusting any other byte of the image.
 (defn- frame-record! [out: wire/Encoder payload: wire/Encoder] -> Nil
-  (let [error (deref (wire/encoder-error payload))
+  (let [error: String? (deref (wire/encoder-error payload))
         bytes: (Vec Int) (deref (wire/encoder-bytes payload))]
     (if error
       (wire/encoder-error! out error)
@@ -240,14 +240,14 @@
       (frame-record! out payload))))
 
 (defn- append-trailer-record! [out: wire/Encoder sidecar: Sidecar] -> Nil
-  (let [payload (new-encoder)
+  (let [payload: wire/Encoder (new-encoder)
         labels: (Vec String) (sidecar-log-set sidecar)]
     (do
       (wire/append-u8! payload record-trailer)
       (wire/append-i64-le! payload (sidecar-sequence sidecar))
       (wire/append-i64-le! payload (sidecar-watermark sidecar))
       (wire/append-u32-le! payload (count labels))
-      (loop [position 0]
+      (loop [position: Int 0]
         (if (>= position (count labels))
           nil
           (do
@@ -323,7 +323,7 @@
            (wire/append-u32-le! out (count space-bytes))
            (swap! (wire/encoder-bytes out) into space-bytes)
            (wire/append-i64-le! out (t/termstoredump-next-sequence dump))
-           (let [image-start (count (deref (wire/encoder-bytes out)))]
+           (let [image-start: Int (count (deref (wire/encoder-bytes out)))]
              (do
                (append-atom-records! out (t/termstoredump-atoms dump))
                (append-triple-records! out (t/termstoredump-triples dump))
@@ -331,8 +331,8 @@
                 out (t/termstoredump-transactions dump))
                (append-operation-records! out (t/termstoredump-operations dump))
                (let [image-bytes: (Vec Int) (deref (wire/encoder-bytes out))
-                     image-end (count image-bytes)
-                     fingerprint
+                     image-end: Int (count image-bytes)
+                     fingerprint: Int
                      (log/crc32-range image-bytes image-start image-end)]
                  (do
                    (append-trailer-record!
@@ -440,7 +440,7 @@
     (if (> label-count snapshot-max-log-labels)
       (failed-record "snapshot log set exceeds its label bound")
       (let [labels: (Vec String)
-            (loop [position 0 current: (Vec String) empty-labels]
+            (loop [position: Int 0 current: (Vec String) empty-labels]
               (if (>= position label-count)
                 current
                 (recur (+ position 1)
@@ -448,10 +448,11 @@
                              (wire/read-sized-text!
                               decoder snapshot-max-text-bytes
                               "snapshot log label")))))
-            image-start (wire/read-i64-le! decoder "snapshot image start")
-            image-end (wire/read-i64-le! decoder "snapshot image end")
-            stamp (wire/read-i64-le! decoder "snapshot stamp")
-            fingerprint (wire/read-u32-le! decoder "snapshot fingerprint")]
+            image-start: Int (wire/read-i64-le! decoder "snapshot image start")
+            image-end: Int (wire/read-i64-le! decoder "snapshot image end")
+            stamp: Int (wire/read-i64-le! decoder "snapshot stamp")
+            fingerprint: Int
+            (wire/read-u32-le! decoder "snapshot fingerprint")]
         (->RecordResult record-trailer nil nil nil nil
                         (->Sidecar sequence watermark labels image-start
                                    image-end stamp fingerprint)
@@ -484,7 +485,7 @@
    start: Int
    space-id: String
    next-sequence: Int] -> ReadResult
-  (loop [position start
+  (loop [position: Int start
          atoms: (Vec t/AtomRow) empty-atom-rows
          triples: (Vec t/TripleRow) empty-triple-rows
          transactions: (Vec t/TransactionRow) empty-transaction-rows
@@ -613,16 +614,16 @@
        (plan/sidecar-validation-decision
         false false false false false false false false false nil nil))
       (let [present: Sidecar sidecar
-            watermark (sidecar-watermark present)
-            image-start (sidecar-image-start present)
-            image-end (sidecar-image-end present)
-            past-eof (> watermark (count log-bytes))
-            tail-sequence (tail-first-sequence! log-bytes watermark)
-            offsets-valid
+            watermark: Int (sidecar-watermark present)
+            image-start: Int (sidecar-image-start present)
+            image-end: Int (sidecar-image-end present)
+            past-eof: Bool (> watermark (count log-bytes))
+            tail-sequence: Int (tail-first-sequence! log-bytes watermark)
+            offsets-valid: Bool
             (and (>= image-start 0)
                  (and (>= image-end image-start)
                       (<= image-end (count snapshot-bytes))))
-            decision
+            decision: plan/SidecarValidation
             (plan/sidecar-validation-decision
              true
              (>= (sidecar-sequence present) 0)
@@ -659,14 +660,14 @@
    snapshot-bytes: (Vec Int)
    log-bytes: (Vec Int)
    configured-space-id: String] -> BootPlan
-  (let [candidate-present (pos? (count snapshot-bytes))
+  (let [candidate-present: Bool (pos? (count snapshot-bytes))
         read: ReadResult
         (if candidate-present
           (read-snapshot! snapshot-bytes configured-space-id)
           (failed-read "snapshot object is empty"))
-        verification-ok (readresult-ok read)
-        install (plan/boot-install-decision candidate-present true
-                                            verification-ok)
+        verification-ok: Bool (readresult-ok read)
+        install: Keyword (plan/boot-install-decision candidate-present true
+                                                     verification-ok)
         image: Image? (readresult-image read)
         reason: Keyword?
         (cond
@@ -677,8 +678,8 @@
           [:else
            (sidecar-reason! snapshot-bytes log-bytes configured-space-id
                            (let [present: Image image] present))])
-        route (plan/snapshot-replay-decision
-               (and enabled (= :snapshot install)) reason)]
+        route: Keyword (plan/snapshot-replay-decision
+                        (and enabled (= :snapshot install)) reason)]
     (if (= :replay route)
       (->BootPlan
        :replay no-reason
