@@ -85,13 +85,17 @@
    sidecar: Sidecar?
    error: String?])
 
-;; route is :replay or :fold; reason is the sidecar-validation reason keyword
-;; that forced a fold, and report is the one boot line the host prints.
+;; reason is the sidecar-validation reason that forced a fold; report is the
+;; one boot line the host prints.
 (defrecord BootPlan
   [route: Keyword
-   reason: Any
+   reason: Keyword?
    report: String
    image: Image?])
+
+(def no-sidecar: Sidecar? nil)
+(def no-image: Image? nil)
+(def no-reason: Keyword? nil)
 
 (defn failed-bytes [message: String] -> BytesResult
   (->BytesResult status-fatal empty-bytes 0 message))
@@ -184,10 +188,10 @@
                   payload (subs (str present) 1)
                   snapshot-max-text-bytes "snapshot keyword atom")))))]
         [(= :instant kind)
-         (let [value: Instant? (t/atomrow-instant-value row)]
+         (let [value: t/Instant? (t/atomrow-instant-value row)]
            (if (nil? value)
              (wire/encoder-error! payload "snapshot instant atom has no value")
-             (let [present: Instant value]
+             (let [present: t/Instant value]
                (do
                  (wire/append-u8! payload atom-instant)
                  (wire/append-i64-le!
@@ -484,21 +488,10 @@
          atoms: (Vec t/AtomRow) empty-atom-rows
          triples: (Vec t/TripleRow) empty-triple-rows
          transactions: (Vec t/TransactionRow) empty-transaction-rows
-         operations: (Vec t/OperationRow) empty-operation-rows
-         sidecar: Sidecar? nil]
+         operations: (Vec t/OperationRow) empty-operation-rows]
     (cond
-      [(= position (count bytes))
-       (if (nil? sidecar)
-         (failed-read "snapshot trailer is missing")
-         (->ReadResult
-          true
-          (->Image space-id next-sequence atoms triples transactions
-                   operations sidecar)
-          nil))]
-      [(some? sidecar)
-       (failed-read "snapshot trailer is not the last record")]
       [(> (+ position 8) (count bytes))
-       (failed-read "snapshot record is truncated")]
+       (failed-read "snapshot trailer is missing")]
       [:else
        (let [payload-length (log/u32-le-at bytes position)
              payload-start (+ position 4)
@@ -522,22 +515,26 @@
                   (error-or-snapshot (recordresult-error decoded)))]
                 [(= kind record-atom)
                  (recur next-position (conj atoms (atom-row-of decoded))
-                        triples transactions operations sidecar)]
+                        triples transactions operations)]
                 [(= kind record-triple)
                  (recur next-position atoms
                         (conj triples (triple-row-of decoded))
-                        transactions operations sidecar)]
+                        transactions operations)]
                 [(= kind record-transaction)
                  (recur next-position atoms triples
                         (conj transactions (transaction-row-of decoded))
-                        operations sidecar)]
+                        operations)]
                 [(= kind record-operation)
                  (recur next-position atoms triples transactions
-                        (conj operations (operation-row-of decoded))
-                        sidecar)]
+                        (conj operations (operation-row-of decoded)))]
                 [(= kind record-trailer)
-                 (recur next-position atoms triples transactions operations
-                        (recordresult-sidecar decoded))]
+                 (if (not= next-position (count bytes))
+                   (failed-read "snapshot trailer is not the last record")
+                   (->ReadResult
+                    true
+                    (->Image space-id next-sequence atoms triples transactions
+                             operations (recordresult-sidecar decoded))
+                    nil))]
                 [:else
                  (failed-read "snapshot record has an unknown kind")]))]))])))
 
@@ -596,7 +593,7 @@
         (recur (+ position 1))))))
 
 ;; -1 when the tail is empty or does not start a readable FRAMLOG frame header.
-(defn- tail-first-sequence
+(defn- tail-first-sequence!
   [log-bytes: (Vec Int)
    watermark: Int] -> Int
   (if (>= watermark (count log-bytes))
@@ -606,22 +603,22 @@
           sequence (wire/read-i64-le! decoder "snapshot tail frame sequence")]
       (if (deref (wire/decoder-error decoder)) -1 sequence))))
 
-(defn- sidecar-reason
+(defn- sidecar-reason!
   [snapshot-bytes: (Vec Int)
    log-bytes: (Vec Int)
    configured-space-id: String
-   image: Image] -> Any
+   image: Image] -> Keyword?
   (let [sidecar: Sidecar? (image-sidecar image)]
     (if (nil? sidecar)
-      (get (plan/sidecar-validation-decision
-            false false false false false false false false false nil nil)
-           :reason)
+      (plan/sidecarvalidation-reason
+       (plan/sidecar-validation-decision
+        false false false false false false false false false nil nil))
       (let [present: Sidecar sidecar
             watermark (sidecar-watermark present)
             image-start (sidecar-image-start present)
             image-end (sidecar-image-end present)
             past-eof (> watermark (count log-bytes))
-            tail-sequence (tail-first-sequence log-bytes watermark)
+            tail-sequence (tail-first-sequence! log-bytes watermark)
             offsets-valid
             (and (>= image-start 0)
                  (and (>= image-end image-start)
@@ -647,10 +644,13 @@
                nil
                (image-space-id image))
              (if past-eof "snapshot watermark" nil))]
-        (get decision :reason)))))
+        (plan/sidecarvalidation-reason decision)))))
 
-(defn- reason-report [reason: Any] -> String
-  (str "fram: snapshot boot degraded to full fold; reason " (str reason)))
+(defn- reason-report [reason: Keyword?] -> String
+  (if (nil? reason)
+    "fram: snapshot boot degraded to full fold; reason none"
+    (str "fram: snapshot boot degraded to full fold; reason "
+         (subs (str (let [named: Keyword reason] named)) 1))))
 
 ;; The three declared boot predicates, given their callers: an image is
 ;; installed only when it is present, verifies, and its sidecar agrees with
@@ -669,23 +669,23 @@
         install (plan/boot-install-decision candidate-present true
                                             verification-ok)
         image: Image? (readresult-image read)
-        reason: Any
+        reason: Keyword?
         (cond
           [(not candidate-present) :no-image]
           [(not verification-ok) :image-unverified]
           [(not= :snapshot install) :install-refused]
           [(nil? image) :image-unverified]
           [:else
-           (sidecar-reason snapshot-bytes log-bytes configured-space-id
+           (sidecar-reason! snapshot-bytes log-bytes configured-space-id
                            (let [present: Image image] present))])
         route (plan/snapshot-replay-decision
                (and enabled (= :snapshot install)) reason)]
     (if (= :replay route)
       (->BootPlan
-       :replay nil
-       (str "fram: snapshot boot installed the image and replays the log tail")
+       :replay no-reason
+       "fram: snapshot boot installed the image and replays the log tail"
        image)
-      (->BootPlan :fold reason (reason-report reason) nil))))
+      (->BootPlan :fold reason (reason-report reason) no-image))))
 
 ;; Re-interning from the image: load-term-store! rebuilds the derived indexes
 ;; and refuses a dump whose handles do not resolve, so an image that would not

@@ -128,20 +128,26 @@
 (defn boot-install-decision [^Boolean candidate-present ^Boolean verification-enabled ^Boolean verification-ok]
   (if (and candidate-present (or (not verification-enabled) verification-ok)) :snapshot :fold))
 
-(defn sidecar-validation-decision [^Boolean sidecar-map ^Boolean seq-valid ^Boolean watermark-valid ^Boolean watermark-agrees ^Boolean log-set-matches ^Boolean offsets-valid ^Boolean stamped ^Boolean fingerprint-computable ^Boolean fingerprint-matches bad-identity past-eof]
+(defrecord SidecarValidation [reason label])
+
+(defn sidecarvalidation-reason [r] (:reason r))
+
+(defn sidecarvalidation-label [r] (:label r))
+
+(defn ^SidecarValidation sidecar-validation-decision [^Boolean sidecar-map ^Boolean seq-valid ^Boolean watermark-valid ^Boolean watermark-agrees ^Boolean log-set-matches ^Boolean offsets-valid ^Boolean stamped ^Boolean fingerprint-computable ^Boolean fingerprint-matches bad-identity past-eof]
   (cond
-  (not sidecar-map) {:reason :no-sidecar}
-  (not seq-valid) {:reason :seq-malformed}
-  (not watermark-valid) {:reason :watermark-malformed}
-  (not watermark-agrees) {:reason :watermark-disagrees}
-  (not log-set-matches) {:reason :log-set-mismatch}
-  (not offsets-valid) {:reason :offset-malformed}
-  (not stamped) {:reason :unstamped}
-  (not fingerprint-computable) {:reason :fingerprint-uncomputable}
-  (not fingerprint-matches) {:reason :fingerprint-mismatch}
-  (some? bad-identity) {:reason :identity-mismatch :label bad-identity}
-  (some? past-eof) {:reason :past-eof :label past-eof}
-  :else {:reason nil}))
+  (not sidecar-map) (->SidecarValidation :no-sidecar nil)
+  (not seq-valid) (->SidecarValidation :seq-malformed nil)
+  (not watermark-valid) (->SidecarValidation :watermark-malformed nil)
+  (not watermark-agrees) (->SidecarValidation :watermark-disagrees nil)
+  (not log-set-matches) (->SidecarValidation :log-set-mismatch nil)
+  (not offsets-valid) (->SidecarValidation :offset-malformed nil)
+  (not stamped) (->SidecarValidation :unstamped nil)
+  (not fingerprint-computable) (->SidecarValidation :fingerprint-uncomputable nil)
+  (not fingerprint-matches) (->SidecarValidation :fingerprint-mismatch nil)
+  (some? bad-identity) (->SidecarValidation :identity-mismatch bad-identity)
+  (some? past-eof) (->SidecarValidation :past-eof past-eof)
+  :else (->SidecarValidation nil nil)))
 
 (defn reload-entry-decision [^Boolean nonblocking-if-active active-reloads]
   (if (and nonblocking-if-active (pos? active-reloads)) :in-progress :participate))

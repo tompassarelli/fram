@@ -211,6 +211,10 @@
     :snapshot
     :fold))
 
+;; A closed record, not a map: Native Core cannot lower a keyword access into
+;; an open map, and this decision is read by the snapshot boot path.
+(defrecord SidecarValidation [reason: Keyword? label: Any])
+
 (defn sidecar-validation-decision
   [sidecar-map: Bool
    seq-valid: Bool
@@ -222,32 +226,32 @@
    fingerprint-computable: Bool
    fingerprint-matches: Bool
    bad-identity: Any
-   past-eof: Any] -> (Map Keyword Any)
+   past-eof: Any] -> SidecarValidation
   (cond
     (not sidecar-map)
-    {:reason :no-sidecar}
+    (->SidecarValidation :no-sidecar nil)
     (not seq-valid)
-    {:reason :seq-malformed}
+    (->SidecarValidation :seq-malformed nil)
     (not watermark-valid)
-    {:reason :watermark-malformed}
+    (->SidecarValidation :watermark-malformed nil)
     (not watermark-agrees)
-    {:reason :watermark-disagrees}
+    (->SidecarValidation :watermark-disagrees nil)
     (not log-set-matches)
-    {:reason :log-set-mismatch}
+    (->SidecarValidation :log-set-mismatch nil)
     (not offsets-valid)
-    {:reason :offset-malformed}
+    (->SidecarValidation :offset-malformed nil)
     (not stamped)
-    {:reason :unstamped}
+    (->SidecarValidation :unstamped nil)
     (not fingerprint-computable)
-    {:reason :fingerprint-uncomputable}
+    (->SidecarValidation :fingerprint-uncomputable nil)
     (not fingerprint-matches)
-    {:reason :fingerprint-mismatch}
+    (->SidecarValidation :fingerprint-mismatch nil)
     (some? bad-identity)
-    {:reason :identity-mismatch :label bad-identity}
+    (->SidecarValidation :identity-mismatch bad-identity)
     (some? past-eof)
-    {:reason :past-eof :label past-eof}
+    (->SidecarValidation :past-eof past-eof)
     :else
-    {:reason nil}))
+    (->SidecarValidation nil nil)))
 
 (defn reload-entry-decision
   [nonblocking-if-active: Bool
