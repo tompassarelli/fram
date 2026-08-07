@@ -293,9 +293,12 @@
    t3 (t/triple-t3 proposition)]
   (->RotationBuild (conj (rotationbuild-events build) event) (build-set! (rotationbuild-by-occurrence build) (occurrence-key (occurrence-of event)) event) (build-add! (build-add! (build-add! (rotationbuild-spo build) [t1] event) [t1 t2] event) [t1 t2 t3] event) (build-add! (build-add! (rotationbuild-pos build) [t2] event) [t2 t3] event) (build-add! (build-add! (rotationbuild-osp build) [t3] event) [t3 t1] event))))
 
+(defn- ^Rotation projected [^String space-id version events]
+  (let [built (reduce (fn [build event] (build-rotate-add! build event)) (->RotationBuild empty-events (open-bucket-build) (open-bucket-build) (open-bucket-build) (open-bucket-build)) events)]
+  (->Rotation space-id version (rotationbuild-events built) (close-bucket-build (rotationbuild-by-occurrence built)) (close-bucket-build (rotationbuild-spo built)) (close-bucket-build (rotationbuild-pos built)) (close-bucket-build (rotationbuild-osp built)))))
+
 (defn ^Rotation project! [ctx]
-  (let [built (reduce (fn [build event] (build-rotate-add! build event)) (->RotationBuild empty-events (open-bucket-build) (open-bucket-build) (open-bucket-build) (open-bucket-build)) (store/live-occurrences ctx))]
-  (->Rotation (store/space-id ctx) (store/current-sequence ctx) (rotationbuild-events built) (close-bucket-build (rotationbuild-by-occurrence built)) (close-bucket-build (rotationbuild-spo built)) (close-bucket-build (rotationbuild-pos built)) (close-bucket-build (rotationbuild-osp built)))))
+  (projected (store/space-id ctx) (store/current-sequence ctx) (store/live-occurrences ctx)))
 
 (defn- ^Rotation apply-frame [^Rotation rotation ^String space-id frame]
   (let [coordinate (t/transaction-coordinate space-id (t/transactionframe-sequence frame))
@@ -307,14 +310,26 @@
   (if (= t/assert-action (t/commitoperation-action operation)) (recur (rotate-add current (t/assertion-occurrence (t/occurrence-coordinate coordinate ordinal) proposition)) (inc ordinal)) (let [target (newest (by-proposition current proposition))]
   (recur (if (some? target) (rotate-del current target) current) (inc ordinal)))))))))
 
+(defn- ^Rotation relaid-out [^Rotation rotation ^Boolean retracted]
+  (if retracted (projected (rotation-space-id rotation) (rotation-version rotation) (rotation-events rotation)) rotation))
+
+(defn- ^Boolean retracts? [operations]
+  (loop [ordinal 0]
+  (if (>= ordinal (count operations)) false (if (= t/assert-action (t/commitoperation-action (nth operations ordinal))) (recur (inc ordinal)) true))))
+
+(defn- ^Boolean frames-retract? [frames]
+  (loop [ordinal 0]
+  (if (>= ordinal (count frames)) false (if (retracts? (t/transactionframe-operations (nth frames ordinal))) true (recur (inc ordinal))))))
+
 (defn ^Rotation staged [^Rotation rotation ^String space-id sequence operations]
-  (apply-frame rotation space-id (t/->TransactionFrame sequence operations)))
+  (relaid-out (apply-frame rotation space-id (t/->TransactionFrame sequence operations)) (retracts? operations)))
 
 (defn ^Rotation refresh [^Rotation rotation ctx]
   (let [space (store/space-id ctx)
    target (store/current-sequence ctx)
    pinned (rotation-version rotation)]
-  (if (not (= space (rotation-space-id rotation))) (throw (ex-info "fram: rotation belongs to a different space" {:type :rotation-space-mismatch})) (if (> pinned target) (throw (ex-info "fram: rotation is ahead of the store it projects" {:type :rotation-ahead-of-store})) (if (= pinned target) rotation (assoc (reduce (fn [current frame] (apply-frame current space frame)) rotation (store/transaction-frames-between (deref ctx) pinned target)) :version target))))))
+  (if (not (= space (rotation-space-id rotation))) (throw (ex-info "fram: rotation belongs to a different space" {:type :rotation-space-mismatch})) (if (> pinned target) (throw (ex-info "fram: rotation is ahead of the store it projects" {:type :rotation-ahead-of-store})) (if (= pinned target) rotation (let [frames (store/transaction-frames-between (deref ctx) pinned target)]
+  (relaid-out (assoc (reduce (fn [current frame] (apply-frame current space frame)) rotation frames) :version target) (frames-retract? frames))))))))
 
 (defn ^Boolean pinned? [^Rotation rotation ctx]
   (and (= (store/space-id ctx) (rotation-space-id rotation)) (= (store/current-sequence ctx) (rotation-version rotation))))

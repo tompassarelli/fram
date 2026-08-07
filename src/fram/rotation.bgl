@@ -399,17 +399,27 @@
         [t3 t1]
         event))))
 
-(defn project! [ctx: (Atom t/TermStore)] -> Rotation
+;; The one layout: leaves appended in the commit order of the live events they
+;; cover. Every rotation a caller can hold comes through here, so a delta-folded
+;; rotation and a from-scratch build of the same events are the SAME value.
+(defn- projected
+  [space-id: String
+   version: Int
+   events: (Vec t/Triple)] -> Rotation
   (let [built: RotationBuild (reduce (fn
                                        [build: RotationBuild
-                                        event: t/Triple] -> RotationBuild (build-rotate-add! build event)) (->RotationBuild empty-events (open-bucket-build) (open-bucket-build) (open-bucket-build) (open-bucket-build)) (store/live-occurrences ctx))]
-    (->Rotation (store/space-id ctx)
-      (store/current-sequence ctx)
+                                        event: t/Triple] -> RotationBuild (build-rotate-add! build event)) (->RotationBuild empty-events (open-bucket-build) (open-bucket-build) (open-bucket-build) (open-bucket-build)) events)]
+    (->Rotation space-id
+      version
       (rotationbuild-events built)
       (close-bucket-build (rotationbuild-by-occurrence built))
       (close-bucket-build (rotationbuild-spo built))
       (close-bucket-build (rotationbuild-pos built))
       (close-bucket-build (rotationbuild-osp built)))))
+
+(defn project! [ctx: (Atom t/TermStore)] -> Rotation
+  (projected (store/space-id ctx) (store/current-sequence ctx)
+    (store/live-occurrences ctx)))
 
 ;; A retraction withdraws the NEWEST live occurrence of its proposition — the
 ;; same choice store/apply-operation-state makes, so the delta cannot drift from
@@ -430,6 +440,30 @@
               (recur (if (some? target) (rotate-del current target) current)
                 (inc ordinal)))))))))
 
+;; Only a withdrawal can leave a leaf out of the order `projected` appends in;
+;; appends alone already land in commit order.
+(defn- relaid-out [rotation: Rotation retracted: Bool] -> Rotation
+  (if retracted
+    (projected (rotation-space-id rotation) (rotation-version rotation)
+      (rotation-events rotation))
+    rotation))
+
+(defn- retracts? [operations: (Vec t/CommitOperation)] -> Bool
+  (loop [ordinal: Int 0]
+    (if (>= ordinal (count operations))
+      false
+      (if (= t/assert-action (t/commitoperation-action (nth operations ordinal)))
+        (recur (inc ordinal))
+        true))))
+
+(defn- frames-retract? [frames: (Vec t/TransactionFrame)] -> Bool
+  (loop [ordinal: Int 0]
+    (if (>= ordinal (count frames))
+      false
+      (if (retracts? (t/transactionframe-operations (nth frames ordinal)))
+        true
+        (recur (inc ordinal))))))
+
 ;; Uncommitted builder operations projected onto a committed rotation through
 ;; the same fold commit applies, so a staged read cannot disagree with its own
 ;; commit.
@@ -438,7 +472,8 @@
    space-id: String
    sequence: Int
    operations: (Vec t/CommitOperation)] -> Rotation
-  (apply-frame rotation space-id (t/->TransactionFrame sequence operations)))
+  (relaid-out (apply-frame rotation space-id (t/->TransactionFrame sequence operations))
+    (retracts? operations)))
 
 (defn refresh [rotation: Rotation ctx: (Atom t/TermStore)] -> Rotation
   (let [space: String (store/space-id ctx) target: Int (store/current-sequence ctx) pinned: Int (rotation-version rotation)]
@@ -448,11 +483,13 @@
         (throw (ex-info "fram: rotation is ahead of the store it projects" {:type :rotation-ahead-of-store}))
         (if (= pinned target)
           rotation
-          (assoc (reduce (fn
-                           [current: Rotation
-                            frame: t/TransactionFrame] -> Rotation (apply-frame current space frame)) rotation (store/transaction-frames-between (deref ctx) pinned target))
-            :version
-            target))))))
+          (let [frames: (Vec t/TransactionFrame) (store/transaction-frames-between (deref ctx) pinned target)]
+            (relaid-out (assoc (reduce (fn
+                                         [current: Rotation
+                                          frame: t/TransactionFrame] -> Rotation (apply-frame current space frame)) rotation frames)
+                          :version
+                          target)
+              (frames-retract? frames))))))))
 
 ;; The projection must travel with the root it was built from; a caller holding
 ;; an unpinned rotation is reading a version that no longer exists.
