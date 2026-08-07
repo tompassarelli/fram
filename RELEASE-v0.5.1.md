@@ -95,7 +95,7 @@ fix, a checkpoint was not a viable way to reach that image at this store
 size at all.
 
 These numbers are measured on one reference corpus on one machine; they are
-not the certified limits matrix and make no claim about other store shapes.
+not the certified limits matrix and say nothing about other store shapes.
 
 ### Codegraph revived onto the occurrence store
 
@@ -219,7 +219,7 @@ The suite at tip runs 48 green manifest rows under `run-bb`.
 
 - **The boot-fold and snapshot-encode fixes are measured on one reference
   corpus** (936k operations, 138 MB framlog) on one machine; they are not a
-  re-run of the v0.5.0 limits-table harness and make no claim about other
+  re-run of the v0.5.0 limits-table harness and say nothing about other
   store shapes or sizes.
 - **The two remaining boot quadratics named in v0.5.0 — live-set copy per
   retraction and active-bucket copy per re-assertion outside a fold — are
@@ -227,7 +227,7 @@ The suite at tip runs 48 green manifest rows under `run-bb`.
   path. A boot dominated by either still grows superlinearly. Unmeasured
   here.
 - **Fork is not yet exercised at production scale.** The fork test suite
-  covers correctness and the O(1) cost claim structurally; it does not
+  covers correctness and the O(1) cost structurally; it does not
   measure a long-lived multi-branch store under sustained write load.
 - **callgraph, codegraph, and rep_jurisdiction stay load-only** in the CI
   gate: their goldens are measured against the gjoa corpus, which is not in
