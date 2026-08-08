@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define FRAM_SERVER_GENERATED_ABI 3u
+#define FRAM_SERVER_GENERATED_ABI 4u
 #define FRAM_SERVER_HOST_ABI 1u
 #define FRAM_SERVER_ERROR_CAPACITY 512u
 

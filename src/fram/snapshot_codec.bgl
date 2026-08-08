@@ -130,7 +130,7 @@
   (wire/->Encoder (wire/empty-byte-cell) (atom 0) (wire/empty-error-cell)))
 
 (defn- payload-decoder
-  [bytes: (Vec Int)
+  [bytes: ByteSource
    start: Int
    end: Int] -> wire/Decoder
   (wire/->Decoder bytes (atom start) end (atom 0) (wire/empty-error-cell)))
@@ -515,7 +515,7 @@
                         nil)))))
 
 (defn- decode-record!
-  [bytes: (Vec Int)
+  [bytes: ByteSource
    payload-start: Int
    payload-end: Int] -> RecordResult
   (let [kind (nth bytes payload-start)
@@ -537,7 +537,7 @@
       [:else decoded])))
 
 (defn- read-records!
-  [bytes: (Vec Int)
+  [bytes: ByteSource
    start: Int
    space-id: String
    next-sequence: Int] -> ReadResult
@@ -560,7 +560,7 @@
            [(> (+ payload-end 4) (count bytes))
             (failed-read "snapshot record is truncated")]
            [(not= (log/u32-le-at bytes payload-end)
-                  (log/crc32-range bytes payload-start payload-end))
+                  (log/crc32-range-source bytes payload-start payload-end))
             (failed-read "snapshot record CRC does not match")]
            [:else
             (let [decoded (decode-record! bytes payload-start payload-end)
@@ -595,7 +595,7 @@
                 [:else
                  (failed-read "snapshot record has an unknown kind")]))]))])))
 
-(defn- magic-at-start? [bytes: (Vec Int)] -> Bool
+(defn- magic-at-start? [bytes: ByteSource] -> Bool
   (loop [position 0]
     (if (>= position (count snapshot-magic))
       true
@@ -604,11 +604,9 @@
         false))))
 
 (defn read-snapshot!
-  [bytes: (Vec Int)
+  [bytes: ByteSource
    configured-space-id: String] -> ReadResult
   (cond
-    [(not (log/valid-byte-vector? bytes))
-     (failed-read "snapshot byte vector contains a value outside u8")]
     [(< (count bytes) snapshot-header-fixed-bytes)
      (failed-read "snapshot header is truncated")]
     [(not (magic-at-start? bytes))
@@ -650,7 +648,7 @@
 
 ;; -1 when the tail is empty or does not start a readable FRAMLOG frame header.
 (defn- tail-first-sequence!
-  [log-bytes: (Vec Int)
+  [log-bytes: ByteSource
    watermark: Int] -> Int
   (if (>= watermark (count log-bytes))
     -1
@@ -660,8 +658,8 @@
       (if (deref (wire/decoder-error decoder)) -1 sequence))))
 
 (defn- sidecar-reason!
-  [snapshot-bytes: (Vec Int)
-   log-bytes: (Vec Int)
+  [snapshot-bytes: ByteSource
+   log-bytes: ByteSource
    configured-space-id: String
    image: Image] -> Keyword?
   (let [sidecar: Sidecar? (image-sidecar image)]
@@ -694,7 +692,8 @@
              offsets-valid
              (and offsets-valid
                   (= (sidecar-fingerprint present)
-                     (log/crc32-range snapshot-bytes image-start image-end)))
+                     (log/crc32-range-source
+                      snapshot-bytes image-start image-end)))
              (if (or (= 0 (count configured-space-id))
                      (= configured-space-id (image-space-id image)))
                nil
@@ -713,8 +712,8 @@
 ;; the log. Any refusal degrades to a full fold and never fails the boot.
 (defn plan-snapshot-boot!
   [enabled: Bool
-   snapshot-bytes: (Vec Int)
-   log-bytes: (Vec Int)
+   snapshot-bytes: ByteSource
+   log-bytes: ByteSource
    configured-space-id: String] -> BootPlan
   (let [candidate-present: Bool (pos? (count snapshot-bytes))
         read: ReadResult

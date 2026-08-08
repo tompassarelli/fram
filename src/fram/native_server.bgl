@@ -11,7 +11,7 @@
 
 (define-mode strict)
 
-(def server-abi: Int 3)
+(def server-abi: Int 4)
 (def status-ok: Int 0)
 (def status-fatal: Int 2)
 (def empty-bytes: (Vec Int) [])
@@ -82,17 +82,13 @@
 (defn- fold-store!
   [canonical-log-path: String
    space-id: String
-   log-bytes: (Vec Int)
+   log-bytes: ByteSource
    report: String] -> StoreResult
   ;; The whole log is already borrowed here; slicing it into chunks would copy
   ;; every byte again.
   (let [completed
-        (if (log/valid-byte-vector? log-bytes)
-          (log/consume-framlog-header!
-           (log/start-framlog-stream space-id) log-bytes true)
-          (log/failed-boot-stream
-           (log/start-framlog-stream space-id)
-           "FRAMLOG byte vector contains a value outside u8"))
+        (log/consume-framlog-header!
+         (log/start-framlog-stream space-id) log-bytes true)
         root (log/bootstream-store completed)
         error (log/bootstream-error completed)]
     (if (and (nil? error)
@@ -118,7 +114,7 @@
 (defn- snapshot-store!
   [canonical-log-path: String
    space-id: String
-   log-bytes: (Vec Int)
+   log-bytes: ByteSource
    plan: snapshot/BootPlan] -> StoreResult
   (let [image: snapshot/Image? (snapshot/bootplan-image plan)]
     (if (nil? image)
@@ -143,7 +139,7 @@
               (let [tail
                     (log/consume-framlog-frames!
                      (log/->BootStream space-id (term-store/open-fold! root)
-                                       [] watermark true false [] nil)
+                                       watermark true false [] nil)
                      log-bytes watermark true)
                     error (log/bootstream-error tail)]
                 (if (or (some? error) (not (log/bootstream-complete tail)))
@@ -165,8 +161,8 @@
 (defn boot-store!
   [canonical-log-path: String
    space-id: String
-   log-bytes: (Vec Int)
-   snapshot-bytes: (Vec Int)] -> StoreResult
+   log-bytes: ByteSource
+   snapshot-bytes: ByteSource] -> StoreResult
   (let [plan (snapshot/plan-snapshot-boot! true snapshot-bytes log-bytes
                                            space-id)]
     (if (= :replay (snapshot/bootplan-route plan))
@@ -293,7 +289,7 @@
       (failed-response
        "decoded request frame omitted RpcRequest" store-result))))
 
-(defn read-request! [request-bytes: (Vec Int)] -> RequestResult
+(defn read-request! [request-bytes: ByteSource] -> RequestResult
   (let [decoded (native-wire/decode-request-bytes! request-bytes)
         frame (native-wire/decoderesult-frame decoded)
         error (native-wire/decoderesult-error decoded)]
@@ -318,8 +314,8 @@
 (defn server-store-boot!
   [canonical-log-path: String
    space-id: String
-   log-bytes: (Vec Int)
-   snapshot-bytes: (Vec Int)] -> StoreResult
+   log-bytes: ByteSource
+   snapshot-bytes: ByteSource] -> StoreResult
   (boot-store! canonical-log-path space-id log-bytes snapshot-bytes))
 
 (defn server-store-dispatch!
@@ -347,7 +343,7 @@
       (fatal-status
        (error-or (storeresult-error store-result) "store boot failed")))))
 
-(defn server-codec-read-request! [request-bytes: (Vec Int)] -> RequestResult
+(defn server-codec-read-request! [request-bytes: ByteSource] -> RequestResult
   (read-request! request-bytes))
 
 (defn server-codec-write-response!

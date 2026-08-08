@@ -57,6 +57,12 @@ typedef struct native_vec {
   int64_t *watermark;
 } native_vec;
 
+/* Mirrors the shim header: borrowed octets the shim neither owns nor copies. */
+typedef struct native_byte_source {
+  const uint8_t *data;
+  int64_t length;
+} native_byte_source;
+
 void native_arena_init(native_arena *arena, uint8_t *storage, size_t capacity);
 bool native_arena_init_growable(native_arena *arena, size_t growth_floor);
 void native_arena_destroy(native_arena *arena);
@@ -73,6 +79,11 @@ const void *native_vec_at(const native_vec *vector, int64_t index,
 native_vec *native_vec_push(native_arena *arena, native_vec *vector,
                             const void *value, int64_t stride,
                             size_t alignment);
+native_byte_source *native_byte_source_borrow(native_arena *arena,
+                                              const uint8_t *data,
+                                              int64_t length);
+int64_t native_byte_source_length(const native_byte_source *source);
+int64_t native_byte_source_at(const native_byte_source *source, int64_t index);
 
 #define NATIVE_TRAP_INVALID_ARGUMENT UINT32_C(1)
 #define NATIVE_TRAP_OVERFLOW UINT32_C(2)
@@ -95,6 +106,7 @@ typedef int64_t native_m0_type_0;
 typedef uint64_t native_m0_type_1;
 typedef native_vec *native_m0_type_2;
 typedef uint64_t native_m0_type_3;
+typedef native_byte_source *native_m0_type_9;
 
 typedef struct native_m0_type_4 {
   native_m0_type_0 field_0;
@@ -135,14 +147,14 @@ native_m0_type_0 fram_stub_generated_abi(void);
 native_m0_type_4 fram_stub_store_boot(
     native_arena *arena, const native_capability *capability,
     native_m0_type_1 canonical_log_path, native_m0_type_1 space_id,
-    native_m0_type_2 log_bytes, native_m0_type_2 snapshot_bytes);
+    native_m0_type_9 log_bytes, native_m0_type_9 snapshot_bytes);
 native_m0_type_6 fram_stub_store_dispatch(
     native_arena *arena, const native_capability *capability,
     native_m0_type_4 store, native_m0_type_5 request,
     native_m0_type_0 now_milliseconds);
 native_m0_type_8 fram_stub_store_shutdown(native_m0_type_4 store);
 native_m0_type_5 fram_stub_codec_read_request(native_arena *arena,
-                                               native_m0_type_2 frame);
+                                               native_m0_type_9 frame);
 native_m0_type_7 fram_stub_codec_write_response(
     native_arena *arena, const native_capability *capability,
     native_m0_type_6 response);
@@ -172,8 +184,8 @@ typedef native_m0_type_0 fram_server_generated_abi_return;
 typedef native_m0_type_4 fram_server_store_boot_return;
 typedef native_m0_type_1 fram_server_store_boot_arg_0;
 typedef native_m0_type_1 fram_server_store_boot_arg_1;
-typedef native_m0_type_2 fram_server_store_boot_arg_2;
-typedef native_m0_type_2 fram_server_store_boot_arg_3;
+typedef native_m0_type_9 fram_server_store_boot_arg_2;
+typedef native_m0_type_9 fram_server_store_boot_arg_3;
 typedef native_m0_type_6 fram_server_store_dispatch_return;
 typedef native_m0_type_4 fram_server_store_dispatch_arg_0;
 typedef native_m0_type_5 fram_server_store_dispatch_arg_1;
@@ -181,7 +193,7 @@ typedef native_m0_type_0 fram_server_store_dispatch_arg_2;
 typedef native_m0_type_8 fram_server_store_shutdown_return;
 typedef native_m0_type_4 fram_server_store_shutdown_arg_0;
 typedef native_m0_type_5 fram_server_codec_read_request_return;
-typedef native_m0_type_2 fram_server_codec_read_request_arg_0;
+typedef native_m0_type_9 fram_server_codec_read_request_arg_0;
 typedef native_m0_type_7 fram_server_codec_write_response_return;
 typedef native_m0_type_6 fram_server_codec_write_response_arg_0;
 typedef native_m0_type_3 fram_server_codec_release_request_return;
@@ -364,6 +376,31 @@ void native_set_trap_reporter(native_trap_reporter reporter) {
   (void)reporter;
 }
 
+native_byte_source *native_byte_source_borrow(native_arena *arena,
+                                              const uint8_t *data,
+                                              int64_t length) {
+  native_byte_source *source = native_arena_alloc(
+      arena, sizeof(*source), _Alignof(native_byte_source));
+
+  if (length < INT64_C(0) || (length > INT64_C(0) && data == NULL)) {
+    abort();
+  }
+  source->data = data;
+  source->length = length;
+  return source;
+}
+
+int64_t native_byte_source_length(const native_byte_source *source) {
+  return source->length;
+}
+
+int64_t native_byte_source_at(const native_byte_source *source, int64_t index) {
+  if (index < INT64_C(0) || index >= source->length) {
+    abort();
+  }
+  return (int64_t)(uint64_t)source->data[index];
+}
+
 /* Persistent, on the shim's rule: a push writes into existing storage only at
    the watermark, and otherwise forks onto a private copy. */
 native_vec *native_vec_push(native_arena *arena, native_vec *vector,
@@ -428,16 +465,16 @@ static bool text_is(uint64_t text, const char *expected) {
          memcmp(native_text_bytes(text), expected, length) == 0;
 }
 
-static bool vector_is(const native_vec *vector, const uint8_t *expected,
-                      size_t count) {
+static bool source_is(const native_byte_source *source,
+                      const uint8_t *expected, size_t count) {
   size_t index;
 
-  if (vector == NULL || native_vec_length(vector) != (int64_t)count) {
+  if (source == NULL || native_byte_source_length(source) != (int64_t)count) {
     return false;
   }
   for (index = 0u; index < count; index += 1u) {
-    const int64_t *value = native_vec_at(vector, (int64_t)index, INT64_C(8));
-    if (*value != (int64_t)expected[index]) {
+    if (native_byte_source_at(source, (int64_t)index) !=
+        (int64_t)expected[index]) {
       return false;
     }
   }
@@ -458,12 +495,12 @@ static native_vec *make_vector(native_arena *arena, const uint8_t *bytes,
   return vector;
 }
 
-native_m0_type_0 fram_stub_generated_abi(void) { return INT64_C(3); }
+native_m0_type_0 fram_stub_generated_abi(void) { return INT64_C(4); }
 
 native_m0_type_4 fram_stub_store_boot(
     native_arena *arena, const native_capability *capability,
     native_m0_type_1 canonical_log_path, native_m0_type_1 space_id,
-    native_m0_type_2 log_bytes, native_m0_type_2 snapshot_bytes) {
+    native_m0_type_9 log_bytes, native_m0_type_9 snapshot_bytes) {
   static const uint8_t old_log[] = {'O', 'L', 'D', '!', 'x'};
   static const uint8_t old_image[] = {'I', 'M', 'G'};
   static const uint8_t boot_bytes[] = {'B', 'O', 'O', 'T'};
@@ -476,8 +513,8 @@ native_m0_type_4 fram_stub_store_boot(
   if (capability->token == UINT64_C(1) &&
       text_is(canonical_log_path, "SMOKE_LOG_PATH") &&
       text_is(space_id, "smoke-space") &&
-      vector_is(log_bytes, old_log, sizeof(old_log)) &&
-      vector_is(snapshot_bytes, old_image, sizeof(old_image))) {
+      source_is(log_bytes, old_log, sizeof(old_log)) &&
+      source_is(snapshot_bytes, old_image, sizeof(old_image))) {
     result.field_0 = OK;
     result.field_1 = UINT64_C(11);
     result.field_3 = INT64_C(4);
@@ -530,28 +567,24 @@ native_m0_type_8 fram_stub_store_shutdown(native_m0_type_4 store) {
 }
 
 native_m0_type_5 fram_stub_codec_read_request(native_arena *arena,
-                                               native_m0_type_2 frame) {
+                                               native_m0_type_9 frame) {
   native_m0_type_5 result = {FATAL, UINT64_C(0), UINT64_C(0)};
-  const int64_t *body;
 
   read_calls += 1u;
-  if (frame != NULL && native_vec_length(frame) == INT64_C(29)) {
-    body = native_vec_at(frame, INT64_C(26), INT64_C(8));
-    if (*body == INT64_C(0xaa)) {
-      result.field_0 = OK;
-      {
-        native_vec *copy = native_vec_new(arena, frame->length, INT64_C(8),
-                                          _Alignof(int64_t));
-        int64_t index;
+  if (frame != NULL && native_byte_source_length(frame) == INT64_C(29) &&
+      native_byte_source_at(frame, INT64_C(26)) == INT64_C(0xaa)) {
+    native_vec *copy = native_vec_new(arena, native_byte_source_length(frame),
+                                      INT64_C(8), _Alignof(int64_t));
+    int64_t index;
 
-        for (index = INT64_C(0); index < frame->length; index += INT64_C(1)) {
-          const int64_t *value = native_vec_at(frame, index, INT64_C(8));
-          copy = native_vec_push(arena, copy, value, INT64_C(8),
-                                 _Alignof(int64_t));
-        }
-        result.field_1 = (uint64_t)(uintptr_t)copy;
-      }
+    result.field_0 = OK;
+    for (index = INT64_C(0); index < native_byte_source_length(frame);
+         index += INT64_C(1)) {
+      int64_t value = native_byte_source_at(frame, index);
+      copy = native_vec_push(arena, copy, &value, INT64_C(8),
+                             _Alignof(int64_t));
     }
+    result.field_1 = (uint64_t)(uintptr_t)copy;
   }
   return result;
 }

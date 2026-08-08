@@ -33,7 +33,6 @@
 (defrecord BootStream
   [configured-space-id: String
    store: (U Nil (Atom t/TermStore))
-   pending: (Vec Int)
    valid-log-bytes: Int
    header-complete: Bool
    complete: Bool
@@ -51,7 +50,7 @@
 ;; start-sequence and end-sequence are the ref's record of the member's span,
 ;; 0 when it records none; the tail is named by no ref and carries 0 for both.
 (defrecord ChainPiece
-  [bytes: (Vec Int)
+  [bytes: ByteSource
    start-sequence: Int
    end-sequence: Int])
 
@@ -76,18 +75,44 @@
 (defn error-or [error: String? fallback: String] -> String
   (if error error fallback))
 
-(defn valid-byte-vector? [bytes: (Vec Int)] -> Bool
-  (loop [position 0]
-    (if (>= position (count bytes))
-      true
-      (let [value (nth bytes position)]
-        (if (wire/byte-value? value)
-          (recur (+ position 1))
-          false)))))
-
 (defn crc32 [bytes: (Vec Int)] -> Int
   (loop [position 0 crc crc32-mask]
     (if (>= position (count bytes))
+      (bit-and crc32-mask (bit-xor crc crc32-mask))
+      (let [mixed (bit-xor crc (nth bytes position))
+            next-crc
+            (loop [bit 0 value mixed]
+              (if (>= bit 8)
+                value
+                (let [shifted (unsigned-bit-shift-right value 1)]
+                  (recur (+ bit 1)
+                         (if (= 1 (bit-and value 1))
+                           (bit-xor shifted crc32-polynomial)
+                           shifted)))))]
+        (recur (+ position 1) (bit-and crc32-mask next-crc))))))
+
+(defn crc32-source [bytes: ByteSource] -> Int
+  (loop [position 0 crc crc32-mask]
+    (if (>= position (count bytes))
+      (bit-and crc32-mask (bit-xor crc crc32-mask))
+      (let [mixed (bit-xor crc (nth bytes position))
+            next-crc
+            (loop [bit 0 value mixed]
+              (if (>= bit 8)
+                value
+                (let [shifted (unsigned-bit-shift-right value 1)]
+                  (recur (+ bit 1)
+                         (if (= 1 (bit-and value 1))
+                           (bit-xor shifted crc32-polynomial)
+                           shifted)))))]
+        (recur (+ position 1) (bit-and crc32-mask next-crc))))))
+
+(defn crc32-range-source
+  [bytes: ByteSource
+   start: Int
+   end: Int] -> Int
+  (loop [position start crc crc32-mask]
+    (if (>= position end)
       (bit-and crc32-mask (bit-xor crc crc32-mask))
       (let [mixed (bit-xor crc (nth bytes position))
             next-crc
@@ -120,11 +145,11 @@
                            shifted)))))]
         (recur (+ position 1) (bit-and crc32-mask next-crc))))))
 
-(defn u16-le-at [bytes: (Vec Int) position: Int] -> Int
+(defn u16-le-at [bytes: ByteSource position: Int] -> Int
   (+ (nth bytes position)
      (bit-shift-left (nth bytes (+ position 1)) 8)))
 
-(defn u32-le-at [bytes: (Vec Int) position: Int] -> Int
+(defn u32-le-at [bytes: ByteSource position: Int] -> Int
   (loop [offset 0 value 0]
     (if (>= offset 4)
       value
@@ -134,7 +159,7 @@
                (bit-shift-left
                 (nth bytes (+ position offset)) (* offset 8)))))))
 
-(defn magic-at-start? [bytes: (Vec Int)] -> Bool
+(defn magic-at-start? [bytes: ByteSource] -> Bool
   (if (< (count bytes) (count framlog-magic))
     false
     (loop [position 0]
@@ -168,7 +193,7 @@
                              (deref (wire/encoder-bytes encoder)) nil))))))))
 
 (defn decode-frame-payload-range!
-  [bytes: (Vec Int)
+  [bytes: ByteSource
    start: Int
    end: Int] -> FrameDecodeResult
   (let [decoder (wire/->Decoder bytes (atom start) end (atom 0)
@@ -227,17 +252,16 @@
                     (->FrameDecodeResult
                      nil "FRAMLOG contains an unknown operation action")]))))])))))
 
-(defn decode-frame-payload! [payload: (Vec Int)] -> FrameDecodeResult
+(defn decode-frame-payload! [payload: ByteSource] -> FrameDecodeResult
   (decode-frame-payload-range! payload 0 (count payload)))
 
 (defn start-framlog-stream [configured-space-id: String] -> BootStream
-  (->BootStream configured-space-id nil [] 0 false false [] nil))
+  (->BootStream configured-space-id nil 0 false false [] nil))
 
 (defn failed-boot-stream [stream: BootStream message: String] -> BootStream
   (->BootStream
    (bootstream-configured-space-id stream)
    (bootstream-store stream)
-   []
    (bootstream-valid-log-bytes stream)
    (bootstream-header-complete stream)
    true
@@ -248,18 +272,16 @@
   (->BootStream
    (bootstream-configured-space-id stream)
    (bootstream-store stream)
-   []
    (bootstream-valid-log-bytes stream)
    (bootstream-header-complete stream)
    true
    (bootstream-boot-append stream)
    nil))
 
-(defn pending-boot-stream [stream: BootStream pending: (Vec Int)] -> BootStream
+(defn incomplete-boot-stream [stream: BootStream] -> BootStream
   (->BootStream
    (bootstream-configured-space-id stream)
    (bootstream-store stream)
-   pending
    (bootstream-valid-log-bytes stream)
    (bootstream-header-complete stream)
    false
@@ -268,7 +290,7 @@
 
 (defn consume-framlog-frames!
   [stream: BootStream
-   bytes: (Vec Int)
+   bytes: ByteSource
    position: Int
    final: Bool] -> BootStream
   ;; replay is a loop, not a self-call: one C stack frame per FRAMLOG frame
@@ -281,7 +303,7 @@
         [(< remaining 4)
          (if final
            (complete-boot-stream stream)
-           (pending-boot-stream stream (subvec bytes position (count bytes))))]
+           (incomplete-boot-stream stream))]
         [:else
          (let [payload-length (u32-le-at bytes position)
                frame-length (+ payload-length 8)]
@@ -292,13 +314,13 @@
              [(< remaining frame-length)
               (if final
                 (complete-boot-stream stream)
-                (pending-boot-stream
-                 stream (subvec bytes position (count bytes))))]
+                (incomplete-boot-stream stream))]
              [:else
               (let [payload-start (+ position 4)
                     payload-end (+ payload-start payload-length)
                     stored-crc (u32-le-at bytes payload-end)
-                    actual-crc (crc32-range bytes payload-start payload-end)
+                    actual-crc
+                    (crc32-range-source bytes payload-start payload-end)
                     decoded
                     (decode-frame-payload-range!
                      bytes payload-start payload-end)
@@ -325,7 +347,6 @@
                         (->BootStream
                          (bootstream-configured-space-id stream)
                          root
-                         []
                          (+ (bootstream-valid-log-bytes stream) frame-length)
                          true
                          false
@@ -339,7 +360,7 @@
 
 (defn consume-framlog-header!
   [stream: BootStream
-   bytes: (Vec Int)
+   bytes: ByteSource
    final: Bool] -> BootStream
   (let [minimum-header-bytes (+ (count framlog-magic) 8)]
     (cond
@@ -352,7 +373,7 @@
               (bootstream-configured-space-id stream)
               (term-store/new-term-store
                (bootstream-configured-space-id stream))
-              [] 0 true true (bytesresult-bytes header) nil)
+              0 true true (bytesresult-bytes header) nil)
              (failed-boot-stream
               stream
               (error-or (bytesresult-error header)
@@ -361,7 +382,7 @@
       [(< (count bytes) minimum-header-bytes)
        (if final
          (failed-boot-stream stream "FRAMLOG header is truncated")
-         (pending-boot-stream stream bytes))]
+         (incomplete-boot-stream stream))]
       [(not (magic-at-start? bytes))
        (failed-boot-stream
         stream "FRAMLOG magic does not match; migration is required")]
@@ -381,7 +402,7 @@
             (if final
               (failed-boot-stream
                stream "FRAMLOG header is truncated inside SpaceId")
-              (pending-boot-stream stream bytes))]
+              (incomplete-boot-stream stream))]
            [:else
             (let [decoder
                   (wire/->Decoder bytes (atom minimum-header-bytes)
@@ -408,38 +429,8 @@
                    (bootstream-configured-space-id stream)
                    (term-store/open-fold!
                     (term-store/new-term-store space-id))
-                   [] header-bytes true false [] nil)
+                   header-bytes true false [] nil)
                   bytes header-bytes final)]))]))])))
-
-(defn feed-framlog-stream!
-  [stream: BootStream
-   bytes: (Vec Int)
-   final: Bool] -> BootStream
-  (cond
-    [(bootstream-complete stream)
-     (failed-boot-stream stream "FRAMLOG boot stream is already complete")]
-    [(bootstream-error stream) stream]
-    [(> (count bytes) framlog-stream-max-chunk-bytes)
-     (failed-boot-stream stream "FRAMLOG boot chunk exceeds the byte limit")]
-    [(not (valid-byte-vector? bytes))
-     (failed-boot-stream
-      stream "FRAMLOG byte vector contains a value outside u8")]
-    [:else
-     (let [pending (bootstream-pending stream)
-           combined (if (= 0 (count pending)) bytes (into pending bytes))
-           ready
-           (->BootStream
-            (bootstream-configured-space-id stream)
-            (bootstream-store stream)
-            []
-            (bootstream-valid-log-bytes stream)
-            (bootstream-header-complete stream)
-            false
-            (bootstream-boot-append stream)
-            nil)]
-       (if (bootstream-header-complete ready)
-         (consume-framlog-frames! ready combined 0 final)
-         (consume-framlog-header! ready combined final)))]))
 
 (defn canonical-store-copy! [root: (Atom t/TermStore)] -> (Atom t/TermStore)
   (let [dump (term-store/dump-term-store root)
@@ -487,7 +478,7 @@
                             payload-start payload-end)
                     _ (reset! (wire/decoder-position decoder) payload-end)
                     stored-crc (wire/read-u32-le! decoder "FRAMLOG frame CRC")
-                    actual-crc (crc32 payload)
+                    actual-crc (crc32-source payload)
                     decoded (decode-frame-payload! payload)
                     frame (framedecoderesult-frame decoded)]
                 (cond
@@ -508,10 +499,8 @@
                      (term-store/replay-transaction! root frame)
                      (recur (deref (wire/decoder-position decoder))))]))]))]))))
 
-(defn boot-framlog! [configured-space-id: String bytes: (Vec Int)] -> BootResult
+(defn boot-framlog! [configured-space-id: String bytes: ByteSource] -> BootResult
   (cond
-    [(not (valid-byte-vector? bytes))
-     (failed-boot "FRAMLOG byte vector contains a value outside u8")]
     [(= 0 (count bytes))
      (let [header (encode-header! configured-space-id)]
        (if (= status-ok (bytesresult-status header))
@@ -563,7 +552,7 @@
 (defn- failed-header [message: String] -> HeaderFields
   (->HeaderFields false "" 0 0 message))
 
-(defn decode-framlog-header! [bytes: (Vec Int)] -> HeaderFields
+(defn decode-framlog-header! [bytes: ByteSource] -> HeaderFields
   (let [minimum-header-bytes (+ (count framlog-magic) 8)]
     (cond
       [(< (count bytes) minimum-header-bytes)
@@ -604,7 +593,7 @@
 
 (defn- fold-chain-piece!
   [root: (Atom t/TermStore)
-   bytes: (Vec Int)
+   bytes: ByteSource
    header-bytes: Int
    start-sequence: Int
    end-sequence: Int
@@ -643,7 +632,8 @@
               (let [payload-start (+ position 4)
                     payload-end (+ payload-start payload-length)
                     stored-crc (u32-le-at bytes payload-end)
-                    actual-crc (crc32-range bytes payload-start payload-end)
+                    actual-crc
+                    (crc32-range-source bytes payload-start payload-end)
                     decoded
                     (decode-frame-payload-range! bytes payload-start payload-end)
                     frame (framedecoderesult-frame decoded)]
@@ -721,9 +711,6 @@
                    sealed (< index (count segments))
                    header (decode-framlog-header! (chainpiece-bytes piece))]
                (cond
-                 [(not (valid-byte-vector? (chainpiece-bytes piece)))
-                  (failed-boot
-                   "FRAMLOG byte vector contains a value outside u8")]
                  [(not (headerfields-ok header))
                   (failed-boot
                    (error-or (headerfields-error header)

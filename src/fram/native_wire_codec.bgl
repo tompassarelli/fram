@@ -25,7 +25,7 @@
    message: String])
 
 (defrecord Decoder
-  [bytes: (Vec Int)
+  [bytes: ByteSource
    position: (Atom Int)
    limit: Int
    nodes: (Atom Int)
@@ -492,7 +492,7 @@
                      (read-u8! decoder "magic"))))
       valid)))
 
-(defn decode-request-bytes! [bytes: (Vec Int)] -> DecodeResult
+(defn decode-request-bytes! [bytes: ByteSource] -> DecodeResult
   (let [decoder (->Decoder bytes (atom 0) (count bytes)
                            (atom 0) (empty-error-cell))
         byte-count (count bytes)]

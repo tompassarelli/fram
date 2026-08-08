@@ -133,7 +133,7 @@ native_m0_type_6 native_m0_fn_5(native_arena *arena,
                             .field_1 = (native_vec *)0};
 }
 
-native_m0_type_0 native_m0_fn_7(void) { return 3; }
+native_m0_type_0 native_m0_fn_7(void) { return 4; }
 
 native_m0_type_5 native_m0_fn_11(native_arena *arena,
                                    const native_capability *capability,
