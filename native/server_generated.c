@@ -372,7 +372,7 @@ static bool borrowed_byte_vector_init(borrowed_byte_vector *borrowed,
   borrowed->vector.length = (int64_t)length;
   borrowed->vector.capacity = (int64_t)length;
   /* Storage this bridge owns, not the shim: a conj over it must copy. */
-  borrowed->vector.claim = NULL;
+  borrowed->vector.watermark = NULL;
   return true;
 }
 
@@ -382,7 +382,7 @@ static void borrowed_byte_vector_destroy(borrowed_byte_vector *borrowed) {
   borrowed->vector.elements = NULL;
   borrowed->vector.length = INT64_C(0);
   borrowed->vector.capacity = INT64_C(0);
-  borrowed->vector.claim = NULL;
+  borrowed->vector.watermark = NULL;
 }
 
 static int generated_status(int64_t status, char *error,

@@ -48,10 +48,13 @@ typedef struct native_capability {
   uint64_t token;
 } native_capability;
 
+/* Mirrors the shim header: `watermark` is the count of element slots handed
+   out from `elements`, NULL for storage the shim did not allocate. */
 typedef struct native_vec {
   void *elements;
   int64_t length;
   int64_t capacity;
+  int64_t *watermark;
 } native_vec;
 
 void native_arena_init(native_arena *arena, uint8_t *storage, size_t capacity);
@@ -338,6 +341,12 @@ native_vec *native_vec_new(native_arena *arena, int64_t capacity,
                                  : native_arena_alloc(arena, bytes, alignment);
   vector->length = INT64_C(0);
   vector->capacity = capacity;
+  vector->watermark = NULL;
+  if (bytes != 0u) {
+    vector->watermark = native_arena_alloc(arena, sizeof(int64_t),
+                                            _Alignof(int64_t));
+    *vector->watermark = INT64_C(0);
+  }
   return vector;
 }
 
@@ -355,18 +364,36 @@ void native_set_trap_reporter(native_trap_reporter reporter) {
   (void)reporter;
 }
 
+/* Persistent, on the shim's rule: a push writes into existing storage only at
+   the watermark, and otherwise forks onto a private copy. */
 native_vec *native_vec_push(native_arena *arena, native_vec *vector,
                             const void *value, int64_t stride,
                             size_t alignment) {
-  (void)arena;
-  (void)alignment;
-  if (vector->length >= vector->capacity) {
-    abort();
+  native_vec *fresh;
+
+  if (vector->watermark != NULL && vector->length < vector->capacity &&
+      *vector->watermark == vector->length) {
+    native_vec *header = native_arena_alloc(arena, sizeof(*header),
+                                             _Alignof(native_vec));
+    memcpy((uint8_t *)vector->elements + (size_t)(vector->length * stride),
+           value, (size_t)stride);
+    *vector->watermark = vector->length + INT64_C(1);
+    header->elements = vector->elements;
+    header->length = vector->length + INT64_C(1);
+    header->capacity = vector->capacity;
+    header->watermark = vector->watermark;
+    return header;
   }
-  memcpy((uint8_t *)vector->elements + (size_t)(vector->length * stride),
+  fresh = native_vec_new(arena, vector->length + INT64_C(1), stride, alignment);
+  if (vector->length > INT64_C(0)) {
+    memcpy(fresh->elements, vector->elements,
+           (size_t)(vector->length * stride));
+  }
+  memcpy((uint8_t *)fresh->elements + (size_t)(vector->length * stride),
          value, (size_t)stride);
-  vector->length += INT64_C(1);
-  return vector;
+  fresh->length = vector->length + INT64_C(1);
+  *fresh->watermark = fresh->length;
+  return fresh;
 }
 C
 
@@ -388,7 +415,7 @@ static unsigned int release_request_calls;
 static unsigned int release_response_calls;
 
 static int64_t tail_items[] = {'T', 'A', 'I', 'L'};
-static native_vec tail_append = {tail_items, INT64_C(4), INT64_C(4)};
+static native_vec tail_append = {tail_items, INT64_C(4), INT64_C(4), NULL};
 
 static const uint8_t response_frame[] = {
     0x46, 0x52, 0x41, 0x4d, 0x52, 0x50, 0x43, 0x00, 0x01, 0x00,
@@ -467,7 +494,8 @@ native_m0_type_6 fram_stub_store_dispatch(
     native_m0_type_4 store, native_m0_type_5 request,
     native_m0_type_0 now_milliseconds) {
   static int64_t image_items[] = {'I', 'M', 'G', '2'};
-  static native_vec image_write = {image_items, INT64_C(4), INT64_C(4)};
+  static native_vec image_write = {image_items, INT64_C(4), INT64_C(4),
+                                   NULL};
   native_m0_type_6 result = {FATAL,
                              UINT64_C(0),
                              UINT64_C(0),
