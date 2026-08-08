@@ -88,12 +88,10 @@
   ;; every byte again.
   (let [completed
         (log/consume-framlog-header!
-         (log/start-framlog-stream space-id) log-bytes true)
+         (log/start-framlog-stream space-id) log-bytes)
         root (log/bootstream-store completed)
         error (log/bootstream-error completed)]
-    (if (and (nil? error)
-             (log/bootstream-complete completed)
-             root)
+    (if (and (nil? error) root)
       (let [valid-log-bytes (log/bootstream-valid-log-bytes completed)
             boot-append (log/bootstream-boot-append completed)
             closed (term-store/close-fold! root)]
@@ -139,10 +137,10 @@
               (let [tail
                     (log/consume-framlog-frames!
                      (log/->BootStream space-id (term-store/open-fold! root)
-                                       watermark true false [] nil)
-                     log-bytes watermark true)
+                                       watermark [] nil)
+                     log-bytes watermark)
                     error (log/bootstream-error tail)]
-                (if (or (some? error) (not (log/bootstream-complete tail)))
+                (if (some? error)
                   (fold-store!
                    canonical-log-path space-id log-bytes
                    (str "fram: snapshot boot degraded to full fold; reason "

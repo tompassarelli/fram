@@ -34,8 +34,6 @@
   [configured-space-id: String
    store: (U Nil (Atom t/TermStore))
    valid-log-bytes: Int
-   header-complete: Bool
-   complete: Bool
    boot-append: (Vec Int)
    error: String?])
 
@@ -256,54 +254,26 @@
   (decode-frame-payload-range! payload 0 (count payload)))
 
 (defn start-framlog-stream [configured-space-id: String] -> BootStream
-  (->BootStream configured-space-id nil 0 false false [] nil))
+  (->BootStream configured-space-id nil 0 [] nil))
 
 (defn failed-boot-stream [stream: BootStream message: String] -> BootStream
   (->BootStream
    (bootstream-configured-space-id stream)
    (bootstream-store stream)
    (bootstream-valid-log-bytes stream)
-   (bootstream-header-complete stream)
-   true
    []
    message))
-
-(defn complete-boot-stream [stream: BootStream] -> BootStream
-  (->BootStream
-   (bootstream-configured-space-id stream)
-   (bootstream-store stream)
-   (bootstream-valid-log-bytes stream)
-   (bootstream-header-complete stream)
-   true
-   (bootstream-boot-append stream)
-   nil))
-
-(defn incomplete-boot-stream [stream: BootStream] -> BootStream
-  (->BootStream
-   (bootstream-configured-space-id stream)
-   (bootstream-store stream)
-   (bootstream-valid-log-bytes stream)
-   (bootstream-header-complete stream)
-   false
-   (bootstream-boot-append stream)
-   nil))
 
 (defn consume-framlog-frames!
   [stream: BootStream
    bytes: ByteSource
-   position: Int
-   final: Bool] -> BootStream
+   position: Int] -> BootStream
   ;; replay is a loop, not a self-call: one C stack frame per FRAMLOG frame
   ;; overflows the wasm stack a few hundred commits in.
   (loop [stream: BootStream stream position: Int position]
     (let [remaining (- (count bytes) position)]
       (cond
-        [(= remaining 0)
-         (if final (complete-boot-stream stream) stream)]
-        [(< remaining 4)
-         (if final
-           (complete-boot-stream stream)
-           (incomplete-boot-stream stream))]
+        [(< remaining 4) stream]
         [:else
          (let [payload-length (u32-le-at bytes position)
                frame-length (+ payload-length 8)]
@@ -311,10 +281,7 @@
              [(> payload-length framlog-stream-max-payload-bytes)
               (failed-boot-stream
                stream "FRAMLOG frame exceeds the supported byte range")]
-             [(< remaining frame-length)
-              (if final
-                (complete-boot-stream stream)
-                (incomplete-boot-stream stream))]
+             [(< remaining frame-length) stream]
              [:else
               (let [payload-start (+ position 4)
                     payload-end (+ payload-start payload-length)
@@ -348,8 +315,6 @@
                          (bootstream-configured-space-id stream)
                          root
                          (+ (bootstream-valid-log-bytes stream) frame-length)
-                         true
-                         false
                          []
                          nil)
                         (+ position frame-length))
@@ -360,29 +325,24 @@
 
 (defn consume-framlog-header!
   [stream: BootStream
-   bytes: ByteSource
-   final: Bool] -> BootStream
+   bytes: ByteSource] -> BootStream
   (let [minimum-header-bytes (+ (count framlog-magic) 8)]
     (cond
       [(= 0 (count bytes))
-       (if final
-         (let [header
-               (encode-header! (bootstream-configured-space-id stream))]
-           (if (= status-ok (bytesresult-status header))
-             (->BootStream
-              (bootstream-configured-space-id stream)
-              (term-store/new-term-store
-               (bootstream-configured-space-id stream))
-              0 true true (bytesresult-bytes header) nil)
-             (failed-boot-stream
-              stream
-              (error-or (bytesresult-error header)
-                        "FRAMLOG header encode failed"))))
-         stream)]
+       (let [header
+             (encode-header! (bootstream-configured-space-id stream))]
+         (if (= status-ok (bytesresult-status header))
+           (->BootStream
+            (bootstream-configured-space-id stream)
+            (term-store/new-term-store
+             (bootstream-configured-space-id stream))
+            0 (bytesresult-bytes header) nil)
+           (failed-boot-stream
+            stream
+            (error-or (bytesresult-error header)
+                      "FRAMLOG header encode failed"))))]
       [(< (count bytes) minimum-header-bytes)
-       (if final
-         (failed-boot-stream stream "FRAMLOG header is truncated")
-         (incomplete-boot-stream stream))]
+       (failed-boot-stream stream "FRAMLOG header is truncated")]
       [(not (magic-at-start? bytes))
        (failed-boot-stream
         stream "FRAMLOG magic does not match; migration is required")]
@@ -399,10 +359,8 @@
                 (> space-length framlog-stream-max-space-bytes))
             (failed-boot-stream stream "FRAMLOG SpaceId length is invalid")]
            [(< (count bytes) header-bytes)
-            (if final
-              (failed-boot-stream
-               stream "FRAMLOG header is truncated inside SpaceId")
-              (incomplete-boot-stream stream))]
+            (failed-boot-stream
+             stream "FRAMLOG header is truncated inside SpaceId")]
            [:else
             (let [decoder
                   (wire/->Decoder bytes (atom minimum-header-bytes)
@@ -429,8 +387,8 @@
                    (bootstream-configured-space-id stream)
                    (term-store/open-fold!
                     (term-store/new-term-store space-id))
-                   header-bytes true false [] nil)
-                  bytes header-bytes final)]))]))])))
+                   header-bytes [] nil)
+                  bytes header-bytes)]))]))])))
 
 (defn canonical-store-copy! [root: (Atom t/TermStore)] -> (Atom t/TermStore)
   (let [dump (term-store/dump-term-store root)
