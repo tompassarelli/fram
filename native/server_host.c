@@ -11,21 +11,47 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
+#include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 enum {
   DEFAULT_PORT = 7977,
   INHERITED_LISTEN_FD = 3,
   LISTEN_BACKLOG = 128,
-  MAX_ACTIVE_CLIENTS = 128,
-  ACCEPT_POLL_MILLISECONDS = 100
+  /* INVARIANT: the app-level admission cap must sit well BELOW every task or
+     thread limit the supervisor imposes -- systemd TasksMax, cgroup pids.max,
+     RLIMIT_NPROC. One worker thread is created per admitted client, so a cap
+     equal to the task limit means the cgroup refuses the thread before this
+     graceful refusal path can ever engage. That is exactly how the coordinator
+     wedged on 2026-08-09: MAX_ACTIVE_CLIENTS was 128 and the unit's TasksMax
+     was 128, so the first over-cap connection produced a fatal pthread_create
+     EAGAIN instead of a polite refusal. 64 leaves headroom for the acceptor,
+     the supervisor's own tasks, and transient over-subscription under a unit
+     sized for 128 tasks. FRAM_MAX_ACTIVE_CLIENTS -- or the deployment's
+     existing FRAM_CONNECTION_WORKERS -- moves it deliberately; keep any
+     configured value below the unit's TasksMax. */
+  DEFAULT_MAX_ACTIVE_CLIENTS = 64,
+  MIN_ACTIVE_CLIENTS = 1,
+  MAX_ACTIVE_CLIENTS_CEILING = 4096,
+  /* No worker may block on a peer forever: a stalled read or write must
+     release its slot, its arena, and its thread instead of parking the socket
+     in CLOSE_WAIT for the life of the process. 0 disables the bound. */
+  DEFAULT_CLIENT_IO_TIMEOUT_MS = 15000,
+  MAX_CLIENT_IO_TIMEOUT_MS = 3600000,
+  ACCEPT_POLL_MILLISECONDS = 100,
+  /* Keeps the acceptor from spinning accept->create->fail while the process is
+     at its thread ceiling. */
+  ACCEPT_PRESSURE_BACKOFF_MILLISECONDS = 10
 };
 
 typedef enum server_bind {
@@ -41,6 +67,8 @@ typedef struct server_config {
   server_bind bind;
   const char *bind_text;
   uint64_t memory_budget_bytes;
+  size_t max_active_clients;
+  long client_io_timeout_ms;
 } server_config;
 
 typedef struct writer_authority {
@@ -65,10 +93,101 @@ struct server_context {
   pthread_attr_t worker_attributes;
   client_job *clients;
   size_t client_count;
+  size_t max_active_clients;
   bool fatal;
 };
 
+/* Refusals arrive in storms, and one line per refused connection is itself a
+   denial of service against the journal. */
+typedef struct report_throttle {
+  time_t last_report_seconds;
+  unsigned long suppressed;
+  bool reported;
+} report_throttle;
+
 static volatile sig_atomic_t stop_requested = 0;
+
+static void report_throttled(report_throttle *state, const char *message) {
+  struct timespec now;
+  time_t seconds = 0;
+
+  if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
+    seconds = now.tv_sec;
+  }
+  if (state->reported && seconds - state->last_report_seconds < (time_t)1) {
+    state->suppressed += 1uL;
+    return;
+  }
+  if (state->suppressed != 0uL) {
+    fprintf(stderr, "fram-server-native: %s (%lu more suppressed)\n", message,
+            state->suppressed);
+  } else {
+    fprintf(stderr, "fram-server-native: %s\n", message);
+  }
+  state->suppressed = 0uL;
+  state->last_report_seconds = seconds;
+  state->reported = true;
+}
+
+static void accept_pressure_backoff(void) {
+  struct timespec delay;
+
+  delay.tv_sec = 0;
+  delay.tv_nsec = (long)ACCEPT_PRESSURE_BACKOFF_MILLISECONDS * 1000000L;
+  (void)nanosleep(&delay, NULL);
+}
+
+/* A minimal sd_notify(3): the service-manager contract is one AF_UNIX datagram
+   to $NOTIFY_SOCKET, so the host speaks it directly rather than taking a
+   libsystemd link dependency this tree does not otherwise have. Outside
+   systemd NOTIFY_SOCKET is unset and every call is a no-op. */
+static void notify_service_manager(const char *state) {
+  const char *socket_path = getenv("NOTIFY_SOCKET");
+  struct sockaddr_un address;
+  size_t path_length;
+  size_t address_length;
+  int fd;
+
+  if (socket_path == NULL || socket_path[0] == '\0') {
+    return;
+  }
+  if (socket_path[0] != '/' && socket_path[0] != '@') {
+    fprintf(stderr,
+            "fram-server-native: ignoring unsupported NOTIFY_SOCKET=%s\n",
+            socket_path);
+    return;
+  }
+  path_length = strlen(socket_path);
+  if (path_length >= sizeof(address.sun_path)) {
+    fputs("fram-server-native: NOTIFY_SOCKET path is too long\n", stderr);
+    return;
+  }
+  fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+  if (fd < 0) {
+    fprintf(stderr,
+            "fram-server-native: cannot open the notify socket: %s\n",
+            strerror(errno));
+    return;
+  }
+  memset(&address, 0, sizeof(address));
+  address.sun_family = AF_UNIX;
+  memcpy(address.sun_path, socket_path, path_length);
+  address_length = offsetof(struct sockaddr_un, sun_path) + path_length;
+  if (socket_path[0] == '@') {
+    /* Abstract namespace: a leading NUL, and no terminator in the length. */
+    address.sun_path[0] = '\0';
+  } else {
+    address_length += 1u;
+  }
+  if (sendto(fd, state, strlen(state), MSG_NOSIGNAL,
+             (const struct sockaddr *)&address,
+             (socklen_t)address_length) < 0) {
+    fprintf(stderr,
+            "fram-server-native: cannot notify the service manager: %s\n",
+            strerror(errno));
+  }
+  (void)close(fd);
+}
 
 static void print_usage(void) {
   fputs("usage: fram-server-native [serve] [port] [log] [space-id]\n",
@@ -90,6 +209,54 @@ static int parse_port(const char *text, uint16_t *port_out) {
     return -1;
   }
   *port_out = (uint16_t)value;
+  return 0;
+}
+
+static int parse_env_bounded(const char *name, long minimum, long maximum,
+                             long fallback, long *value_out) {
+  const char *text = getenv(name);
+  char *end = NULL;
+  long value;
+
+  if (!nonempty(text)) {
+    *value_out = fallback;
+    return 0;
+  }
+  errno = 0;
+  value = strtol(text, &end, 10);
+  if (errno != 0 || end == text || *end != '\0' || value < minimum ||
+      value > maximum) {
+    fprintf(stderr,
+            "fram-server-native: %s must be an integer in [%ld, %ld], got %s\n",
+            name, minimum, maximum, text);
+    return -1;
+  }
+  *value_out = value;
+  return 0;
+}
+
+/* FRAM_CONNECTION_WORKERS is what deployed units already set; honoring it here
+   is the whole point -- the accept path ignored it before 2026-08-09.
+   FRAM_MAX_ACTIVE_CLIENTS names the same bound unambiguously and wins. */
+static int parse_admission(server_config *config) {
+  const char *cap_variable = nonempty(getenv("FRAM_MAX_ACTIVE_CLIENTS"))
+                                 ? "FRAM_MAX_ACTIVE_CLIENTS"
+                                 : "FRAM_CONNECTION_WORKERS";
+  long cap;
+  long timeout_ms;
+
+  if (parse_env_bounded(cap_variable, MIN_ACTIVE_CLIENTS,
+                        MAX_ACTIVE_CLIENTS_CEILING,
+                        DEFAULT_MAX_ACTIVE_CLIENTS, &cap) != 0) {
+    return -1;
+  }
+  if (parse_env_bounded("FRAM_CLIENT_IO_TIMEOUT_MS", 0,
+                        MAX_CLIENT_IO_TIMEOUT_MS, DEFAULT_CLIENT_IO_TIMEOUT_MS,
+                        &timeout_ms) != 0) {
+    return -1;
+  }
+  config->max_active_clients = (size_t)cap;
+  config->client_io_timeout_ms = timeout_ms;
   return 0;
 }
 
@@ -169,6 +336,9 @@ static int load_config(int argc, char **argv, server_config *config) {
       return -1;
     }
     config->memory_budget_bytes = (uint64_t)parsed;
+  }
+  if (parse_admission(config) != 0) {
+    return -1;
   }
   return parse_bind(config);
 }
@@ -325,6 +495,39 @@ static int acquire_writer_authority(const char *log_path,
     return -1;
   }
   authority->fd = lock_fd;
+  return 0;
+}
+
+/* True only for a freshly accepted connection that carries no request bytes at
+   all and is already at end-of-file (or reset): nothing was ever asked, so
+   nothing is owed. This deliberately runs BEFORE any byte is read -- a client
+   that half-closes after sending still has its request queued here, so the
+   peek reports data, not end-of-file, and the connection is admitted. */
+static bool peer_never_asked(int fd) {
+  char probe;
+  ssize_t count = recv(fd, &probe, sizeof(probe), MSG_PEEK | MSG_DONTWAIT);
+
+  if (count > 0) {
+    return false;
+  }
+  if (count == 0) {
+    return true;
+  }
+  return errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR;
+}
+
+static int set_client_io_timeouts(int fd, long timeout_ms) {
+  struct timeval timeout;
+
+  if (timeout_ms <= 0) {
+    return 0;
+  }
+  timeout.tv_sec = (time_t)(timeout_ms / 1000L);
+  timeout.tv_usec = (suseconds_t)((timeout_ms % 1000L) * 1000L);
+  if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0 ||
+      setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) != 0) {
+    return -1;
+  }
   return 0;
 }
 
@@ -572,6 +775,16 @@ static int serve_client(int client_fd, server_context *server) {
     return -1;
   }
 
+  /* No peer-liveness check belongs here. A FRAMRPC client may half-close
+     (shutdown(SHUT_WR)) once its request is on the wire and then wait for the
+     response -- tests/fram_native_generated_adapter_smoke.sh does exactly
+     that -- and at the socket layer a half-close is indistinguishable from a
+     full close: both leave this end in CLOSE_WAIT with no pending error.
+     Abandoning the request here would silently break every half-closing
+     client. A worker that has read a complete request always dispatches it;
+     what bounds the cost of a peer that has really gone is the send timeout
+     on the response write, plus the admission cap. */
+
   error[0] = '\0';
   status = serialized_dispatch(server, request, &response, error,
                                sizeof(error));
@@ -751,16 +964,26 @@ static bool stop_clients_and_wait(server_context *server) {
   return fatal;
 }
 
-static int accept_loop(int listener_fd, fram_server_store *store) {
+static int accept_loop(int listener_fd, fram_server_store *store,
+                       const server_config *config) {
   server_context server;
   struct pollfd listener_poll = {.fd = listener_fd,
                                  .events = POLLIN,
                                  .revents = 0};
+  report_throttle admission_report = {0, 0uL, false};
+  report_throttle pressure_report = {0, 0uL, false};
+  report_throttle drain_report = {0, 0uL, false};
   bool failed = false;
 
   if (initialize_server_context(&server, store) != 0) {
     return -1;
   }
+  server.max_active_clients = config->max_active_clients;
+  /* READY means the store is booted, the log is replayed, and this loop is
+     about to accept -- the host can ANSWER. It deliberately does not mean
+     "listening": under socket activation systemd owns the listening socket
+     long before this process exists, so listening carries no information. */
+  notify_service_manager("READY=1\nSTATUS=serving FRAMRPC\n");
   while (stop_requested == 0 && !server_has_fatal_failure(&server)) {
     client_job *job;
     pthread_t worker;
@@ -807,6 +1030,17 @@ static int accept_loop(int listener_fd, fram_server_store *store) {
       (void)close(client_fd);
       break;
     }
+    if (peer_never_asked(client_fd)) {
+      /* The cheap drain path: a connection whose peer vanished while it sat in
+         the backlog costs one close here, instead of a thread, an arena, and a
+         slot held until the worker discovers the same thing. A live client
+         that has not sent yet reports EAGAIN, not end-of-file, so it is
+         admitted normally. */
+      (void)close(client_fd);
+      report_throttled(&drain_report,
+                       "dropped a connection whose peer had already closed");
+      continue;
+    }
     if (set_close_on_exec(client_fd) != 0) {
       fprintf(stderr,
               "fram-server-native: cannot set close-on-exec on client: %s\n",
@@ -814,20 +1048,32 @@ static int accept_loop(int listener_fd, fram_server_store *store) {
       (void)close(client_fd);
       continue;
     }
+    if (set_client_io_timeouts(client_fd, config->client_io_timeout_ms) != 0) {
+      fprintf(stderr,
+              "fram-server-native: cannot bound client socket timeouts: %s\n",
+              strerror(errno));
+      (void)close(client_fd);
+      continue;
+    }
 
     job = malloc(sizeof(*job));
     if (job == NULL) {
-      fputs("fram-server-native: cannot allocate client worker\n", stderr);
+      /* Memory pressure is transient by nature; refuse this connection and
+         keep accepting rather than abandon the listener. */
+      report_throttled(&pressure_report,
+                       "cannot allocate a client worker; refusing the "
+                       "connection");
       (void)close(client_fd);
-      failed = true;
-      break;
+      accept_pressure_backoff();
+      continue;
     }
     job->fd = client_fd;
     job->server = &server;
     (void)pthread_mutex_lock(&server.clients_mutex);
-    if (server.client_count >= (size_t)MAX_ACTIVE_CLIENTS) {
+    if (server.client_count >= server.max_active_clients) {
       (void)pthread_mutex_unlock(&server.clients_mutex);
-      fputs("fram-server-native: active client limit reached\n", stderr);
+      report_throttled(&admission_report,
+                       "active client limit reached; refusing the connection");
       (void)close(client_fd);
       free(job);
       continue;
@@ -840,15 +1086,28 @@ static int accept_loop(int listener_fd, fram_server_store *store) {
     if (status != 0) {
       remove_client_locked(&server, job);
       (void)pthread_mutex_unlock(&server.clients_mutex);
-      fprintf(stderr, "fram-server-native: cannot create client worker: %s\n",
-              strerror(status));
       (void)close(client_fd);
       free(job);
+      if (status == EAGAIN) {
+        /* Transient thread-creation pressure: cgroup pids.max, RLIMIT_NPROC,
+           or memory. Refusing THIS connection is right; killing the acceptor
+           is not. Breaking out here is what left :7977 a zombie listener on
+           2026-08-09 -- a socket that accepted and queued clients forever
+           while no thread remained to serve any of them. */
+        report_throttled(&pressure_report,
+                         "cannot create a client worker (resource temporarily "
+                         "unavailable); refusing the connection");
+        accept_pressure_backoff();
+        continue;
+      }
+      fprintf(stderr, "fram-server-native: cannot create client worker: %s\n",
+              strerror(status));
       failed = true;
       break;
     }
     (void)pthread_mutex_unlock(&server.clients_mutex);
   }
+  notify_service_manager("STOPPING=1\nSTATUS=draining clients\n");
   if (stop_clients_and_wait(&server)) {
     failed = true;
   }
@@ -903,10 +1162,12 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
   fprintf(stderr,
-          "fram-server-native: listening on %s:%u, log=%s\n",
+          "fram-server-native: listening on %s:%u, log=%s, max-clients=%zu, "
+          "client-io-timeout-ms=%ld\n",
           config.bind_text, (unsigned int)config.port,
-          authority.canonical_log_path);
-  result = accept_loop(listener_fd, store) == 0 ? 0 : 1;
+          authority.canonical_log_path, config.max_active_clients,
+          config.client_io_timeout_ms);
+  result = accept_loop(listener_fd, store, &config) == 0 ? 0 : 1;
 
 cleanup:
   if (listener_fd >= 0) {
