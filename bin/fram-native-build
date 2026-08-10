@@ -353,8 +353,11 @@ write_input_manifest() {
   } >"$destination"
 }
 
-# The release requirement: C17 completeness plus all seven obligations, which
-# carry the target-neutrality contract (valid-ssa, closed-layouts, legal-abi).
+# The release requirement: C17 completeness plus all nine obligations, which
+# carry the target-neutrality contract (valid-ssa, closed-layouts, legal-abi)
+# and the arena-lifetime contract (epoch-soundness, leak-freedom). The epoch
+# stage is where the second pair is earned, so the report must show the
+# program the C17 materializer saw crossed it.
 validate_native_report() {
   local report_path="$1" line
   local -a required_lines=(
@@ -370,6 +373,8 @@ validate_native_report() {
     "obligation-projection PASS legal-abi"
     "obligation-projection PASS discharged-tokens"
     "obligation-projection PASS bounded-effects"
+    "obligation-projection PASS epoch-soundness"
+    "obligation-projection PASS leak-freedom"
     "materialize-c17 OK module_0.h module_0.c"
   )
   [[ -f "$report_path" ]] || die "native build omitted $report_path"
@@ -377,9 +382,11 @@ validate_native_report() {
     [[ "$(grep -Fxc -- "$line" "$report_path" || true)" == "1" ]] ||
       die "native report must contain exactly once: $line"
   done
-  [[ "$(grep -c '^obligation-projection ' "$report_path" || true)" == "7" &&
-     "$(grep -c '^obligation-projection PASS ' "$report_path" || true)" == "7" ]] ||
-    die "native report must contain exactly seven passing obligations"
+  [[ "$(grep -c '^obligation-projection ' "$report_path" || true)" == "9" &&
+     "$(grep -c '^obligation-projection PASS ' "$report_path" || true)" == "9" ]] ||
+    die "native report must contain exactly nine passing obligations"
+  [[ "$(grep -c '^stage native-to-epoch ' "$report_path" || true)" == "1" ]] ||
+    die "native report must name the epoch stage the materializer crossed"
   ! grep -q '^pending ' "$report_path" ||
     die "native report contains pending lowering work"
 }

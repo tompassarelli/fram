@@ -214,7 +214,9 @@ C
       'stage source-freeze ACCEPTED' \
       'stage source-to-typed ACCEPTED' \
       'stage typed-to-native COMPLETE' \
-      'native-lowering-result NativeLoweringCompleteV0'
+      'native-lowering-result NativeLoweringCompleteV0' \
+      'stage native-to-epoch COMPLETE' \
+      'epoch-regions-minted 0'
     printf '%s\n' 'materialize-c17 OK module_0.h module_0.c'
     if [[ "$want_qbe" == 1 ]]; then
       if [[ -n "${FAKE_QBE_REFUSAL:-}" ]]; then
@@ -242,7 +244,9 @@ C
       'obligation-projection PASS checked-arithmetic' \
       'obligation-projection PASS legal-abi' \
       'obligation-projection PASS discharged-tokens' \
-      'obligation-projection PASS bounded-effects'
+      'obligation-projection PASS bounded-effects' \
+      'obligation-projection PASS epoch-soundness' \
+      'obligation-projection PASS leak-freedom'
     if [[ "$want_qbe" == 1 && -n "${FAKE_QBE_REFUSAL:-}" ]]; then
       printf '%s\n' 'result FAIL materialization'
     else
