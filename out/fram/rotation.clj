@@ -209,13 +209,6 @@
 (defn- checked-assertion [event]
   (if (assertion-occurrence? event) event (throw (ex-info "fram: rotations cover assertion occurrences only" {:type :invalid-rotation-occurrence}))))
 
-(defn- entry-bucket [entry]
-  (cond
-  (= entry 0) 0
-  (<= entry 3) 1
-  (<= entry 5) 2
-  :else 3))
-
 (defn- entry-key [entry event]
   (let [proposition (proposition-of event)
    t1 (t/triple-t1 proposition)
@@ -231,31 +224,36 @@
   (= entry 6) [t3]
   :else [t3 t1])))
 
-(defn- ^Rotation projected! [^String space-id version events]
-  (loop [widths [bucket-initial-slots bucket-initial-slots bucket-initial-slots bucket-initial-slots]
-   keyses [empty-keys empty-keys empty-keys empty-keys]
-   cellses [empty-event-cells empty-event-cells empty-event-cells empty-event-cells]
-   slotses [(fresh-position-cells bucket-initial-slots) (fresh-position-cells bucket-initial-slots) (fresh-position-cells bucket-initial-slots) (fresh-position-cells bucket-initial-slots)]
+(defn- initial-bucket-width [event-count]
+  (loop [width bucket-initial-slots]
+  (if (>= (* bucket-slot-load width) event-count) width (recur (* 2 width)))))
+
+(defn- ^Bucket projected-bucket! [events first-entry last-entry ^Boolean replace? initial-width]
+  (loop [width initial-width
+   keys empty-keys
+   cells empty-event-cells
+   slot-cells (fresh-position-cells initial-width)
    position 0
-   entry 0]
-  (if (>= position (count events)) (->Rotation space-id version events (->Bucket (nth widths 0) (nth keyses 0) (close-event-cells (nth cellses 0)) (close-position-cells (nth slotses 0))) (->Bucket (nth widths 1) (nth keyses 1) (close-event-cells (nth cellses 1)) (close-position-cells (nth slotses 1))) (->Bucket (nth widths 2) (nth keyses 2) (close-event-cells (nth cellses 2)) (close-position-cells (nth slotses 2))) (->Bucket (nth widths 3) (nth keyses 3) (close-event-cells (nth cellses 3)) (close-position-cells (nth slotses 3))) no-pending) (if (>= entry 8) (recur widths keyses cellses slotses (inc position) 0) (let [event (checked-assertion (nth events position))
-   bucket (entry-bucket entry)
+   entry first-entry]
+  (if (>= position (count events)) (->Bucket width keys (close-event-cells cells) (close-position-cells slot-cells)) (if (> entry last-entry) (recur width keys cells slot-cells (inc position) first-entry) (let [event (checked-assertion (nth events position))
    key (entry-key entry event)
-   width (nth widths bucket)
-   keys (nth keyses bucket)
-   slot-cells (nth slotses bucket)
-   positions (deref (nth slot-cells (bucket-slot key width)))
+   slot (bucket-slot key width)
+   positions (deref (nth slot-cells slot))
    at (loop [offset 0]
   (if (>= offset (count positions)) -1 (let [candidate (nth positions offset)]
   (if (= (nth keys candidate) key) candidate (recur (inc offset))))))]
   (if (>= at 0) (do
-  (if (= bucket 0) (reset! (nth (nth cellses bucket) at) [event]) (swap! (nth (nth cellses bucket) at) conj event))
-  (recur widths keyses cellses slotses position (inc entry))) (let [appended (count keys)
+  (if replace? (reset! (nth cells at) [event]) (swap! (nth cells at) conj event))
+  (recur width keys cells slot-cells position (inc entry))) (let [appended (count keys)
    grown-keys (conj keys key)
-   grown-cells (conj (nth cellses bucket) (atom [event]))]
+   grown-cells (conj cells (atom [event]))]
   (do
-  (swap! (nth slot-cells (bucket-slot key width)) conj appended)
-  (if (> (count grown-keys) (* bucket-slot-load width)) (recur (assoc widths bucket (* 2 width)) (assoc keyses bucket grown-keys) (assoc cellses bucket grown-cells) (assoc slotses bucket (rehashed-position-cells! grown-keys (* 2 width))) position (inc entry)) (recur widths (assoc keyses bucket grown-keys) (assoc cellses bucket grown-cells) slotses position (inc entry)))))))))))
+  (swap! (nth slot-cells slot) conj appended)
+  (if (> (count grown-keys) (* bucket-slot-load width)) (recur (* 2 width) grown-keys grown-cells (rehashed-position-cells! grown-keys (* 2 width)) position (inc entry)) (recur width grown-keys grown-cells slot-cells position (inc entry)))))))))))
+
+(defn- ^Rotation projected! [^String space-id version events]
+  (let [total (count events)]
+  (->Rotation space-id version events (projected-bucket! events 0 0 true (initial-bucket-width total)) (projected-bucket! events 1 3 false (initial-bucket-width (* 3 total))) (projected-bucket! events 4 5 false (initial-bucket-width (* 2 total))) (projected-bucket! events 6 7 false (initial-bucket-width (* 2 total))) no-pending)))
 
 (defn ^Rotation project! [ctx]
   (projected! (store/space-id ctx) (store/current-sequence ctx) (store/live-occurrences ctx)))

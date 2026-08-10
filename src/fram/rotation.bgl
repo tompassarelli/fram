@@ -335,13 +335,6 @@
 
 ;; Entry map per event: 0 by-occurrence [occ] (set), 1-3 spo [s] [s p] [s p o],
 ;; 4-5 pos [p] [p o], 6-7 osp [o] [o s].
-(defn- entry-bucket [entry: Int] -> Int
-  (cond
-    [(= entry 0) 0]
-    [(<= entry 3) 1]
-    [(<= entry 5) 2]
-    [:else 3]))
-
 (defn- entry-key [entry: Int event: t/Triple] -> (Vec Any)
   (let [proposition: t/Triple (proposition-of event)
         t1: Any (t/triple-t1 proposition)
@@ -357,49 +350,42 @@
       [(= entry 6) [t3]]
       [:else [t3 t1]])))
 
-(defn- projected!
-  [space-id: String
-   version: Int
-   events: (Vec t/Triple)] -> Rotation
-  (loop [widths: (Vec Int)
-         [bucket-initial-slots bucket-initial-slots bucket-initial-slots
-          bucket-initial-slots]
-         keyses: (Vec (Vec (Vec Any))) [empty-keys empty-keys empty-keys empty-keys]
-         cellses: (Vec (Vec (Atom (Vec t/Triple))))
-         [empty-event-cells empty-event-cells empty-event-cells
-          empty-event-cells]
-         slotses: (Vec (Vec (Atom (Vec Int))))
-         [(fresh-position-cells bucket-initial-slots)
-          (fresh-position-cells bucket-initial-slots)
-          (fresh-position-cells bucket-initial-slots)
-          (fresh-position-cells bucket-initial-slots)]
+;; A bucket sized from the event count starts at the width its keys will want,
+;; so the common projection rehashes at most once instead of walking every
+;; doubling: a doubling reallocates the whole slot-cell array and re-appends
+;; every key position, and those intermediate generations are pinned by the
+;; cells that hold them.
+(defn- initial-bucket-width [event-count: Int] -> Int
+  (loop [width: Int bucket-initial-slots]
+    (if (>= (* bucket-slot-load width) event-count)
+      width
+      (recur (* 2 width)))))
+
+;; One bucket over the entries it owns. The four bucket states used to ride in
+;; parallel four-wide vectors indexed by bucket, which cost an `assoc` per
+;; appended key on each of them; here each state is an ordinary loop variable
+;; and the pass reads the events once per bucket instead.
+(defn- projected-bucket!
+  [events: (Vec t/Triple)
+   first-entry: Int
+   last-entry: Int
+   replace?: Bool
+   initial-width: Int] -> Bucket
+  (loop [width: Int initial-width
+         keys: (Vec (Vec Any)) empty-keys
+         cells: (Vec (Atom (Vec t/Triple))) empty-event-cells
+         slot-cells: (Vec (Atom (Vec Int))) (fresh-position-cells initial-width)
          position: Int 0
-         entry: Int 0]
+         entry: Int first-entry]
     (if (>= position (count events))
-      (->Rotation space-id version events
-        (->Bucket (nth widths 0) (nth keyses 0)
-          (close-event-cells (nth cellses 0))
-          (close-position-cells (nth slotses 0)))
-        (->Bucket (nth widths 1) (nth keyses 1)
-          (close-event-cells (nth cellses 1))
-          (close-position-cells (nth slotses 1)))
-        (->Bucket (nth widths 2) (nth keyses 2)
-          (close-event-cells (nth cellses 2))
-          (close-position-cells (nth slotses 2)))
-        (->Bucket (nth widths 3) (nth keyses 3)
-          (close-event-cells (nth cellses 3))
-          (close-position-cells (nth slotses 3)))
-        no-pending)
-      (if (>= entry 8)
-        (recur widths keyses cellses slotses (inc position) 0)
+      (->Bucket width keys (close-event-cells cells)
+        (close-position-cells slot-cells))
+      (if (> entry last-entry)
+        (recur width keys cells slot-cells (inc position) first-entry)
         (let [event: t/Triple (checked-assertion (nth events position))
-              bucket: Int (entry-bucket entry)
               key: (Vec Any) (entry-key entry event)
-              width: Int (nth widths bucket)
-              keys: (Vec (Vec Any)) (nth keyses bucket)
-              slot-cells: (Vec (Atom (Vec Int))) (nth slotses bucket)
-              positions: (Vec Int)
-              (deref (nth slot-cells (bucket-slot key width)))
+              slot: Int (bucket-slot key width)
+              positions: (Vec Int) (deref (nth slot-cells slot))
               at: Int
               (loop [offset: Int 0]
                 (if (>= offset (count positions))
@@ -410,28 +396,34 @@
                       (recur (inc offset))))))]
           (if (>= at 0)
             (do
-              (if (= bucket 0)
-                (reset! (nth (nth cellses bucket) at) [event])
-                (swap! (nth (nth cellses bucket) at) conj event))
-              (recur widths keyses cellses slotses position (inc entry)))
+              (if replace?
+                (reset! (nth cells at) [event])
+                (swap! (nth cells at) conj event))
+              (recur width keys cells slot-cells position (inc entry)))
             (let [appended: Int (count keys)
                   grown-keys: (Vec (Vec Any)) (conj keys key)
                   grown-cells: (Vec (Atom (Vec t/Triple)))
-                  (conj (nth cellses bucket) (atom [event]))]
+                  (conj cells (atom [event]))]
               (do
-                (swap! (nth slot-cells (bucket-slot key width)) conj appended)
+                (swap! (nth slot-cells slot) conj appended)
                 (if (> (count grown-keys) (* bucket-slot-load width))
-                  (recur (assoc widths bucket (* 2 width))
-                    (assoc keyses bucket grown-keys)
-                    (assoc cellses bucket grown-cells)
-                    (assoc slotses bucket
-                      (rehashed-position-cells! grown-keys (* 2 width)))
+                  (recur (* 2 width) grown-keys grown-cells
+                    (rehashed-position-cells! grown-keys (* 2 width))
                     position (inc entry))
-                  (recur widths
-                    (assoc keyses bucket grown-keys)
-                    (assoc cellses bucket grown-cells)
-                    slotses
-                    position (inc entry)))))))))))
+                  (recur width grown-keys grown-cells slot-cells position
+                    (inc entry)))))))))))
+
+(defn- projected!
+  [space-id: String
+   version: Int
+   events: (Vec t/Triple)] -> Rotation
+  (let [total: Int (count events)]
+    (->Rotation space-id version events
+      (projected-bucket! events 0 0 true (initial-bucket-width total))
+      (projected-bucket! events 1 3 false (initial-bucket-width (* 3 total)))
+      (projected-bucket! events 4 5 false (initial-bucket-width (* 2 total)))
+      (projected-bucket! events 6 7 false (initial-bucket-width (* 2 total)))
+      no-pending)))
 
 (defn project! [ctx: (Atom t/TermStore)] -> Rotation
   (projected! (store/space-id ctx) (store/current-sequence ctx)
