@@ -46,10 +46,14 @@
 (doseq [batch (partition-all 4 corpus)]
   (c/commit-transaction! delta-ctx (mapv c/assert-operation batch)))
 (c/commit-transaction! delta-ctx (mapv c/retract-operation (take-nth 4 corpus)))
-(def incremental (rot/refresh pinned-empty delta-ctx))
+(def incremental (rot/refresh! pinned-empty delta-ctx))
 (def fresh (rot/project! delta-ctx))
-(check! "delta-updated rotation is VALUE-equal to a from-scratch build"
-        (= incremental fresh))
+(check! "delta-updated rotation answers VALUE-equal to a from-scratch build"
+        (and (= (rot/all-occurrences incremental) (rot/all-occurrences fresh))
+             (= (rot/occurrence-count incremental) (rot/occurrence-count fresh))
+             (every? (fn [[s p o]] (= (rot/matching incremental s p o)
+                                      (rot/matching fresh s p o)))
+                     (for [s [nil "a"], p [nil "p"], o [nil 2]] [s p o]))))
 (check! "a refreshed rotation is pinned to the store it projects"
         (and (rot/pinned? incremental delta-ctx)
              (not (rot/pinned? pinned-empty delta-ctx))))
@@ -60,7 +64,7 @@
 (c/commit-transaction! dup-ctx [(c/assert-operation dup) (c/assert-operation dup)])
 (def dup-view (rot/project! dup-ctx))
 (c/commit-transaction! dup-ctx [(c/retract-operation dup)])
-(def dup-after (rot/refresh dup-view dup-ctx))
+(def dup-after (rot/refresh! dup-view dup-ctx))
 (check! "two equal propositions are two live occurrences"
         (= 2 (count (rot/by-proposition dup-view dup))))
 (check! "one retraction withdraws the NEWEST occurrence only"
@@ -70,11 +74,11 @@
 ;; ------------------------------------------------------------ D. discipline
 (check! "a rotation from another space is refused, not silently reused"
         (= :rotation-space-mismatch
-           (try (rot/refresh (rot/project! dup-ctx) delta-ctx) nil
+           (try (rot/refresh! (rot/project! dup-ctx) delta-ctx) nil
                 (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))
 (check! "a rotation ahead of its store is refused"
         (= :rotation-ahead-of-store
-           (try (rot/refresh (assoc (rot/project! dup-ctx) :version 99) dup-ctx) nil
+           (try (rot/refresh! (assoc (rot/project! dup-ctx) :version 99) dup-ctx) nil
                 (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))
 
 ;; ----------------------------------------------------------------- E. minting
@@ -114,7 +118,7 @@
 (def write-identity (txn/update-single! upd-builder upd-view "n" "single-pred" "new"))
 (def transactions-before (c/transaction-count upd-ctx))
 (txn/commit! upd-ctx upd-builder)
-(def upd-after (rot/refresh upd-view upd-ctx))
+(def upd-after (rot/refresh! upd-view upd-ctx))
 (check! "the whole update lands as ONE transaction"
         (= 1 (- (c/transaction-count upd-ctx) transactions-before)))
 (check! "exactly the new value is live afterwards"
@@ -127,7 +131,7 @@
 (def same-builder (txn/open upd-ctx))
 (def same-identity (txn/update-single! same-builder upd-after "n" "single-pred" "new"))
 (txn/commit! upd-ctx same-builder)
-(def upd-same (rot/refresh upd-after upd-ctx))
+(def upd-same (rot/refresh! upd-after upd-ctx))
 (check! "an update to the SAME value still retracts and re-asserts"
         (and (= ["new"] (rot/values (rot/by-t12 upd-same "n" "single-pred")))
              (not (= same-identity write-identity))

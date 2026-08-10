@@ -264,6 +264,149 @@
    []
    message))
 
+(def no-actions: (Vec Keyword) [])
+
+(def no-handles: (Vec Int) [])
+
+;; Fused frame replay: the wire walk interns terms as it reads them, so a
+;; replayed frame allocates its rows and nothing shaped like a term tree.
+;; Mirrors decode-frame-payload-range!'s validation, spelling for spelling.
+(defn- intern-wire-term!
+  [decoder: wire/Decoder
+   root: (Atom t/TermStore)
+   depth: Int] -> Int
+  (if (not (wire/decoder-node-limited! decoder depth max-codec-count
+                                       max-term-depth))
+    -1
+    (let [tag (wire/read-u8! decoder "Term tag")]
+      (cond
+        [(deref (wire/decoder-error decoder)) -1]
+        [(= tag 1)
+         (let [text (wire/read-sized-text! decoder max-codec-count
+                                           "String atom")]
+           (if (deref (wire/decoder-error decoder))
+             -1
+             (term-store/intern-atom-handle! root text)))]
+        [(= tag 2)
+         (let [value (wire/read-i64-le! decoder "Int atom")]
+           (if (deref (wire/decoder-error decoder))
+             -1
+             (term-store/intern-atom-handle! root value)))]
+        [(= tag 3)
+         (let [bits (wire/read-i64-le! decoder "Float atom")]
+           (if (deref (wire/decoder-error decoder))
+             -1
+             (term-store/intern-atom-handle! root (float-from-bits bits))))]
+        [(= tag 4) (term-store/intern-atom-handle! root false)]
+        [(= tag 5) (term-store/intern-atom-handle! root true)]
+        [(= tag 6)
+         (let [spelling (wire/read-sized-text! decoder max-codec-count
+                                               "Keyword atom")]
+           (cond
+             [(deref (wire/decoder-error decoder)) -1]
+             [(empty? spelling)
+              (do
+                (wire/decoder-error! decoder
+                                     "Keyword atom spelling must be nonempty")
+                -1)]
+             [:else (term-store/intern-atom-handle! root (keyword spelling))]))]
+        [(= tag 7)
+         (let [t1 (intern-wire-term! decoder root (+ depth 1))]
+           (if (< t1 0)
+             -1
+             (let [t2 (intern-wire-term! decoder root (+ depth 1))]
+               (if (< t2 0)
+                 -1
+                 (let [t3 (intern-wire-term! decoder root (+ depth 1))]
+                   (if (< t3 0)
+                     -1
+                     (term-store/intern-triple-handle! root t1 t2 t3)))))))]
+        [(= tag 8)
+         (let [seconds (wire/read-i64-le! decoder "Instant atom")
+               nanos (wire/read-u32-le! decoder "Instant nanos")]
+           (cond
+             [(deref (wire/decoder-error decoder)) -1]
+             [(< nanos 1000000000)
+              (term-store/intern-atom-handle! root (t/instant seconds nanos))]
+             [:else
+              (do
+                (wire/decoder-error!
+                 decoder "Instant nanoseconds are outside the canonical range")
+                -1)]))]
+        [:else
+         (do
+           (wire/decoder-error! decoder "TermCodecV1 contains an unknown tag")
+           -1)]))))
+
+(defn- replay-frame-fused!
+  [root: (Atom t/TermStore)
+   bytes: ByteSource
+   start: Int
+   end: Int] -> term-store/TransactionReplayResult
+  (let [decoder (wire/->Decoder bytes (atom start) end (atom 0)
+                                (wire/empty-error-cell))]
+    (if (< (- end start) 12)
+      (term-store/->TransactionReplayResult
+       false :invalid-transaction-frame
+       "FRAMLOG transaction header is truncated")
+      (let [sequence (wire/read-i64-le! decoder "FRAMLOG transaction sequence")
+            operation-count
+            (wire/read-u32-le! decoder "FRAMLOG operation count")]
+        (cond
+          [(deref (wire/decoder-error decoder))
+           (term-store/->TransactionReplayResult
+            false :invalid-transaction-frame
+            (error-or (deref (wire/decoder-error decoder))
+                      "FRAMLOG transaction decode failed"))]
+          [(< sequence 0)
+           (term-store/->TransactionReplayResult
+            false :invalid-transaction-frame
+            "FRAMLOG transaction sequence is negative")]
+          [(or (= operation-count 0) (> operation-count max-codec-count))
+           (term-store/->TransactionReplayResult
+            false :invalid-transaction-frame
+            "FRAMLOG transaction operation count is invalid")]
+          [:else
+           (loop [ordinal: Int 0
+                  actions: (Vec Keyword) no-actions
+                  handles: (Vec Int) no-handles]
+             (if (>= ordinal operation-count)
+               (if (not= 0 (wire/decoder-remaining decoder))
+                 (term-store/->TransactionReplayResult
+                  false :invalid-transaction-frame
+                  "FRAMLOG transaction has trailing payload bytes")
+                 (term-store/append-replayed-transaction! root sequence
+                                                          actions handles))
+               (let [actual
+                     (wire/read-u32-le! decoder "FRAMLOG operation ordinal")
+                     action (wire/read-u8! decoder "FRAMLOG operation action")
+                     _ (reset! (wire/decoder-nodes decoder) 0)
+                     handle (intern-wire-term! decoder root 0)
+                     error (deref (wire/decoder-error decoder))]
+                 (cond
+                   [error
+                    (term-store/->TransactionReplayResult
+                     false :invalid-transaction-frame
+                     (str "FRAMLOG transaction decode failed: " error))]
+                   [(not= actual ordinal)
+                    (term-store/->TransactionReplayResult
+                     false :invalid-transaction-frame
+                     "FRAMLOG operation ordinals are not contiguous")]
+                   [(not (term-store/triple-handle-shape? handle))
+                    (term-store/->TransactionReplayResult
+                     false :invalid-transaction-frame
+                     "FRAMLOG operation proposition is not a Triple")]
+                   [(= action 1)
+                    (recur (+ ordinal 1) (conj actions t/assert-action)
+                      (conj handles handle))]
+                   [(= action 2)
+                    (recur (+ ordinal 1) (conj actions t/retract-action)
+                      (conj handles handle))]
+                   [:else
+                    (term-store/->TransactionReplayResult
+                     false :invalid-transaction-frame
+                     "FRAMLOG contains an unknown operation action")]))))])))))
+
 (defn consume-framlog-frames!
   [stream: BootStream
    bytes: ByteSource
@@ -288,27 +431,16 @@
                     stored-crc (u32-le-at bytes payload-end)
                     actual-crc
                     (crc32-range-source bytes payload-start payload-end)
-                    decoded
-                    (decode-frame-payload-range!
-                     bytes payload-start payload-end)
-                    frame (framedecoderesult-frame decoded)
                     root (bootstream-store stream)]
                 (cond
                   [(not= stored-crc actual-crc)
                    (failed-boot-stream stream "FRAMLOG frame CRC does not match")]
-                  [(framedecoderesult-error decoded)
-                   (failed-boot-stream
-                    stream
-                    (str "FRAMLOG transaction decode failed: "
-                         (framedecoderesult-error decoded)))]
-                  [(nil? frame)
-                   (failed-boot-stream
-                    stream "FRAMLOG transaction decoder returned no frame")]
                   [(nil? root)
                    (failed-boot-stream stream "FRAMLOG header was not decoded")]
                   [:else
                    (let [replayed
-                         (term-store/replay-transaction-result! root frame)]
+                         (replay-frame-fused! root bytes payload-start
+                                              payload-end)]
                      (if (term-store/transactionreplayresult-ok replayed)
                        (recur
                         (->BootStream

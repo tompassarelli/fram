@@ -127,7 +127,7 @@
 (defn view [s: Session] -> rot/Rotation (deref (session-view s)))
 
 (defn refresh! [s: Session] -> Session
-  (do (reset! (session-view s) (rot/refresh (view s) (store-of s))) s))
+  (do (reset! (session-view s) (rot/refresh! (view s) (store-of s))) s))
 
 (defn- commit! [s: Session builder: (Atom txn/Builder)] -> Session
   (do (txn/commit! (store-of s) builder) (refresh! s)))

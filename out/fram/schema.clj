@@ -106,7 +106,7 @@
 
 (defn ^Session refresh! [^Session s]
   (do
-  (reset! (session-view s) (rot/refresh (view s) (store-of s)))
+  (reset! (session-view s) (rot/refresh! (view s) (store-of s)))
   s))
 
 (defn- ^Session commit! [^Session s builder]

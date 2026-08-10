@@ -76,7 +76,7 @@
 (defn view [g: Graph] -> rot/Rotation (deref (graph-view g)))
 
 (defn refresh! [g: Graph] -> Graph
-  (do (reset! (graph-view g) (rot/refresh (view g) (graph-store g))) g))
+  (do (reset! (graph-view g) (rot/refresh! (view g) (graph-store g))) g))
 
 ;; An explicitly supplied view: the staging layer publishes a committed
 ;; rotation plus its uncommitted overlay here.

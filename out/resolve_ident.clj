@@ -50,7 +50,7 @@
 
 (defn ^Graph refresh! [^Graph g]
   (do
-  (reset! (graph-view g) (rot/refresh (view g) (graph-store g)))
+  (reset! (graph-view g) (rot/refresh! (view g) (graph-store g)))
   g))
 
 (defn ^Graph with-view! [^Graph g rotation]

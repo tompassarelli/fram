@@ -242,6 +242,50 @@
       (throw (ex-info "fram: operation handle does not resolve to Triple"
                       {:type :invalid-operation-handle})))))
 
+;; The fused replay walk interns straight off the wire: an atom leaf, or a
+;; triple over handles this walk already interned — no term tree in between.
+(defn intern-atom-handle! [ctx: (Atom t/TermStore) value: Any] -> Int
+  (if (or (t/triple? value) (not (t/term? value)))
+    (throw (ex-info "fram: value outside Atom" {:type :invalid-atom}))
+    (let [row: t/AtomRow (atom-row value)
+          store: t/TermStore (deref ctx)
+          atoms: (Vec t/AtomRow) (t/termstore-atoms store)
+          known: Int (find-atom-position atoms (t/termstore-atom-slots store) row)]
+      (if (>= known 0)
+        (atom-handle known)
+        (let [position (count atoms)]
+          (do
+            (swap! ctx update :atoms
+                   (fn [current: (Vec t/AtomRow)] -> (Vec t/AtomRow)
+                     (conj current row)))
+            (index-atom-term! ctx row position)
+            (atom-handle position)))))))
+
+(defn intern-triple-handle!
+  [ctx: (Atom t/TermStore)
+   t1: Int
+   t2: Int
+   t3: Int] -> Int
+  (let [store: t/TermStore (deref ctx)
+        rows: (Vec t/TripleRow) (t/termstore-triples store)
+        value: t/TripleRow (t/->TripleRow t1 t2 t3)
+        known: Int (find-triple-position rows (t/termstore-triple-slots store) value)]
+    (if (not (and (valid-handle? store t1)
+                  (and (valid-handle? store t2) (valid-handle? store t3))))
+      (throw (ex-info "fram: term handle does not resolve" {:type :invalid-term-handle}))
+      (if (>= known 0)
+        (triple-handle known)
+        (let [position (count rows)]
+          (do
+            (swap! ctx update :triples
+                   (fn [current: (Vec t/TripleRow)] -> (Vec t/TripleRow)
+                     (conj current value)))
+            (index-triple-term! ctx value position)
+            (triple-handle position)))))))
+
+(defn triple-handle-shape? [handle: Int] -> Bool
+  (and (>= handle 0) (= 1 (mod handle 2))))
+
 (defn known-term-handle [store: t/TermStore term: Any] -> Int?
   (if (not (t/term? term))
     nil
@@ -576,6 +620,52 @@
     (transaction-replay-error
      :invalid-transaction-frame
      "fram: invalid transaction frame")))
+
+;; The fused tail of a wire-walked frame: operations arrive as parallel action
+;; and proposition-handle columns, already interned, and append exactly as
+;; append-valid-transaction! appends a decoded frame.
+(defn append-replayed-transaction!
+  [ctx: (Atom t/TermStore)
+   sequence: Int
+   actions: (Vec Keyword)
+   handles: (Vec Int)] -> TransactionReplayResult
+  (let [before: t/TermStore (deref ctx)]
+    (cond
+      [(or (empty? actions) (not= (count actions) (count handles)))
+       (transaction-replay-error
+        :invalid-transaction-frame
+        "fram: transaction requires at least one valid operation")]
+      [(< sequence (t/termstore-next-sequence before))
+       (transaction-replay-error
+        :nonmonotonic-transaction-sequence
+        "fram: transaction sequence must advance within its space")]
+      [(> sequence max-transaction-sequence)
+       (transaction-replay-unclassified-error)]
+      [:else
+       (let [first-operation: Int (count (t/termstore-operations before))
+             transaction-row: t/TransactionRow
+             (t/->TransactionRow sequence first-operation (count actions))
+             with-transaction: t/TermStore
+             (assoc before :transactions
+                    (conj (t/termstore-transactions before) transaction-row))
+             appended: t/TermStore
+             (loop [current: t/TermStore with-transaction ordinal: Int 0]
+               (if (>= ordinal (count actions))
+                 current
+                 (let [row: t/OperationRow
+                       (t/->OperationRow sequence ordinal
+                                         (nth actions ordinal)
+                                         (nth handles ordinal))
+                       operation-position: Int (+ first-operation ordinal)
+                       with-row: t/TermStore
+                       (assoc current :operations
+                              (conj (t/termstore-operations current) row))]
+                   (recur (apply-operation-state! with-row operation-position row)
+                          (inc ordinal)))))
+             final-store: t/TermStore (assoc appended :next-sequence (inc sequence))]
+         (do
+           (reset! ctx final-store)
+           (transaction-replay-ok)))])))
 
 (defn replay-transaction!
   [ctx: (Atom t/TermStore)

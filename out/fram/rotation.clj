@@ -12,7 +12,15 @@
 
 (defn bucket-slots [r] (:slots r))
 
-(defrecord Rotation [space-id version events by-occurrence spo pos osp])
+(defrecord PendingOp [action proposition event])
+
+(defn pendingop-action [r] (:action r))
+
+(defn pendingop-proposition [r] (:proposition r))
+
+(defn pendingop-event [r] (:event r))
+
+(defrecord Rotation [space-id version events by-occurrence spo pos osp pending])
 
 (defn rotation-space-id [r] (:space-id r))
 
@@ -28,6 +36,8 @@
 
 (defn rotation-osp [r] (:osp r))
 
+(defn rotation-pending [r] (:pending r))
+
 (def empty-events [])
 
 (def empty-keys [])
@@ -38,17 +48,13 @@
 
 (def empty-slot-rows [])
 
+(def no-pending [])
+
 (def bucket-initial-slots 64)
 
 (def bucket-slot-load 4)
 
-(defn- fresh-slot-rows [width]
-  (loop [rows empty-slot-rows
-   position 0]
-  (if (>= position width) rows (recur (conj rows empty-positions) (inc position)))))
-
-(defn- ^Bucket empty-bucket []
-  (->Bucket bucket-initial-slots empty-keys empty-event-lists (fresh-slot-rows bucket-initial-slots)))
+(def pending-fold-cap 512)
 
 (defn- bucket-slot [key width]
   (mod (hash key) width))
@@ -64,27 +70,6 @@
   (let [position (bucket-entry bucket key)]
   (if (>= position 0) (nth (bucket-events bucket) position) empty-events)))
 
-(defn- ^Bucket bucket-rehash [^Bucket bucket width]
-  (let [keys (bucket-keys bucket)]
-  (loop [rows (fresh-slot-rows width)
-   position 0]
-  (if (>= position (count keys)) (->Bucket width keys (bucket-events bucket) rows) (let [slot (bucket-slot (nth keys position) width)]
-  (recur (assoc rows slot (conj (nth rows slot) position)) (inc position)))))))
-
-(defn- ^Bucket bucket-set [^Bucket bucket key events]
-  (let [at (bucket-entry bucket key)]
-  (if (>= at 0) (->Bucket (bucket-width bucket) (bucket-keys bucket) (assoc (bucket-events bucket) at events) (bucket-slots bucket)) (let [width (bucket-width bucket)
-   position (count (bucket-keys bucket))
-   keys (conj (bucket-keys bucket) key)
-   lists (conj (bucket-events bucket) events)
-   slot (bucket-slot key width)
-   rows (assoc (bucket-slots bucket) slot (conj (nth (bucket-slots bucket) slot) position))
-   grown (->Bucket width keys lists rows)]
-  (if (> (count keys) (* bucket-slot-load width)) (bucket-rehash grown (* 2 width)) grown)))))
-
-(defn- one-event [event]
-  [event])
-
 (defn- occurrence-key [occurrence]
   [occurrence])
 
@@ -97,34 +82,25 @@
 (defn ^Boolean assertion-occurrence? [event]
   (and (t/triple? event) (and (= t/asserts (t/triple-t2 event)) (and (t/occurrence-coordinate? (t/triple-t1 event)) (t/triple? (t/triple-t3 event))))))
 
-(defn- checked-assertion [event]
-  (if (assertion-occurrence? event) event (throw (ex-info "fram: rotations cover assertion occurrences only" {:type :invalid-rotation-occurrence}))))
+(defn- ^Boolean slot-matches? [pattern term]
+  (or (nil? pattern) (= pattern term)))
 
-(defn- ^Bucket bucket-add [^Bucket bucket key event]
-  (bucket-set bucket key (conj (bucket-get bucket key) event)))
+(defn- ^Boolean pattern-match? [proposition t1 t2 t3]
+  (and (slot-matches? t1 (t/triple-t1 proposition)) (and (slot-matches? t2 (t/triple-t2 proposition)) (slot-matches? t3 (t/triple-t3 proposition)))))
 
-(defn- without-event [events target]
-  (filterv (fn [event] (not (= event target))) events))
+(defn- without-newest-of [events proposition]
+  (let [at (loop [position (dec (count events))]
+  (if (< position 0) -1 (if (= proposition (proposition-of (nth events position))) position (recur (dec position)))))]
+  (if (< at 0) events (loop [built empty-events
+   position 0]
+  (if (>= position (count events)) built (recur (if (= position at) built (conj built (nth events position))) (inc position)))))))
 
-(defn- ^Bucket bucket-del [^Bucket bucket key event]
-  (bucket-set bucket key (without-event (bucket-get bucket key) event)))
-
-(defn- ^Rotation rotate-add [^Rotation rotation event]
-  (let [proposition (proposition-of (checked-assertion event))
-   t1 (t/triple-t1 proposition)
-   t2 (t/triple-t2 proposition)
-   t3 (t/triple-t3 proposition)]
-  (->Rotation (rotation-space-id rotation) (rotation-version rotation) (conj (rotation-events rotation) event) (bucket-set (rotation-by-occurrence rotation) (occurrence-key (occurrence-of event)) (one-event event)) (bucket-add (bucket-add (bucket-add (rotation-spo rotation) [t1] event) [t1 t2] event) [t1 t2 t3] event) (bucket-add (bucket-add (rotation-pos rotation) [t2] event) [t2 t3] event) (bucket-add (bucket-add (rotation-osp rotation) [t3] event) [t3 t1] event))))
-
-(defn- ^Rotation rotate-del [^Rotation rotation event]
-  (let [proposition (proposition-of (checked-assertion event))
-   t1 (t/triple-t1 proposition)
-   t2 (t/triple-t2 proposition)
-   t3 (t/triple-t3 proposition)]
-  (->Rotation (rotation-space-id rotation) (rotation-version rotation) (without-event (rotation-events rotation) event) (bucket-set (rotation-by-occurrence rotation) (occurrence-key (occurrence-of event)) empty-events) (bucket-del (bucket-del (bucket-del (rotation-spo rotation) [t1] event) [t1 t2] event) [t1 t2 t3] event) (bucket-del (bucket-del (rotation-pos rotation) [t2] event) [t2 t3] event) (bucket-del (bucket-del (rotation-osp rotation) [t3] event) [t3 t1] event))))
-
-(defn- ^Rotation empty-rotation [^String space-id version]
-  (->Rotation space-id version empty-events (empty-bucket) (empty-bucket) (empty-bucket) (empty-bucket)))
+(defn- merged-matching [base pending t1 t2 t3]
+  (if (empty? pending) base (loop [events base
+   position 0]
+  (if (>= position (count pending)) events (let [op (nth pending position)
+   proposition (pendingop-proposition op)]
+  (recur (if (= t/assert-action (pendingop-action op)) (if (pattern-match? proposition t1 t2 t3) (conj events (pendingop-event op)) events) (without-newest-of events proposition)) (inc position)))))))
 
 (defn ^String space-id [^Rotation rotation]
   (rotation-space-id rotation))
@@ -133,31 +109,31 @@
   (rotation-version rotation))
 
 (defn all-occurrences [^Rotation rotation]
-  (rotation-events rotation))
+  (merged-matching (rotation-events rotation) (rotation-pending rotation) nil nil nil))
 
 (defn occurrence-count [^Rotation rotation]
-  (count (rotation-events rotation)))
+  (count (all-occurrences rotation)))
 
 (defn by-t1 [^Rotation rotation t1]
-  (bucket-get (rotation-spo rotation) [t1]))
+  (merged-matching (bucket-get (rotation-spo rotation) [t1]) (rotation-pending rotation) t1 nil nil))
 
 (defn by-t12 [^Rotation rotation t1 t2]
-  (bucket-get (rotation-spo rotation) [t1 t2]))
+  (merged-matching (bucket-get (rotation-spo rotation) [t1 t2]) (rotation-pending rotation) t1 t2 nil))
 
 (defn by-t2 [^Rotation rotation t2]
-  (bucket-get (rotation-pos rotation) [t2]))
+  (merged-matching (bucket-get (rotation-pos rotation) [t2]) (rotation-pending rotation) nil t2 nil))
 
 (defn by-t23 [^Rotation rotation t2 t3]
-  (bucket-get (rotation-pos rotation) [t2 t3]))
+  (merged-matching (bucket-get (rotation-pos rotation) [t2 t3]) (rotation-pending rotation) nil t2 t3))
 
 (defn by-t3 [^Rotation rotation t3]
-  (bucket-get (rotation-osp rotation) [t3]))
+  (merged-matching (bucket-get (rotation-osp rotation) [t3]) (rotation-pending rotation) nil nil t3))
 
 (defn by-t13 [^Rotation rotation t1 t3]
-  (bucket-get (rotation-osp rotation) [t3 t1]))
+  (merged-matching (bucket-get (rotation-osp rotation) [t3 t1]) (rotation-pending rotation) t1 nil t3))
 
 (defn by-proposition [^Rotation rotation proposition]
-  (bucket-get (rotation-spo rotation) [(t/triple-t1 proposition) (t/triple-t2 proposition) (t/triple-t3 proposition)]))
+  (merged-matching (bucket-get (rotation-spo rotation) [(t/triple-t1 proposition) (t/triple-t2 proposition) (t/triple-t3 proposition)]) (rotation-pending rotation) (t/triple-t1 proposition) (t/triple-t2 proposition) (t/triple-t3 proposition)))
 
 (defn matching [^Rotation rotation t1 t2 t3]
   (cond
@@ -168,14 +144,23 @@
   (some? t1) (by-t1 rotation t1)
   (some? t2) (by-t2 rotation t2)
   (some? t3) (by-t3 rotation t3)
-  :else (rotation-events rotation)))
-
-(defn ^Boolean live-occurrence? [^Rotation rotation occurrence]
-  (not (empty? (bucket-get (rotation-by-occurrence rotation) (occurrence-key occurrence)))))
+  :else (all-occurrences rotation)))
 
 (defn event-at [^Rotation rotation occurrence]
-  (let [events (bucket-get (rotation-by-occurrence rotation) (occurrence-key occurrence))]
-  (if (empty? events) nil (nth events 0))))
+  (let [base (bucket-get (rotation-by-occurrence rotation) (occurrence-key occurrence))
+   candidate (let [pending (rotation-pending rotation)]
+  (loop [position 0
+   found (if (empty? base) nil (nth base 0))]
+  (if (>= position (count pending)) found (let [op (nth pending position)]
+  (recur (inc position) (if (and (= t/assert-action (pendingop-action op)) (= occurrence (occurrence-of (pendingop-event op)))) (pendingop-event op) found))))))]
+  (if (nil? candidate) nil (let [present candidate
+   live (by-proposition rotation (proposition-of present))
+   survives (loop [position 0]
+  (if (>= position (count live)) false (if (= occurrence (occurrence-of (nth live position))) true (recur (inc position)))))]
+  (if survives present nil)))))
+
+(defn ^Boolean live-occurrence? [^Rotation rotation occurrence]
+  (some? (event-at rotation occurrence)))
 
 (defn newest-first [events]
   (vec (reverse events)))
@@ -195,28 +180,6 @@
 (defn occurrences [events]
   (mapv (fn [event] (occurrence-of event)) events))
 
-(defrecord BucketBuild [width keys events slots])
-
-(defn bucketbuild-width [r] (:width r))
-
-(defn bucketbuild-keys [r] (:keys r))
-
-(defn bucketbuild-events [r] (:events r))
-
-(defn bucketbuild-slots [r] (:slots r))
-
-(defrecord RotationBuild [events by-occurrence spo pos osp])
-
-(defn rotationbuild-events [r] (:events r))
-
-(defn rotationbuild-by-occurrence [r] (:by-occurrence r))
-
-(defn rotationbuild-spo [r] (:spo r))
-
-(defn rotationbuild-pos [r] (:pos r))
-
-(defn rotationbuild-osp [r] (:osp r))
-
 (def empty-event-cells [])
 
 (def empty-position-cells [])
@@ -226,52 +189,12 @@
    position 0]
   (if (>= position width) cells (recur (conj cells (atom empty-positions)) (inc position)))))
 
-(defn- cells-add! [cells slot position]
-  (do
-  (swap! (nth cells slot) conj position)
-  cells))
-
-(defn- events-add! [cells at event]
-  (do
-  (swap! (nth cells at) conj event)
-  cells))
-
-(defn- events-reset! [cells at events]
-  (do
-  (reset! (nth cells at) events)
-  cells))
-
-(defn- ^BucketBuild open-bucket-build []
-  (->BucketBuild bucket-initial-slots empty-keys empty-event-cells (fresh-position-cells bucket-initial-slots)))
-
-(defn- build-entry [^BucketBuild build key]
-  (let [keys (bucketbuild-keys build)
-   positions (deref (nth (bucketbuild-slots build) (bucket-slot key (bucketbuild-width build))))]
-  (loop [offset 0]
-  (if (>= offset (count positions)) -1 (let [position (nth positions offset)]
-  (if (= (nth keys position) key) position (recur (inc offset))))))))
-
-(defn- ^BucketBuild build-rehash! [^BucketBuild build width]
-  (let [keys (bucketbuild-keys build)]
-  (loop [cells (fresh-position-cells width)
-   position 0]
-  (if (>= position (count keys)) (->BucketBuild width keys (bucketbuild-events build) cells) (recur (cells-add! cells (bucket-slot (nth keys position) width) position) (inc position))))))
-
-(defn- ^BucketBuild build-append! [^BucketBuild build key events]
-  (let [width (bucketbuild-width build)
-   position (count (bucketbuild-keys build))
-   keys (conj (bucketbuild-keys build) key)
-   cells (conj (bucketbuild-events build) (atom events))
-   grown (->BucketBuild width keys cells (cells-add! (bucketbuild-slots build) (bucket-slot key width) position))]
-  (if (> (count keys) (* bucket-slot-load width)) (build-rehash! grown (* 2 width)) grown)))
-
-(defn- ^BucketBuild build-add! [^BucketBuild build key event]
-  (let [at (build-entry build key)]
-  (if (>= at 0) (->BucketBuild (bucketbuild-width build) (bucketbuild-keys build) (events-add! (bucketbuild-events build) at event) (bucketbuild-slots build)) (build-append! build key (one-event event)))))
-
-(defn- ^BucketBuild build-set! [^BucketBuild build key event]
-  (let [at (build-entry build key)]
-  (if (>= at 0) (->BucketBuild (bucketbuild-width build) (bucketbuild-keys build) (events-reset! (bucketbuild-events build) at (one-event event)) (bucketbuild-slots build)) (build-append! build key (one-event event)))))
+(defn- rehashed-position-cells! [keys width]
+  (let [cells (fresh-position-cells width)]
+  (loop [position 0]
+  (if (>= position (count keys)) cells (do
+  (swap! (nth cells (bucket-slot (nth keys position) width)) conj position)
+  (recur (inc position)))))))
 
 (defn- close-event-cells [cells]
   (loop [lists empty-event-lists
@@ -283,53 +206,82 @@
    position 0]
   (if (>= position (count cells)) rows (recur (conj rows (deref (nth cells position))) (inc position)))))
 
-(defn- ^Bucket close-bucket-build [^BucketBuild build]
-  (->Bucket (bucketbuild-width build) (bucketbuild-keys build) (close-event-cells (bucketbuild-events build)) (close-position-cells (bucketbuild-slots build))))
+(defn- checked-assertion [event]
+  (if (assertion-occurrence? event) event (throw (ex-info "fram: rotations cover assertion occurrences only" {:type :invalid-rotation-occurrence}))))
 
-(defn- ^RotationBuild build-rotate-add! [^RotationBuild build event]
-  (let [proposition (proposition-of (checked-assertion event))
+(defn- entry-bucket [entry]
+  (cond
+  (= entry 0) 0
+  (<= entry 3) 1
+  (<= entry 5) 2
+  :else 3))
+
+(defn- entry-key [entry event]
+  (let [proposition (proposition-of event)
    t1 (t/triple-t1 proposition)
    t2 (t/triple-t2 proposition)
    t3 (t/triple-t3 proposition)]
-  (->RotationBuild (conj (rotationbuild-events build) event) (build-set! (rotationbuild-by-occurrence build) (occurrence-key (occurrence-of event)) event) (build-add! (build-add! (build-add! (rotationbuild-spo build) [t1] event) [t1 t2] event) [t1 t2 t3] event) (build-add! (build-add! (rotationbuild-pos build) [t2] event) [t2 t3] event) (build-add! (build-add! (rotationbuild-osp build) [t3] event) [t3 t1] event))))
+  (cond
+  (= entry 0) (occurrence-key (occurrence-of event))
+  (= entry 1) [t1]
+  (= entry 2) [t1 t2]
+  (= entry 3) [t1 t2 t3]
+  (= entry 4) [t2]
+  (= entry 5) [t2 t3]
+  (= entry 6) [t3]
+  :else [t3 t1])))
 
-(defn- ^Rotation projected [^String space-id version events]
-  (let [built (reduce (fn [build event] (build-rotate-add! build event)) (->RotationBuild empty-events (open-bucket-build) (open-bucket-build) (open-bucket-build) (open-bucket-build)) events)]
-  (->Rotation space-id version (rotationbuild-events built) (close-bucket-build (rotationbuild-by-occurrence built)) (close-bucket-build (rotationbuild-spo built)) (close-bucket-build (rotationbuild-pos built)) (close-bucket-build (rotationbuild-osp built)))))
+(defn- ^Rotation projected! [^String space-id version events]
+  (loop [widths [bucket-initial-slots bucket-initial-slots bucket-initial-slots bucket-initial-slots]
+   keyses [empty-keys empty-keys empty-keys empty-keys]
+   cellses [empty-event-cells empty-event-cells empty-event-cells empty-event-cells]
+   slotses [(fresh-position-cells bucket-initial-slots) (fresh-position-cells bucket-initial-slots) (fresh-position-cells bucket-initial-slots) (fresh-position-cells bucket-initial-slots)]
+   position 0
+   entry 0]
+  (if (>= position (count events)) (->Rotation space-id version events (->Bucket (nth widths 0) (nth keyses 0) (close-event-cells (nth cellses 0)) (close-position-cells (nth slotses 0))) (->Bucket (nth widths 1) (nth keyses 1) (close-event-cells (nth cellses 1)) (close-position-cells (nth slotses 1))) (->Bucket (nth widths 2) (nth keyses 2) (close-event-cells (nth cellses 2)) (close-position-cells (nth slotses 2))) (->Bucket (nth widths 3) (nth keyses 3) (close-event-cells (nth cellses 3)) (close-position-cells (nth slotses 3))) no-pending) (if (>= entry 8) (recur widths keyses cellses slotses (inc position) 0) (let [event (checked-assertion (nth events position))
+   bucket (entry-bucket entry)
+   key (entry-key entry event)
+   width (nth widths bucket)
+   keys (nth keyses bucket)
+   slot-cells (nth slotses bucket)
+   positions (deref (nth slot-cells (bucket-slot key width)))
+   at (loop [offset 0]
+  (if (>= offset (count positions)) -1 (let [candidate (nth positions offset)]
+  (if (= (nth keys candidate) key) candidate (recur (inc offset))))))]
+  (if (>= at 0) (do
+  (if (= bucket 0) (reset! (nth (nth cellses bucket) at) [event]) (swap! (nth (nth cellses bucket) at) conj event))
+  (recur widths keyses cellses slotses position (inc entry))) (let [appended (count keys)
+   grown-keys (conj keys key)
+   grown-cells (conj (nth cellses bucket) (atom [event]))]
+  (do
+  (swap! (nth slot-cells (bucket-slot key width)) conj appended)
+  (if (> (count grown-keys) (* bucket-slot-load width)) (recur (assoc widths bucket (* 2 width)) (assoc keyses bucket grown-keys) (assoc cellses bucket grown-cells) (assoc slotses bucket (rehashed-position-cells! grown-keys (* 2 width))) position (inc entry)) (recur widths (assoc keyses bucket grown-keys) (assoc cellses bucket grown-cells) slotses position (inc entry)))))))))))
 
 (defn ^Rotation project! [ctx]
-  (projected (store/space-id ctx) (store/current-sequence ctx) (store/live-occurrences ctx)))
+  (projected! (store/space-id ctx) (store/current-sequence ctx) (store/live-occurrences ctx)))
 
-(defn- ^Rotation apply-frame [^Rotation rotation ^String space-id frame]
+(defn- pending-with-frame [pending ^String space-id frame]
   (let [coordinate (t/transaction-coordinate space-id (t/transactionframe-sequence frame))
    operations (t/transactionframe-operations frame)]
-  (loop [current rotation
+  (loop [built pending
    ordinal 0]
-  (if (>= ordinal (count operations)) current (let [operation (nth operations ordinal)
+  (if (>= ordinal (count operations)) built (let [operation (nth operations ordinal)
    proposition (t/commitoperation-proposition operation)]
-  (if (= t/assert-action (t/commitoperation-action operation)) (recur (rotate-add current (t/assertion-occurrence (t/occurrence-coordinate coordinate ordinal) proposition)) (inc ordinal)) (let [target (newest (by-proposition current proposition))]
-  (recur (if (some? target) (rotate-del current target) current) (inc ordinal)))))))))
-
-(defn- ^Rotation relaid-out [^Rotation rotation ^Boolean retracted]
-  (if retracted (projected (rotation-space-id rotation) (rotation-version rotation) (rotation-events rotation)) rotation))
-
-(defn- ^Boolean retracts? [operations]
-  (loop [ordinal 0]
-  (if (>= ordinal (count operations)) false (if (= t/assert-action (t/commitoperation-action (nth operations ordinal))) (recur (inc ordinal)) true))))
-
-(defn- ^Boolean frames-retract? [frames]
-  (loop [ordinal 0]
-  (if (>= ordinal (count frames)) false (if (retracts? (t/transactionframe-operations (nth frames ordinal))) true (recur (inc ordinal))))))
+  (recur (conj built (if (= t/assert-action (t/commitoperation-action operation)) (->PendingOp t/assert-action proposition (t/assertion-occurrence (t/occurrence-coordinate coordinate ordinal) proposition)) (->PendingOp t/retract-action proposition proposition))) (inc ordinal)))))))
 
 (defn ^Rotation staged [^Rotation rotation ^String space-id sequence operations]
-  (relaid-out (apply-frame rotation space-id (t/->TransactionFrame sequence operations)) (retracts? operations)))
+  (assoc rotation :pending (pending-with-frame (rotation-pending rotation) space-id (t/->TransactionFrame sequence operations))))
 
-(defn ^Rotation refresh [^Rotation rotation ctx]
+(defn ^Rotation refresh! [^Rotation rotation ctx]
   (let [space (store/space-id ctx)
    target (store/current-sequence ctx)
    pinned (rotation-version rotation)]
-  (if (not (= space (rotation-space-id rotation))) (throw (ex-info "fram: rotation belongs to a different space" {:type :rotation-space-mismatch})) (if (> pinned target) (throw (ex-info "fram: rotation is ahead of the store it projects" {:type :rotation-ahead-of-store})) (if (= pinned target) rotation (let [frames (store/transaction-frames-between (deref ctx) pinned target)]
-  (relaid-out (assoc (reduce (fn [current frame] (apply-frame current space frame)) rotation frames) :version target) (frames-retract? frames))))))))
+  (if (not (= space (rotation-space-id rotation))) (throw (ex-info "fram: rotation belongs to a different space" {:type :rotation-space-mismatch})) (if (> pinned target) (throw (ex-info "fram: rotation is ahead of the store it projects" {:type :rotation-ahead-of-store})) (if (= pinned target) rotation (let [frames (store/transaction-frames-between (deref ctx) pinned target)
+   pending (loop [built (rotation-pending rotation)
+   position 0]
+  (if (>= position (count frames)) built (recur (pending-with-frame built space (nth frames position)) (inc position))))
+   advanced (assoc (assoc rotation :pending pending) :version target)]
+  (if (> (count pending) pending-fold-cap) (projected! space target (all-occurrences advanced)) advanced)))))))
 
 (defn ^Boolean pinned? [^Rotation rotation ctx]
   (and (= (store/space-id ctx) (rotation-space-id rotation)) (= (store/current-sequence ctx) (rotation-version rotation))))

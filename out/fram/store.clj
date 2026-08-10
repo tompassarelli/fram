@@ -180,6 +180,31 @@
   (let [term (resolve-handle store handle)]
   (if (t/triple? term) term (throw (ex-info "fram: operation handle does not resolve to Triple" {:type :invalid-operation-handle})))))
 
+(defn intern-atom-handle! [ctx value]
+  (if (or (t/triple? value) (not (t/term? value))) (throw (ex-info "fram: value outside Atom" {:type :invalid-atom})) (let [row (atom-row value)
+   store (deref ctx)
+   atoms (t/termstore-atoms store)
+   known (find-atom-position atoms (t/termstore-atom-slots store) row)]
+  (if (>= known 0) (atom-handle known) (let [position (count atoms)]
+  (do
+  (swap! ctx update :atoms (fn [current] (conj current row)))
+  (index-atom-term! ctx row position)
+  (atom-handle position)))))))
+
+(defn intern-triple-handle! [ctx t1 t2 t3]
+  (let [store (deref ctx)
+   rows (t/termstore-triples store)
+   value (t/->TripleRow t1 t2 t3)
+   known (find-triple-position rows (t/termstore-triple-slots store) value)]
+  (if (not (and (valid-handle? store t1) (and (valid-handle? store t2) (valid-handle? store t3)))) (throw (ex-info "fram: term handle does not resolve" {:type :invalid-term-handle})) (if (>= known 0) (triple-handle known) (let [position (count rows)]
+  (do
+  (swap! ctx update :triples (fn [current] (conj current value)))
+  (index-triple-term! ctx value position)
+  (triple-handle position)))))))
+
+(defn ^Boolean triple-handle-shape? [handle]
+  (and (>= handle 0) (= 1 (mod handle 2))))
+
 (defn known-term-handle [store term]
   (if (not (t/term? term)) nil (if (t/triple? term) (let [t1 (known-term-handle store (t/triple-t1 term))
    t2 (known-term-handle store (t/triple-t2 term))
@@ -341,6 +366,26 @@
 
 (defn ^TransactionReplayResult replay-transaction-result! [ctx frame]
   (if (and (t/transaction-frame? frame) (and (>= (t/transactionframe-sequence frame) 0) (valid-operations? (t/transactionframe-operations frame)))) (append-transaction-result! ctx (t/transactionframe-sequence frame) (t/transactionframe-operations frame)) (transaction-replay-error :invalid-transaction-frame "fram: invalid transaction frame")))
+
+(defn ^TransactionReplayResult append-replayed-transaction! [ctx sequence actions handles]
+  (let [before (deref ctx)]
+  (cond
+  (or (empty? actions) (not= (count actions) (count handles))) (transaction-replay-error :invalid-transaction-frame "fram: transaction requires at least one valid operation")
+  (< sequence (t/termstore-next-sequence before)) (transaction-replay-error :nonmonotonic-transaction-sequence "fram: transaction sequence must advance within its space")
+  (> sequence max-transaction-sequence) (transaction-replay-unclassified-error)
+  :else (let [first-operation (count (t/termstore-operations before))
+   transaction-row (t/->TransactionRow sequence first-operation (count actions))
+   with-transaction (assoc before :transactions (conj (t/termstore-transactions before) transaction-row))
+   appended (loop [current with-transaction
+   ordinal 0]
+  (if (>= ordinal (count actions)) current (let [row (t/->OperationRow sequence ordinal (nth actions ordinal) (nth handles ordinal))
+   operation-position (+ first-operation ordinal)
+   with-row (assoc current :operations (conj (t/termstore-operations current) row))]
+  (recur (apply-operation-state! with-row operation-position row) (inc ordinal)))))
+   final-store (assoc appended :next-sequence (inc sequence))]
+  (do
+  (reset! ctx final-store)
+  (transaction-replay-ok))))))
 
 (defn replay-transaction! [ctx frame]
   (if (and (t/transaction-frame? frame) (and (>= (t/transactionframe-sequence frame) 0) (valid-operations? (t/transactionframe-operations frame)))) (append-transaction! ctx (t/transactionframe-sequence frame) (t/transactionframe-operations frame)) (throw (ex-info "fram: invalid transaction frame" {:type :invalid-transaction-frame}))))

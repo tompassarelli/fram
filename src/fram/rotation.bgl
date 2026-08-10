@@ -6,6 +6,12 @@
 ;; Leaves hold occurrences in commit order, so two equal propositions asserted
 ;; twice stay two answers. Three rotations cover all eight bound-subsets:
 ;;   spo [s] [s p] [s p o]   pos [p] [p o]   osp [o] [o s]   unbound = events.
+;;
+;; A rotation is a CLOSED base plus a pending tail. The base buckets are built
+;; once per projection; commits land as pending operations that every read
+;; folds over its base answer, so a commit retains O(delta) instead of a
+;; rebucketed copy of the projection. The tail folds down into a fresh base
+;; only at a projection point (boot, compaction, or the tail cap).
 (ns fram.rotation)
 
 (define-mode strict)
@@ -22,6 +28,14 @@
    events: (Vec (Vec t/Triple))
    slots: (Vec (Vec Int))])
 
+;; One committed-but-unprojected operation. `event` carries the assertion
+;; occurrence for an assert; a retract names only its proposition, so `event`
+;; then repeats the proposition and is never read.
+(defrecord PendingOp
+  [action: Keyword
+   proposition: t/Triple
+   event: t/Triple])
+
 (defrecord Rotation
   [space-id: String
    version: Int
@@ -29,7 +43,8 @@
    by-occurrence: Bucket
    spo: Bucket
    pos: Bucket
-   osp: Bucket])
+   osp: Bucket
+   pending: (Vec PendingOp)])
 
 (def empty-events: (Vec t/Triple) [])
 
@@ -41,20 +56,17 @@
 
 (def empty-slot-rows: (Vec (Vec Int)) [])
 
+(def no-pending: (Vec PendingOp) [])
+
 ;; A bucket doubles once it holds more than this many keys per slot.
 (def bucket-initial-slots: Int 64)
 
 (def bucket-slot-load: Int 4)
 
-(defn- fresh-slot-rows [width: Int] -> (Vec (Vec Int))
-  (loop [rows: (Vec (Vec Int)) empty-slot-rows position: Int 0]
-    (if (>= position width)
-      rows
-      (recur (conj rows empty-positions) (inc position)))))
-
-(defn- empty-bucket [] -> Bucket
-  (->Bucket bucket-initial-slots empty-keys empty-event-lists
-    (fresh-slot-rows bucket-initial-slots)))
+;; A tail longer than this folds down into a fresh base on refresh. The native
+;; server compacts (and reprojects) on its own cadence well under this cap; the
+;; cap is what keeps a long-lived hosted session's reads bounded.
+(def pending-fold-cap: Int 512)
 
 (defn- bucket-slot [key: (Vec Any) width: Int] -> Int (mod (hash key) width))
 
@@ -72,30 +84,6 @@
   (let [position: Int (bucket-entry bucket key)]
     (if (>= position 0) (nth (bucket-events bucket) position) empty-events)))
 
-(defn- bucket-rehash [bucket: Bucket width: Int] -> Bucket
-  (let [keys: (Vec (Vec Any)) (bucket-keys bucket)]
-    (loop [rows: (Vec (Vec Int)) (fresh-slot-rows width) position: Int 0]
-      (if (>= position (count keys))
-        (->Bucket width keys (bucket-events bucket) rows)
-        (let [slot: Int (bucket-slot (nth keys position) width)]
-          (recur (assoc rows slot (conj (nth rows slot) position)) (inc position)))))))
-
-(defn- bucket-set
-  [bucket: Bucket
-   key: (Vec Any)
-   events: (Vec t/Triple)] -> Bucket
-  (let [at: Int (bucket-entry bucket key)]
-    (if (>= at 0)
-      (->Bucket (bucket-width bucket) (bucket-keys bucket)
-        (assoc (bucket-events bucket) at events)
-        (bucket-slots bucket))
-      (let [width: Int (bucket-width bucket) position: Int (count (bucket-keys bucket)) keys: (Vec (Vec Any)) (conj (bucket-keys bucket) key) lists: (Vec (Vec t/Triple)) (conj (bucket-events bucket) events) slot: Int (bucket-slot key width) rows: (Vec (Vec Int)) (assoc (bucket-slots bucket) slot (conj (nth (bucket-slots bucket) slot) position)) grown: Bucket (->Bucket width keys lists rows)]
-        (if (> (count keys) (* bucket-slot-load width))
-          (bucket-rehash grown (* 2 width))
-          grown)))))
-
-(defn- one-event [event: t/Triple] -> (Vec t/Triple) [event])
-
 (defn- occurrence-key [occurrence: t/Triple] -> (Vec Any) [occurrence])
 
 (defn occurrence-of [event: t/Triple] -> t/Triple (t/triple-t1 event))
@@ -108,115 +96,122 @@
       (and (t/occurrence-coordinate? (t/triple-t1 event))
         (t/triple? (t/triple-t3 event))))))
 
-(defn- checked-assertion [event: t/Triple] -> t/Triple
-  (if (assertion-occurrence? event)
-    event
-    (throw (ex-info "fram: rotations cover assertion occurrences only" {:type :invalid-rotation-occurrence}))))
+;; --- Pending-tail reads. Every base answer is folded through the tail: an
+;; assert appends its event when the pattern covers it, a retract withdraws the
+;; newest surviving occurrence of its proposition. Restricted to any pattern a
+;; bucket serves, the globally newest live occurrence of a proposition is the
+;; last one in that pattern's commit-ordered answer, so the per-answer fold
+;; agrees with the from-scratch projection of the same history.
 
-(defn- bucket-add
-  [bucket: Bucket
-   key: (Vec Any)
-   event: t/Triple] -> Bucket
-  (bucket-set bucket key (conj (bucket-get bucket key) event)))
+(defn- slot-matches? [pattern: Any term: Any] -> Bool
+  (or (nil? pattern) (= pattern term)))
 
-(defn- without-event [events: (Vec t/Triple) target: t/Triple] -> (Vec t/Triple)
-  (filterv (fn [event: t/Triple] -> Bool (not (= event target))) events))
+(defn- pattern-match?
+  [proposition: t/Triple
+   t1: Any
+   t2: Any
+   t3: Any] -> Bool
+  (and (slot-matches? t1 (t/triple-t1 proposition))
+    (and (slot-matches? t2 (t/triple-t2 proposition))
+      (slot-matches? t3 (t/triple-t3 proposition)))))
 
-(defn- bucket-del
-  [bucket: Bucket
-   key: (Vec Any)
-   event: t/Triple] -> Bucket
-  (bucket-set bucket key (without-event (bucket-get bucket key) event)))
+(defn- without-newest-of
+  [events: (Vec t/Triple)
+   proposition: t/Triple] -> (Vec t/Triple)
+  (let [at: Int
+        (loop [position: Int (dec (count events))]
+          (if (< position 0)
+            -1
+            (if (= proposition (proposition-of (nth events position)))
+              position
+              (recur (dec position)))))]
+    (if (< at 0)
+      events
+      (loop [built: (Vec t/Triple) empty-events position: Int 0]
+        (if (>= position (count events))
+          built
+          (recur (if (= position at) built (conj built (nth events position)))
+            (inc position)))))))
 
-(defn- rotate-add [rotation: Rotation event: t/Triple] -> Rotation
-  (let [proposition: t/Triple (proposition-of (checked-assertion event)) t1: Any (t/triple-t1 proposition) t2: Any (t/triple-t2 proposition) t3: Any (t/triple-t3 proposition)]
-    (->Rotation (rotation-space-id rotation)
-      (rotation-version rotation)
-      (conj (rotation-events rotation) event)
-      (bucket-set (rotation-by-occurrence rotation) (occurrence-key (occurrence-of event))
-        (one-event event))
-      (bucket-add (bucket-add (bucket-add (rotation-spo rotation) [t1] event) [t1 t2] event)
-        [t1 t2 t3]
-        event)
-      (bucket-add (bucket-add (rotation-pos rotation) [t2] event)
-        [t2 t3]
-        event)
-      (bucket-add (bucket-add (rotation-osp rotation) [t3] event)
-        [t3 t1]
-        event))))
-
-(defn- rotate-del [rotation: Rotation event: t/Triple] -> Rotation
-  (let [proposition: t/Triple (proposition-of (checked-assertion event)) t1: Any (t/triple-t1 proposition) t2: Any (t/triple-t2 proposition) t3: Any (t/triple-t3 proposition)]
-    (->Rotation (rotation-space-id rotation)
-      (rotation-version rotation)
-      (without-event (rotation-events rotation) event)
-      (bucket-set (rotation-by-occurrence rotation) (occurrence-key (occurrence-of event))
-        empty-events)
-      (bucket-del (bucket-del (bucket-del (rotation-spo rotation) [t1] event) [t1 t2] event)
-        [t1 t2 t3]
-        event)
-      (bucket-del (bucket-del (rotation-pos rotation) [t2] event)
-        [t2 t3]
-        event)
-      (bucket-del (bucket-del (rotation-osp rotation) [t3] event)
-        [t3 t1]
-        event))))
-
-(defn- empty-rotation [space-id: String version: Int] -> Rotation
-  (->Rotation space-id
-    version
-    empty-events
-    (empty-bucket)
-    (empty-bucket)
-    (empty-bucket)
-    (empty-bucket)))
+(defn- merged-matching
+  [base: (Vec t/Triple)
+   pending: (Vec PendingOp)
+   t1: Any
+   t2: Any
+   t3: Any] -> (Vec t/Triple)
+  (if (empty? pending)
+    base
+    (loop [events: (Vec t/Triple) base position: Int 0]
+      (if (>= position (count pending))
+        events
+        (let [op: PendingOp (nth pending position)
+              proposition: t/Triple (pendingop-proposition op)]
+          (recur
+           (if (= t/assert-action (pendingop-action op))
+             (if (pattern-match? proposition t1 t2 t3)
+               (conj events (pendingop-event op))
+               events)
+             (without-newest-of events proposition))
+           (inc position)))))))
 
 (defn space-id [rotation: Rotation] -> String (rotation-space-id rotation))
 
 (defn version [rotation: Rotation] -> Int (rotation-version rotation))
 
 (defn all-occurrences [rotation: Rotation] -> (Vec t/Triple)
-  (rotation-events rotation))
+  (merged-matching (rotation-events rotation) (rotation-pending rotation)
+    nil nil nil))
 
 (defn occurrence-count [rotation: Rotation] -> Int
-  (count (rotation-events rotation)))
+  (count (all-occurrences rotation)))
 
 ;; Every bound subset resolves to exactly one bucket key; results stay in commit
 ;; order, so `last` is the newest live occurrence of that pattern.
 (defn by-t1 [rotation: Rotation t1: Any] -> (Vec t/Triple)
-  (bucket-get (rotation-spo rotation) [t1]))
+  (merged-matching (bucket-get (rotation-spo rotation) [t1])
+    (rotation-pending rotation) t1 nil nil))
 
 (defn by-t12
   [rotation: Rotation
    t1: Any
    t2: Any] -> (Vec t/Triple)
-  (bucket-get (rotation-spo rotation) [t1 t2]))
+  (merged-matching (bucket-get (rotation-spo rotation) [t1 t2])
+    (rotation-pending rotation) t1 t2 nil))
 
 (defn by-t2 [rotation: Rotation t2: Any] -> (Vec t/Triple)
-  (bucket-get (rotation-pos rotation) [t2]))
+  (merged-matching (bucket-get (rotation-pos rotation) [t2])
+    (rotation-pending rotation) nil t2 nil))
 
 (defn by-t23
   [rotation: Rotation
    t2: Any
    t3: Any] -> (Vec t/Triple)
-  (bucket-get (rotation-pos rotation) [t2 t3]))
+  (merged-matching (bucket-get (rotation-pos rotation) [t2 t3])
+    (rotation-pending rotation) nil t2 t3))
 
 (defn by-t3 [rotation: Rotation t3: Any] -> (Vec t/Triple)
-  (bucket-get (rotation-osp rotation) [t3]))
+  (merged-matching (bucket-get (rotation-osp rotation) [t3])
+    (rotation-pending rotation) nil nil t3))
 
 (defn by-t13
   [rotation: Rotation
    t1: Any
    t3: Any] -> (Vec t/Triple)
-  (bucket-get (rotation-osp rotation) [t3 t1]))
+  (merged-matching (bucket-get (rotation-osp rotation) [t3 t1])
+    (rotation-pending rotation) t1 nil t3))
 
 (defn by-proposition
   [rotation: Rotation
    proposition: t/Triple] -> (Vec t/Triple)
-  (bucket-get (rotation-spo rotation)
-    [(t/triple-t1 proposition)
-     (t/triple-t2 proposition)
-     (t/triple-t3 proposition)]))
+  (merged-matching
+   (bucket-get (rotation-spo rotation)
+     [(t/triple-t1 proposition)
+      (t/triple-t2 proposition)
+      (t/triple-t3 proposition)])
+   (rotation-pending rotation)
+   (t/triple-t1 proposition)
+   (t/triple-t2 proposition)
+   (t/triple-t3 proposition)))
 
 ;; nil in a slot means UNBOUND. This is the semantic entry point; the bucket
 ;; layout above is private detail every caller is expected to route through.
@@ -234,15 +229,43 @@
     [(some? t1) (by-t1 rotation t1)]
     [(some? t2) (by-t2 rotation t2)]
     [(some? t3) (by-t3 rotation t3)]
-    [:else (rotation-events rotation)]))
+    [:else (all-occurrences rotation)]))
+
+;; The newest surviving event carrying this occurrence, judged through the
+;; proposition's own merged answer so a pending retract of the proposition
+;; withdraws exactly the occurrence the store's fold would withdraw.
+(defn event-at [rotation: Rotation occurrence: t/Triple] -> t/Triple?
+  (let [base: (Vec t/Triple)
+        (bucket-get (rotation-by-occurrence rotation)
+          (occurrence-key occurrence))
+        candidate: t/Triple?
+        (let [pending: (Vec PendingOp) (rotation-pending rotation)]
+          (loop [position: Int 0
+                 found: t/Triple? (if (empty? base) nil (nth base 0))]
+            (if (>= position (count pending))
+              found
+              (let [op: PendingOp (nth pending position)]
+                (recur (inc position)
+                  (if (and (= t/assert-action (pendingop-action op))
+                        (= occurrence (occurrence-of (pendingop-event op))))
+                    (pendingop-event op)
+                    found))))))]
+    (if (nil? candidate)
+      nil
+      (let [present: t/Triple candidate
+            live: (Vec t/Triple)
+            (by-proposition rotation (proposition-of present))
+            survives: Bool
+            (loop [position: Int 0]
+              (if (>= position (count live))
+                false
+                (if (= occurrence (occurrence-of (nth live position)))
+                  true
+                  (recur (inc position)))))]
+        (if survives present nil)))))
 
 (defn live-occurrence? [rotation: Rotation occurrence: t/Triple] -> Bool
-  (not (empty? (bucket-get (rotation-by-occurrence rotation)
-                 (occurrence-key occurrence)))))
-
-(defn event-at [rotation: Rotation occurrence: t/Triple] -> t/Triple?
-  (let [events: (Vec t/Triple) (bucket-get (rotation-by-occurrence rotation) (occurrence-key occurrence))]
-    (if (empty? events) nil (nth events 0))))
+  (some? (event-at rotation occurrence)))
 
 (defn newest-first [events: (Vec t/Triple)] -> (Vec t/Triple)
   (vec (reverse events)))
@@ -264,20 +287,12 @@
 (defn occurrences [events: (Vec t/Triple)] -> (Vec t/Triple)
   (mapv (fn [event: t/Triple] -> t/Triple (occurrence-of event)) events))
 
-;; The build owns its cells outright and closes into ordinary values, so the
-;; whole projection costs one append per leaf instead of one bucket copy.
-(defrecord BucketBuild
-  [width: Int
-   keys: (Vec (Vec Any))
-   events: (Vec (Atom (Vec t/Triple)))
-   slots: (Vec (Atom (Vec Int)))])
-
-(defrecord RotationBuild
-  [events: (Vec t/Triple)
-   by-occurrence: BucketBuild
-   spo: BucketBuild
-   pos: BucketBuild
-   osp: BucketBuild])
+;; --- The full projection. One inlined pass: per-key leaves accumulate in
+;; cells the build owns outright and closes into ordinary values, so the whole
+;; projection costs one append per leaf. The pass carries its four bucket
+;; states as parallel vectors indexed 0 = by-occurrence (set), 1 = spo,
+;; 2 = pos, 3 = osp; everything the pass allocates beyond the closed product
+;; dies with the pass.
 
 (def empty-event-cells: (Vec (Atom (Vec t/Triple))) [])
 
@@ -289,82 +304,17 @@
       cells
       (recur (conj cells (atom empty-positions)) (inc position)))))
 
-(defn- cells-add!
-  [cells: (Vec (Atom (Vec Int)))
-   slot: Int
-   position: Int] -> (Vec (Atom (Vec Int)))
-  (do
-    (swap! (nth cells slot) conj position)
-    cells))
-
-(defn- events-add!
-  [cells: (Vec (Atom (Vec t/Triple)))
-   at: Int
-   event: t/Triple] -> (Vec (Atom (Vec t/Triple)))
-  (do
-    (swap! (nth cells at) conj event)
-    cells))
-
-(defn- events-reset!
-  [cells: (Vec (Atom (Vec t/Triple)))
-   at: Int
-   events: (Vec t/Triple)] -> (Vec (Atom (Vec t/Triple)))
-  (do
-    (reset! (nth cells at) events)
-    cells))
-
-(defn- open-bucket-build [] -> BucketBuild
-  (->BucketBuild bucket-initial-slots empty-keys empty-event-cells
-    (fresh-position-cells bucket-initial-slots)))
-
-(defn- build-entry [build: BucketBuild key: (Vec Any)] -> Int
-  (let [keys: (Vec (Vec Any)) (bucketbuild-keys build) positions: (Vec Int) (deref (nth (bucketbuild-slots build) (bucket-slot key (bucketbuild-width build))))]
-    (loop [offset: Int 0]
-      (if (>= offset (count positions))
-        -1
-        (let [position: Int (nth positions offset)]
-          (if (= (nth keys position) key)
-            position
-            (recur (inc offset))))))))
-
-(defn- build-rehash! [build: BucketBuild width: Int] -> BucketBuild
-  (let [keys: (Vec (Vec Any)) (bucketbuild-keys build)]
-    (loop [cells: (Vec (Atom (Vec Int))) (fresh-position-cells width) position: Int 0]
+(defn- rehashed-position-cells!
+  [keys: (Vec (Vec Any))
+   width: Int] -> (Vec (Atom (Vec Int)))
+  (let [cells: (Vec (Atom (Vec Int))) (fresh-position-cells width)]
+    (loop [position: Int 0]
       (if (>= position (count keys))
-        (->BucketBuild width keys (bucketbuild-events build) cells)
-        (recur (cells-add! cells (bucket-slot (nth keys position) width) position)
-          (inc position))))))
-
-(defn- build-append!
-  [build: BucketBuild
-   key: (Vec Any)
-   events: (Vec t/Triple)] -> BucketBuild
-  (let [width: Int (bucketbuild-width build) position: Int (count (bucketbuild-keys build)) keys: (Vec (Vec Any)) (conj (bucketbuild-keys build) key) cells: (Vec (Atom (Vec t/Triple))) (conj (bucketbuild-events build) (atom events)) grown: BucketBuild (->BucketBuild width keys cells (cells-add! (bucketbuild-slots build) (bucket-slot key width) position))]
-    (if (> (count keys) (* bucket-slot-load width))
-      (build-rehash! grown (* 2 width))
-      grown)))
-
-(defn- build-add!
-  [build: BucketBuild
-   key: (Vec Any)
-   event: t/Triple] -> BucketBuild
-  (let [at: Int (build-entry build key)]
-    (if (>= at 0)
-      (->BucketBuild (bucketbuild-width build) (bucketbuild-keys build)
-        (events-add! (bucketbuild-events build) at event)
-        (bucketbuild-slots build))
-      (build-append! build key (one-event event)))))
-
-(defn- build-set!
-  [build: BucketBuild
-   key: (Vec Any)
-   event: t/Triple] -> BucketBuild
-  (let [at: Int (build-entry build key)]
-    (if (>= at 0)
-      (->BucketBuild (bucketbuild-width build) (bucketbuild-keys build)
-        (events-reset! (bucketbuild-events build) at (one-event event))
-        (bucketbuild-slots build))
-      (build-append! build key (one-event event)))))
+        cells
+        (do
+          (swap! (nth cells (bucket-slot (nth keys position) width)) conj
+            position)
+          (recur (inc position)))))))
 
 (defn- close-event-cells [cells: (Vec (Atom (Vec t/Triple)))] -> (Vec (Vec t/Triple))
   (loop [lists: (Vec (Vec t/Triple)) empty-event-lists position: Int 0]
@@ -378,91 +328,138 @@
       rows
       (recur (conj rows (deref (nth cells position))) (inc position)))))
 
-(defn- close-bucket-build [build: BucketBuild] -> Bucket
-  (->Bucket (bucketbuild-width build)
-    (bucketbuild-keys build)
-    (close-event-cells (bucketbuild-events build))
-    (close-position-cells (bucketbuild-slots build))))
+(defn- checked-assertion [event: t/Triple] -> t/Triple
+  (if (assertion-occurrence? event)
+    event
+    (throw (ex-info "fram: rotations cover assertion occurrences only" {:type :invalid-rotation-occurrence}))))
 
-(defn- build-rotate-add! [build: RotationBuild event: t/Triple] -> RotationBuild
-  (let [proposition: t/Triple (proposition-of (checked-assertion event)) t1: Any (t/triple-t1 proposition) t2: Any (t/triple-t2 proposition) t3: Any (t/triple-t3 proposition)]
-    (->RotationBuild (conj (rotationbuild-events build) event)
-      (build-set! (rotationbuild-by-occurrence build) (occurrence-key (occurrence-of event))
-        event)
-      (build-add! (build-add! (build-add! (rotationbuild-spo build) [t1] event) [t1 t2] event)
-        [t1 t2 t3]
-        event)
-      (build-add! (build-add! (rotationbuild-pos build) [t2] event)
-        [t2 t3]
-        event)
-      (build-add! (build-add! (rotationbuild-osp build) [t3] event)
-        [t3 t1]
-        event))))
+;; Entry map per event: 0 by-occurrence [occ] (set), 1-3 spo [s] [s p] [s p o],
+;; 4-5 pos [p] [p o], 6-7 osp [o] [o s].
+(defn- entry-bucket [entry: Int] -> Int
+  (cond
+    [(= entry 0) 0]
+    [(<= entry 3) 1]
+    [(<= entry 5) 2]
+    [:else 3]))
 
-;; The one layout: leaves appended in the commit order of the live events they
-;; cover. Every rotation a caller can hold comes through here, so a delta-folded
-;; rotation and a from-scratch build of the same events are the SAME value.
-(defn- projected
+(defn- entry-key [entry: Int event: t/Triple] -> (Vec Any)
+  (let [proposition: t/Triple (proposition-of event)
+        t1: Any (t/triple-t1 proposition)
+        t2: Any (t/triple-t2 proposition)
+        t3: Any (t/triple-t3 proposition)]
+    (cond
+      [(= entry 0) (occurrence-key (occurrence-of event))]
+      [(= entry 1) [t1]]
+      [(= entry 2) [t1 t2]]
+      [(= entry 3) [t1 t2 t3]]
+      [(= entry 4) [t2]]
+      [(= entry 5) [t2 t3]]
+      [(= entry 6) [t3]]
+      [:else [t3 t1]])))
+
+(defn- projected!
   [space-id: String
    version: Int
    events: (Vec t/Triple)] -> Rotation
-  (let [built: RotationBuild (reduce (fn
-                                       [build: RotationBuild
-                                        event: t/Triple] -> RotationBuild (build-rotate-add! build event)) (->RotationBuild empty-events (open-bucket-build) (open-bucket-build) (open-bucket-build) (open-bucket-build)) events)]
-    (->Rotation space-id
-      version
-      (rotationbuild-events built)
-      (close-bucket-build (rotationbuild-by-occurrence built))
-      (close-bucket-build (rotationbuild-spo built))
-      (close-bucket-build (rotationbuild-pos built))
-      (close-bucket-build (rotationbuild-osp built)))))
+  (loop [widths: (Vec Int)
+         [bucket-initial-slots bucket-initial-slots bucket-initial-slots
+          bucket-initial-slots]
+         keyses: (Vec (Vec (Vec Any))) [empty-keys empty-keys empty-keys empty-keys]
+         cellses: (Vec (Vec (Atom (Vec t/Triple))))
+         [empty-event-cells empty-event-cells empty-event-cells
+          empty-event-cells]
+         slotses: (Vec (Vec (Atom (Vec Int))))
+         [(fresh-position-cells bucket-initial-slots)
+          (fresh-position-cells bucket-initial-slots)
+          (fresh-position-cells bucket-initial-slots)
+          (fresh-position-cells bucket-initial-slots)]
+         position: Int 0
+         entry: Int 0]
+    (if (>= position (count events))
+      (->Rotation space-id version events
+        (->Bucket (nth widths 0) (nth keyses 0)
+          (close-event-cells (nth cellses 0))
+          (close-position-cells (nth slotses 0)))
+        (->Bucket (nth widths 1) (nth keyses 1)
+          (close-event-cells (nth cellses 1))
+          (close-position-cells (nth slotses 1)))
+        (->Bucket (nth widths 2) (nth keyses 2)
+          (close-event-cells (nth cellses 2))
+          (close-position-cells (nth slotses 2)))
+        (->Bucket (nth widths 3) (nth keyses 3)
+          (close-event-cells (nth cellses 3))
+          (close-position-cells (nth slotses 3)))
+        no-pending)
+      (if (>= entry 8)
+        (recur widths keyses cellses slotses (inc position) 0)
+        (let [event: t/Triple (checked-assertion (nth events position))
+              bucket: Int (entry-bucket entry)
+              key: (Vec Any) (entry-key entry event)
+              width: Int (nth widths bucket)
+              keys: (Vec (Vec Any)) (nth keyses bucket)
+              slot-cells: (Vec (Atom (Vec Int))) (nth slotses bucket)
+              positions: (Vec Int)
+              (deref (nth slot-cells (bucket-slot key width)))
+              at: Int
+              (loop [offset: Int 0]
+                (if (>= offset (count positions))
+                  -1
+                  (let [candidate: Int (nth positions offset)]
+                    (if (= (nth keys candidate) key)
+                      candidate
+                      (recur (inc offset))))))]
+          (if (>= at 0)
+            (do
+              (if (= bucket 0)
+                (reset! (nth (nth cellses bucket) at) [event])
+                (swap! (nth (nth cellses bucket) at) conj event))
+              (recur widths keyses cellses slotses position (inc entry)))
+            (let [appended: Int (count keys)
+                  grown-keys: (Vec (Vec Any)) (conj keys key)
+                  grown-cells: (Vec (Atom (Vec t/Triple)))
+                  (conj (nth cellses bucket) (atom [event]))]
+              (do
+                (swap! (nth slot-cells (bucket-slot key width)) conj appended)
+                (if (> (count grown-keys) (* bucket-slot-load width))
+                  (recur (assoc widths bucket (* 2 width))
+                    (assoc keyses bucket grown-keys)
+                    (assoc cellses bucket grown-cells)
+                    (assoc slotses bucket
+                      (rehashed-position-cells! grown-keys (* 2 width)))
+                    position (inc entry))
+                  (recur widths
+                    (assoc keyses bucket grown-keys)
+                    (assoc cellses bucket grown-cells)
+                    slotses
+                    position (inc entry)))))))))))
 
 (defn project! [ctx: (Atom t/TermStore)] -> Rotation
-  (projected (store/space-id ctx) (store/current-sequence ctx)
+  (projected! (store/space-id ctx) (store/current-sequence ctx)
     (store/live-occurrences ctx)))
 
-;; A retraction withdraws the NEWEST live occurrence of its proposition — the
-;; same choice store/apply-operation-state makes, so the delta cannot drift from
-;; the history it projects.
-(defn- apply-frame
-  [rotation: Rotation
+;; --- The pending tail. A committed frame joins the tail as one PendingOp per
+;; operation; the tail folds down into a fresh base only at a projection point.
+
+(defn- pending-with-frame
+  [pending: (Vec PendingOp)
    space-id: String
-   frame: t/TransactionFrame] -> Rotation
-  (let [coordinate: t/Triple (t/transaction-coordinate space-id (t/transactionframe-sequence frame)) operations: (Vec t/CommitOperation) (t/transactionframe-operations frame)]
-    (loop [current: Rotation rotation ordinal: Int 0]
+   frame: t/TransactionFrame] -> (Vec PendingOp)
+  (let [coordinate: t/Triple
+        (t/transaction-coordinate space-id (t/transactionframe-sequence frame))
+        operations: (Vec t/CommitOperation) (t/transactionframe-operations frame)]
+    (loop [built: (Vec PendingOp) pending ordinal: Int 0]
       (if (>= ordinal (count operations))
-        current
-        (let [operation: t/CommitOperation (nth operations ordinal) proposition: t/Triple (t/commitoperation-proposition operation)]
-          (if (= t/assert-action (t/commitoperation-action operation))
-            (recur (rotate-add current (t/assertion-occurrence (t/occurrence-coordinate coordinate ordinal) proposition))
-              (inc ordinal))
-            (let [target: t/Triple? (newest (by-proposition current proposition))]
-              (recur (if (some? target) (rotate-del current target) current)
-                (inc ordinal)))))))))
-
-;; Only a withdrawal can leave a leaf out of the order `projected` appends in;
-;; appends alone already land in commit order.
-(defn- relaid-out [rotation: Rotation retracted: Bool] -> Rotation
-  (if retracted
-    (projected (rotation-space-id rotation) (rotation-version rotation)
-      (rotation-events rotation))
-    rotation))
-
-(defn- retracts? [operations: (Vec t/CommitOperation)] -> Bool
-  (loop [ordinal: Int 0]
-    (if (>= ordinal (count operations))
-      false
-      (if (= t/assert-action (t/commitoperation-action (nth operations ordinal)))
-        (recur (inc ordinal))
-        true))))
-
-(defn- frames-retract? [frames: (Vec t/TransactionFrame)] -> Bool
-  (loop [ordinal: Int 0]
-    (if (>= ordinal (count frames))
-      false
-      (if (retracts? (t/transactionframe-operations (nth frames ordinal)))
-        true
-        (recur (inc ordinal))))))
+        built
+        (let [operation: t/CommitOperation (nth operations ordinal)
+              proposition: t/Triple (t/commitoperation-proposition operation)]
+          (recur
+           (conj built
+             (if (= t/assert-action (t/commitoperation-action operation))
+               (->PendingOp t/assert-action proposition
+                 (t/assertion-occurrence
+                  (t/occurrence-coordinate coordinate ordinal) proposition))
+               (->PendingOp t/retract-action proposition proposition)))
+           (inc ordinal)))))))
 
 ;; Uncommitted builder operations projected onto a committed rotation through
 ;; the same fold commit applies, so a staged read cannot disagree with its own
@@ -472,10 +469,11 @@
    space-id: String
    sequence: Int
    operations: (Vec t/CommitOperation)] -> Rotation
-  (relaid-out (apply-frame rotation space-id (t/->TransactionFrame sequence operations))
-    (retracts? operations)))
+  (assoc rotation :pending
+    (pending-with-frame (rotation-pending rotation) space-id
+      (t/->TransactionFrame sequence operations))))
 
-(defn refresh [rotation: Rotation ctx: (Atom t/TermStore)] -> Rotation
+(defn refresh! [rotation: Rotation ctx: (Atom t/TermStore)] -> Rotation
   (let [space: String (store/space-id ctx) target: Int (store/current-sequence ctx) pinned: Int (rotation-version rotation)]
     (if (not (= space (rotation-space-id rotation)))
       (throw (ex-info "fram: rotation belongs to a different space" {:type :rotation-space-mismatch}))
@@ -483,13 +481,19 @@
         (throw (ex-info "fram: rotation is ahead of the store it projects" {:type :rotation-ahead-of-store}))
         (if (= pinned target)
           rotation
-          (let [frames: (Vec t/TransactionFrame) (store/transaction-frames-between (deref ctx) pinned target)]
-            (relaid-out (assoc (reduce (fn
-                                         [current: Rotation
-                                          frame: t/TransactionFrame] -> Rotation (apply-frame current space frame)) rotation frames)
-                          :version
-                          target)
-              (frames-retract? frames))))))))
+          (let [frames: (Vec t/TransactionFrame) (store/transaction-frames-between (deref ctx) pinned target)
+                pending: (Vec PendingOp)
+                (loop [built: (Vec PendingOp) (rotation-pending rotation)
+                       position: Int 0]
+                  (if (>= position (count frames))
+                    built
+                    (recur (pending-with-frame built space (nth frames position))
+                      (inc position))))
+                advanced: Rotation
+                (assoc (assoc rotation :pending pending) :version target)]
+            (if (> (count pending) pending-fold-cap)
+              (projected! space target (all-occurrences advanced))
+              advanced)))))))
 
 ;; The projection must travel with the root it was built from; a caller holding
 ;; an unpinned rotation is reading a version that no longer exists.
