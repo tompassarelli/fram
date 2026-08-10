@@ -86,6 +86,7 @@
 
 (def empty-operations: (Vec t/CommitOperation) [])
 (def empty-decisions: (Vec Decision) [])
+(def empty-live: (Vec t/Triple) [])
 
 (defn values-ok [values: (Vec Any)] -> ValuesResult
   (->ValuesResult true values nil))
@@ -489,6 +490,21 @@
 (defn prepared-error [code: Keyword message: String] -> PreparedMutation
   (->PreparedMutation false empty-operations empty-decisions code message))
 
+;; prepare-actions reads its live vector only through subject-known? (behind
+;; the subject-existing policy) and remove-last-equal (behind a retract), so a
+;; plan with neither may simulate over an empty vector without changing any
+;; operation or decision it produces. Materializing every live proposition is
+;; an O(store) walk per mutation; it must not run for plans that cannot read it.
+(defn plan-reads-live? [actions: (Vec Action)] -> Bool
+  (loop [index: Int 0]
+    (if (>= index (count actions))
+      false
+      (let [action: Action (nth actions index)]
+        (if (or (= :rpc/retract (action-operation action))
+                (= :rpc/subject-existing (action-policy action)))
+          true
+          (recur (inc index)))))))
+
 (defn prepare-actions
   [live: (Vec t/Triple)
    actions: (Vec Action)] -> PreparedMutation
@@ -666,7 +682,9 @@
      (commit-mutation!
       session request
       (prepare-actions
-       (store/live-propositions (schema/store-of session))
+       (if (plan-reads-live? (actionplan-actions plan))
+         (store/live-propositions (schema/store-of session))
+         empty-live)
        (actionplan-actions plan))
       served-version)]))
 

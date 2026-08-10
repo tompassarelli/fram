@@ -154,10 +154,13 @@ struct fram_server_request {
   fram_server_codec_read_request_return result;
 };
 
+/* The response frame is copied out of the generated module's arenas while
+   dispatch still holds them live, so a response in flight references no store
+   generation and no request arena: a slow or held client socket can never pin
+   store memory. */
 struct fram_server_response {
-  generated_owner *scratch_owner;
-  generated_store_generation *base_generation;
-  fram_server_store_dispatch_return result;
+  uint8_t *bytes;
+  size_t length;
 };
 
 static void clear_error(char *error, size_t error_capacity) {
@@ -311,11 +314,6 @@ static generated_store_generation *generation_create(
   generation->chain_generations =
       (size_t)1u + (parent == NULL ? 0u : parent->chain_generations);
   return generation;
-}
-
-static void generation_retain(generated_store_generation *generation) {
-  (void)atomic_fetch_add_explicit(&generation->references, (size_t)1u,
-                                  memory_order_relaxed);
 }
 
 static void generation_release(generated_store_generation *generation) {
@@ -1181,6 +1179,68 @@ int fram_server_store_boot(const char *canonical_log_path,
 }
 #endif
 
+/* The generated encoder reads the dispatch result in place, so this must run
+   while the arenas that result points into are still live: inside dispatch,
+   before the request owner or base generation can be released. */
+static int encode_response_frame(
+    const fram_server_store_dispatch_return *result, uint8_t **bytes_out,
+    size_t *length_out, char *error, size_t error_capacity) {
+  generated_owner *owner;
+  fram_server_codec_write_response_return generated_result;
+  uint8_t *bytes;
+  size_t length;
+  size_t index;
+  int status;
+
+  *bytes_out = NULL;
+  *length_out = 0u;
+  owner = owner_create(FRAM_SERVER_DEFAULT_ARENA_GROWTH_BYTES, error,
+                       error_capacity);
+  if (owner == NULL) {
+    return FRAM_SERVER_OUT_OF_MEMORY;
+  }
+  generated_result = FRAM_SERVER_CALL_CODEC_WRITE_RESPONSE(
+      &owner->arena, &owner->capability, *result);
+  status = generated_status((int64_t)generated_result.field_0, error,
+                            error_capacity,
+                            "generated response encode failed");
+  if (status == FRAM_SERVER_OK) {
+    status = vector_length(
+        generated_result.field_1, FRAM_SERVER_FRAME_HEADER_BYTES,
+        FRAM_SERVER_FRAME_MAX_BYTES, &length, error, error_capacity,
+        "generated response frame has an invalid byte representation");
+  }
+  bytes = NULL;
+  if (status == FRAM_SERVER_OK) {
+    bytes = malloc(length);
+    if (bytes == NULL) {
+      copy_error(error, error_capacity,
+                 "cannot allocate the encoded response frame");
+      status = FRAM_SERVER_OUT_OF_MEMORY;
+    }
+  }
+  for (index = 0u; status == FRAM_SERVER_OK && index < length; index += 1u) {
+    const int64_t *value = native_vec_at(generated_result.field_1,
+                                         (int64_t)index, INT64_C(8));
+
+    if (*value < INT64_C(0) || *value > INT64_C(255)) {
+      copy_error(error, error_capacity,
+                 "generated response frame has an invalid byte representation");
+      status = FRAM_SERVER_FATAL;
+    } else {
+      bytes[index] = (uint8_t)*value;
+    }
+  }
+  owner_release(owner);
+  if (status != FRAM_SERVER_OK) {
+    free(bytes);
+    return status;
+  }
+  *bytes_out = bytes;
+  *length_out = length;
+  return FRAM_SERVER_OK;
+}
+
 int fram_server_store_dispatch(fram_server_store *store,
                                    const fram_server_request *request,
                                    fram_server_response **response_out,
@@ -1188,8 +1248,11 @@ int fram_server_store_dispatch(fram_server_store *store,
   fram_server_response *response;
   generated_store_generation *base_generation;
   generated_store_generation *next_generation = NULL;
+  fram_server_store_dispatch_return result;
   fram_server_store_dispatch_arg_2 now_milliseconds;
   int64_t clock_milliseconds;
+  uint8_t *bytes = NULL;
+  size_t length = 0u;
   size_t append_length;
   int status;
 
@@ -1224,38 +1287,39 @@ int fram_server_store_dispatch(fram_server_store *store,
                "cannot allocate the generated response wrapper");
     return FRAM_SERVER_OUT_OF_MEMORY;
   }
+  /* The base generation and the request owner stay live for the whole call:
+     the store holds its own reference to the base (directly, or through the
+     replacement generation's parent chain after the swap below), and the
+     caller owns the request. Only a state change takes new references, inside
+     generation_create. */
   base_generation = store->current;
-  owner_retain(request->owner);
-  generation_retain(base_generation);
-  response->scratch_owner = request->owner;
-  response->base_generation = base_generation;
-  response->result = FRAM_SERVER_CALL_STORE_DISPATCH(
+  result = FRAM_SERVER_CALL_STORE_DISPATCH(
       &request->owner->arena, &request->owner->capability,
       base_generation->result, request->result, now_milliseconds);
-  status = generated_status((int64_t)response->result.field_0, error,
+  status = generated_status((int64_t)result.field_0, error,
                             error_capacity,
                             "generated store dispatch failed");
   if (status == FRAM_SERVER_OK) {
-    status = vector_length(response->result.field_3, 0u, SIZE_MAX,
+    status = vector_length(result.field_3, 0u, SIZE_MAX,
                            &append_length, error, error_capacity,
                            "generated dispatch append is not byte-valued");
   }
   if (status == FRAM_SERVER_OK && append_length != 0u &&
-      !response->result.field_5) {
+      !result.field_5) {
     copy_error(error, error_capacity,
                "generated dispatch appended without changing state");
     status = FRAM_SERVER_FATAL;
   }
-  if (status == FRAM_SERVER_OK && response->result.field_5) {
+  if (status == FRAM_SERVER_OK && result.field_5) {
     next_generation = generation_create(
-        request->owner, base_generation, response->result.field_4, error,
+        request->owner, base_generation, result.field_4, error,
         error_capacity);
     if (next_generation == NULL) {
       status = FRAM_SERVER_FATAL;
     }
   }
   if (status == FRAM_SERVER_OK && append_length != 0u) {
-    status = append_log_vector(store, response->result.field_3, true, error,
+    status = append_log_vector(store, result.field_3, true, error,
                                error_capacity);
     if (status != FRAM_SERVER_OK) {
       store->poisoned = true;
@@ -1271,20 +1335,24 @@ int fram_server_store_dispatch(fram_server_store *store,
   /* The image is a separate storage object; a failed image write never
      poisons the FRAMLOG, which stays the authoritative history. */
   if (status == FRAM_SERVER_OK) {
-    status = write_snapshot_vector(store, response->result.field_6, error,
+    status = write_snapshot_vector(store, result.field_6, error,
                                    error_capacity);
   }
+  if (status == FRAM_SERVER_OK) {
+    status = encode_response_frame(&result, &bytes, &length, error,
+                                   error_capacity);
+  }
+  (void)FRAM_SERVER_CALL_CODEC_RELEASE_RESPONSE(
+      &request->owner->arena, &request->owner->capability, result);
   if (status != FRAM_SERVER_OK) {
-    (void)FRAM_SERVER_CALL_CODEC_RELEASE_RESPONSE(
-        &request->owner->arena, &request->owner->capability, response->result);
     if (next_generation != NULL) {
       generation_release(next_generation);
     }
-    generation_release(response->base_generation);
-    owner_release(response->scratch_owner);
     free(response);
     return status;
   }
+  response->bytes = bytes;
+  response->length = length;
   *response_out = response;
   return FRAM_SERVER_OK;
 }
@@ -1411,12 +1479,7 @@ int fram_server_codec_encode_response(const fram_server_response *response,
                                       uint8_t **bytes_out,
                                       size_t *length_out, char *error,
                                       size_t error_capacity) {
-  generated_owner *owner;
-  fram_server_codec_write_response_return generated_result;
   uint8_t *bytes;
-  size_t length;
-  size_t index;
-  int status;
 
   clear_error(error, error_capacity);
   if (response == NULL || bytes_out == NULL || length_out == NULL) {
@@ -1426,50 +1489,17 @@ int fram_server_codec_encode_response(const fram_server_response *response,
   }
   *bytes_out = NULL;
   *length_out = 0u;
-  owner = owner_create(FRAM_SERVER_DEFAULT_ARENA_GROWTH_BYTES, error,
-                       error_capacity);
-  if (owner == NULL) {
+  /* Dispatch already encoded the frame; its length is at least the frame
+     header, so this allocation is never zero-sized. */
+  bytes = malloc(response->length);
+  if (bytes == NULL) {
+    copy_error(error, error_capacity,
+               "cannot allocate the encoded response frame");
     return FRAM_SERVER_OUT_OF_MEMORY;
   }
-  generated_result = FRAM_SERVER_CALL_CODEC_WRITE_RESPONSE(
-      &owner->arena, &owner->capability, response->result);
-  status = generated_status((int64_t)generated_result.field_0, error,
-                            error_capacity,
-                            "generated response encode failed");
-  if (status == FRAM_SERVER_OK) {
-    status = vector_length(
-        generated_result.field_1, FRAM_SERVER_FRAME_HEADER_BYTES,
-        FRAM_SERVER_FRAME_MAX_BYTES, &length, error, error_capacity,
-        "generated response frame has an invalid byte representation");
-  }
-  bytes = NULL;
-  if (status == FRAM_SERVER_OK) {
-    bytes = malloc(length);
-    if (bytes == NULL) {
-      copy_error(error, error_capacity,
-                 "cannot allocate the encoded response frame");
-      status = FRAM_SERVER_OUT_OF_MEMORY;
-    }
-  }
-  for (index = 0u; status == FRAM_SERVER_OK && index < length; index += 1u) {
-    const int64_t *value = native_vec_at(generated_result.field_1,
-                                         (int64_t)index, INT64_C(8));
-
-    if (*value < INT64_C(0) || *value > INT64_C(255)) {
-      copy_error(error, error_capacity,
-                 "generated response frame has an invalid byte representation");
-      status = FRAM_SERVER_FATAL;
-    } else {
-      bytes[index] = (uint8_t)*value;
-    }
-  }
-  owner_release(owner);
-  if (status != FRAM_SERVER_OK) {
-    free(bytes);
-    return status;
-  }
+  memcpy(bytes, response->bytes, response->length);
   *bytes_out = bytes;
-  *length_out = length;
+  *length_out = response->length;
   return FRAM_SERVER_OK;
 }
 
@@ -1503,16 +1533,14 @@ int fram_server_codec_read_request(int client_fd,
 int fram_server_codec_write_response(
     int client_fd, const fram_server_response *response, char *error,
     size_t error_capacity) {
-  uint8_t *bytes = NULL;
-  size_t length = 0u;
-  int status = fram_server_codec_encode_response(
-      response, &bytes, &length, error, error_capacity);
-
-  if (status == FRAM_SERVER_OK) {
-    status = write_bytes(client_fd, bytes, length, error, error_capacity);
+  clear_error(error, error_capacity);
+  if (response == NULL) {
+    copy_error(error, error_capacity,
+               "generated response write requires an owned response");
+    return FRAM_SERVER_FATAL;
   }
-  fram_server_codec_release_bytes(bytes);
-  return status;
+  return write_bytes(client_fd, response->bytes, response->length, error,
+                     error_capacity);
 }
 
 void fram_server_codec_release_request(fram_server_request *request) {
@@ -1530,10 +1558,6 @@ void fram_server_codec_release_response(
   if (response == NULL) {
     return;
   }
-  (void)FRAM_SERVER_CALL_CODEC_RELEASE_RESPONSE(
-      &response->scratch_owner->arena, &response->scratch_owner->capability,
-      response->result);
-  generation_release(response->base_generation);
-  owner_release(response->scratch_owner);
+  free(response->bytes);
   free(response);
 }
