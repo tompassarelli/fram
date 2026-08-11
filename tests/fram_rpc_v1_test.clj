@@ -153,6 +153,12 @@
 (check! "recursive Term depth 257 is rejected"
         (= :term-depth-exceeded
            (thrown-code #(encode-term (nested-term 257)))))
+(check! "batch action bound is derived from the mutation response envelope"
+        (and (= 9 wire/rpc-v1-mutation-response-wrapper-depth)
+             (= 247 wire/rpc-v1-max-batch-actions)
+             (= wire/rpc-v1-max-term-depth
+                (+ wire/rpc-v1-max-batch-actions
+                   wire/rpc-v1-mutation-response-wrapper-depth))))
 
 (defn shared-ternary-term [levels]
   (loop [remaining levels value "leaf"]

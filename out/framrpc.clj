@@ -1,5 +1,6 @@
 (ns framrpc
-  (:require [fram.types :as t])
+  (:require [fram.rpc-limits :as limits]
+            [fram.types :as t])
   (:import [java.io ByteArrayOutputStream]
            [java.io OutputStream]
            [java.nio ByteBuffer]
@@ -9,7 +10,7 @@
            [java.nio.charset CodingErrorAction]
            [java.nio.charset StandardCharsets]))
 
-(def term-codec-v1-depth-limit 256)
+(def term-codec-v1-depth-limit limits/term-codec-v1-max-depth)
 
 (defn- codec-fail! [code ^String message]
   (throw (ex-info message {:type code :fram/code code})))
@@ -204,7 +205,7 @@
 
 (def rpc-v1-max-term-nodes 65536)
 
-(def rpc-v1-max-term-depth 256)
+(def rpc-v1-max-term-depth limits/term-codec-v1-max-depth)
 
 (def rpc-v1-magic (.getBytes "FRAMRPC\u0000" StandardCharsets/UTF_8))
 
@@ -610,9 +611,13 @@
 
 (def query-current :query/current)
 
-(def rpc-v1-list-envelope-depth 6)
+(def rpc-v1-list-envelope-depth limits/rpc-v1-list-envelope-depth)
 
-(def rpc-v1-max-list-values (- rpc-v1-max-term-depth rpc-v1-list-envelope-depth))
+(def rpc-v1-max-list-values limits/rpc-v1-max-list-values)
+
+(def rpc-v1-mutation-response-wrapper-depth limits/rpc-v1-mutation-response-wrapper-depth)
+
+(def rpc-v1-max-batch-actions limits/rpc-v1-max-batch-actions)
 
 (defn rpc-list! [values]
   (if (> (count values) rpc-v1-max-list-values) (do

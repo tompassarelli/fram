@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  FRAMRPC_MAX_BATCH_ACTIONS,
   FramRpcError,
   float64Term,
   float64Value,
@@ -18,6 +19,10 @@ import {
   tripleQuery,
   tripleTerm,
 } from '../clients/node/framrpc.mjs';
+import {
+  SCHEMA_MAX_BATCH_ACTIONS,
+  schemaClient,
+} from '../clients/node/schema.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const checks = [];
@@ -46,6 +51,7 @@ async function startServer(port, log, space) {
     cwd: root,
     env: {
       ...process.env,
+      FRAM_SERVER_RUNTIME: process.env.FRAM_SERVER_RUNTIME ?? 'jvm-dev',
       FRAM_SPACE_ID: space,
       FRAM_GRAPH_OPS_LOG: 'off',
       FRAM_SERVER_QUIET: '1',
@@ -98,6 +104,8 @@ const fram = framClient({ host: '127.0.0.1', port, space, requestTimeoutMs: 3000
 
 try {
   await check('Term constructors preserve i64, float, recursive Triple, and Instant identity', async () => {
+    assert.equal(FRAMRPC_MAX_BATCH_ACTIONS, 247);
+    assert.equal(SCHEMA_MAX_BATCH_ACTIONS, FRAMRPC_MAX_BATCH_ACTIONS);
     assert.deepEqual(integerTerm(I64_MIN), ['integer', '-9223372036854775808']);
     assert(Object.is(float64Value(float64Term(-0)), -0));
     assert.deepEqual(
@@ -248,6 +256,158 @@ try {
     assert.equal(response.result[0].changed, true);
     const scan = await fram.scan({ t1: '@doc-c' });
     assert.equal(scan.result.length, 0);
+  });
+
+  await check('schema writes compose identity guards and occurrence-correct replacement on the live server', async () => {
+    const schema = schemaClient(fram);
+    const subject = tripleTerm(keywordTerm('entity'), keywordTerm('page'), stringTerm('home'));
+    const slug = tripleTerm(keywordTerm('field'), keywordTerm('page'), keywordTerm('slug'));
+    const title = tripleTerm(keywordTerm('field'), keywordTerm('page'), keywordTerm('title'));
+    const canonicalRevision = tripleTerm(
+      keywordTerm('field'),
+      keywordTerm('page'),
+      keywordTerm('canonical-revision'),
+    );
+    const revisionSubject = tripleTerm(
+      keywordTerm('entity'),
+      keywordTerm('revision'),
+      stringTerm('rev-1'),
+    );
+    const revisionId = tripleTerm(
+      keywordTerm('field'),
+      keywordTerm('revision'),
+      keywordTerm('id'),
+    );
+    const revisionStatus = tripleTerm(
+      keywordTerm('field'),
+      keywordTerm('revision'),
+      keywordTerm('status'),
+    );
+    const authorSubject = tripleTerm(keywordTerm('entity'), keywordTerm('author'), stringTerm('tom'));
+    const authorName = tripleTerm(keywordTerm('field'), keywordTerm('author'), keywordTerm('name'));
+    const tom = stringTerm('tom');
+    const home = stringTerm('home');
+    const firstTitle = stringTerm('Home');
+    const canonicalTitle = stringTerm('Canonical home');
+    const rev1 = stringTerm('rev-1');
+    const draft = keywordTerm('draft');
+    const canonical = keywordTerm('canonical');
+
+    await schema.createUnique({
+      subject: authorSubject,
+      identity: { predicate: authorName, value: tom },
+      fields: [],
+    });
+    const created = await schema.createUnique({
+      subject,
+      identity: { predicate: slug, value: home },
+      fields: [{ predicate: title, value: firstTitle, cardinality: 'single' }],
+      requireUnique: [{ subject: authorSubject, predicate: authorName, value: tom }],
+    });
+    await fram.assert(subject, title, firstTitle, { expectedVersion: created.servedVersion });
+
+    const updated = await schema.updateUnique({
+      identity: { predicate: slug, value: home },
+      field: {
+        predicate: title,
+        values: [canonicalTitle],
+        cardinality: 'single',
+        allowedCurrent: [firstTitle],
+      },
+    });
+    assert.equal(updated.result.length, 3);
+
+    const current = await fram.scan({ t1: subject, t2: title });
+    assert.deepEqual(current.result, [tripleTerm(subject, title, canonicalTitle)]);
+
+    await schema.createUnique({
+      subject: revisionSubject,
+      identity: { predicate: revisionId, value: rev1 },
+      fields: [{ predicate: revisionStatus, value: draft, cardinality: 'single' }],
+    });
+    const beforePublish = await fram.version();
+    const published = await schema.updateUniqueMany({
+      updates: [
+        {
+          identity: { predicate: revisionId, value: rev1 },
+          fields: [{
+            predicate: revisionStatus,
+            values: [canonical],
+            cardinality: 'single',
+            allowedCurrent: [draft],
+          }],
+        },
+        {
+          identity: { predicate: slug, value: home },
+          fields: [{
+            predicate: canonicalRevision,
+            values: [revisionSubject],
+            cardinality: 'single',
+            allowedCurrent: [],
+          }],
+        },
+      ],
+      requireUnique: [{ subject: authorSubject, predicate: authorName, value: tom }],
+    });
+    assert.deepEqual(published.subjects, [revisionSubject, subject]);
+    assert.equal(published.servedVersion, beforePublish.servedVersion + 1n);
+    assert.equal(published.result.length, 3);
+    assert.deepEqual(
+      (await fram.scan({ t1: revisionSubject, t2: revisionStatus })).result,
+      [tripleTerm(revisionSubject, revisionStatus, canonical)],
+    );
+    assert.deepEqual(
+      (await fram.scan({ t1: subject, t2: canonicalRevision })).result,
+      [tripleTerm(subject, canonicalRevision, revisionSubject)],
+    );
+
+    const beforeRejectedPublish = await fram.version();
+    await assert.rejects(
+      schema.updateUniqueMany({
+        updates: [
+          {
+            identity: { predicate: revisionId, value: rev1 },
+            fields: [{
+              predicate: revisionStatus,
+              values: [keywordTerm('obsolete')],
+              cardinality: 'single',
+              allowedCurrent: [canonical],
+            }],
+          },
+          {
+            identity: { predicate: slug, value: home },
+            fields: [{
+              predicate: canonicalRevision,
+              values: [revisionSubject],
+              cardinality: 'single',
+              allowedCurrent: [],
+            }],
+          },
+        ],
+      }),
+      error => error.code === 'schema/current-value-rejected',
+    );
+    assert.equal((await fram.version()).servedVersion, beforeRejectedPublish.servedVersion);
+    assert.deepEqual(
+      (await fram.scan({ t1: revisionSubject, t2: revisionStatus })).result,
+      [tripleTerm(revisionSubject, revisionStatus, canonical)],
+    );
+    await assert.rejects(
+      schema.updateUnique({
+        identity: { predicate: slug, value: home },
+        field: {
+          predicate: title,
+          values: [stringTerm('stale overwrite')],
+          cardinality: 'single',
+          allowedCurrent: [firstTitle],
+        },
+      }),
+      error => error.code === 'schema/current-value-rejected',
+    );
+    await assert.rejects(
+      schema.createUnique({ subject, identity: { predicate: slug, value: home }, fields: [] }),
+      error => error.code === 'schema/identity-exists',
+    );
   });
 
   console.log(`\nnode FRAMRPC client: ${checks.length}/${checks.length} PASS`);

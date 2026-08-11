@@ -1,0 +1,20 @@
+#lang beagle
+
+(ns fram.rpc-limits)
+
+(define-mode strict)
+
+;; Recursive RPC lists consume one Term depth per value. These margins name
+;; the fixed envelopes around each list so every runtime derives the same
+;; depth-safe bounds from the codec budget. Mutation responses also require an
+;; exact byte-size preflight because legal terms vary in encoded width.
+(def term-codec-v1-max-depth: Int 256)
+(def rpc-v1-list-envelope-depth: Int 6)
+(def rpc-v1-unpaged-response-wrapper-depth: Int 8)
+(def rpc-v1-mutation-response-wrapper-depth: Int 9)
+(def rpc-v1-max-list-values: Int
+  (- term-codec-v1-max-depth rpc-v1-list-envelope-depth))
+(def rpc-v1-max-unpaged-rows: Int
+  (- term-codec-v1-max-depth rpc-v1-unpaged-response-wrapper-depth))
+(def rpc-v1-max-batch-actions: Int
+  (- term-codec-v1-max-depth rpc-v1-mutation-response-wrapper-depth))

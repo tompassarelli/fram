@@ -2,6 +2,7 @@
 
 (ns fram.native-lease-ops
   (:require [commit-plan :as plan]
+            [fram.native-wire-codec :as native-wire]
             [fram.rotation :as rot]
             [fram.schema :as schema]
             [fram.store :as store]
@@ -101,6 +102,21 @@
    served-version nil
    (t/->RpcError code retryable message nil)
    nil))
+
+(defn response-encode-error! [candidate: t/RpcResponse] -> String?
+  (let [encoded
+        (native-wire/encode-response-bytes!
+         (t/->RpcFrameV1 :response 0 0 nil candidate))]
+    (native-wire/encoderesult-error encoded)))
+
+(defn response-preflight-error
+  [request: t/RpcRequest
+   served-version: Int
+   encode-error: String?] -> t/RpcResponse
+  (error-response
+   request served-version
+   (native-wire/response-encode-error-code encode-error) false
+   "lease response exceeds FRAMRPC v1 encode limits"))
 
 (defn expected-version-matches?
   [served-version: Int
@@ -278,10 +294,18 @@
             (if (held? prior now-ms)
               (error-response request served-version :rpc/lease-held false
                               "lease resource is already held")
-              (let [expires-ms (+ now-ms ttl-ms)
-                    epoch (replace-lease! session prior resource holder expires-ms)]
-                (response request epoch
-                          (grant-record resource holder epoch expires-ms))))))))))
+              (let [root: (Atom t/TermStore) (schema/store-of session)
+                    expires-ms: Int (+ now-ms ttl-ms)
+                    epoch: Int (store/next-sequence root)
+                    candidate: t/RpcResponse
+                    (response request epoch
+                              (grant-record resource holder epoch expires-ms))
+                    encode-error: String? (response-encode-error! candidate)]
+                (if encode-error
+                  (response-preflight-error request served-version encode-error)
+                  (do
+                    (replace-lease! session prior resource holder expires-ms)
+                    candidate))))))))))
 
 (defn renew-response!
   [session: schema/Session
@@ -312,17 +336,25 @@
               (error-response request served-version
                               :rpc/lease-fence-mismatch false
                               "lease fence is stale or expired")
-              (let [expires-ms (+ now-ms ttl-ms)
-                    epoch (replace-lease!
-                           session prior
-                           (fenceresult-resource fence)
-                           (fenceresult-holder fence)
-                           expires-ms)]
-                (response
-                 request epoch
-                 (grant-record (fenceresult-resource fence)
-                               (fenceresult-holder fence)
-                               epoch expires-ms))))))))))
+              (let [root: (Atom t/TermStore) (schema/store-of session)
+                    expires-ms: Int (+ now-ms ttl-ms)
+                    epoch: Int (store/next-sequence root)
+                    candidate: t/RpcResponse
+                    (response
+                     request epoch
+                     (grant-record (fenceresult-resource fence)
+                                   (fenceresult-holder fence)
+                                   epoch expires-ms))
+                    encode-error: String? (response-encode-error! candidate)]
+                (if encode-error
+                  (response-preflight-error request served-version encode-error)
+                  (do
+                    (replace-lease!
+                     session prior
+                     (fenceresult-resource fence)
+                     (fenceresult-holder fence)
+                     expires-ms)
+                    candidate))))))))))
 
 (defn release-response!
   [session: schema/Session
@@ -338,8 +370,16 @@
             (current-lease session (fenceresult-resource fence))]
         (if (not (matching-fence? prior fence))
           (response request served-version (released-record false))
-          (let [committed-version (retract-lease! session prior)]
-            (response request committed-version (released-record true))))))))
+          (let [root: (Atom t/TermStore) (schema/store-of session)
+                predicted-version: Int (store/next-sequence root)
+                candidate: t/RpcResponse
+                (response request predicted-version (released-record true))
+                encode-error: String? (response-encode-error! candidate)]
+            (if encode-error
+              (response-preflight-error request served-version encode-error)
+              (do
+                (retract-lease! session prior)
+                candidate))))))))
 
 (defn check-response
   [session: schema/Session

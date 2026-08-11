@@ -1,7 +1,8 @@
 #lang beagle
 
 (ns fram.native-wire-codec
-  (:require [fram.types :as t]))
+  (:require [fram.rpc-limits :as limits]
+            [fram.types :as t]))
 
 (define-mode strict)
 
@@ -11,12 +12,22 @@
 (def rpc-v1-max-string-bytes: Int 1048576)
 (def rpc-v1-max-space-bytes: Int 4096)
 (def rpc-v1-max-term-nodes: Int 65536)
-(def rpc-v1-max-term-depth: Int 256)
+(def rpc-v1-max-term-depth: Int limits/term-codec-v1-max-depth)
 (def rpc-v1-magic: (Vec Int) [70 82 65 77 82 80 67 0])
+(def recursive-term-depth-error: String
+  "recursive Term exceeds the TermCodecV1 depth bound")
+(def term-node-count-error: String
+  "TermCodecV1 node count exceeds the configured bound")
 
 (defrecord DecodeResult [frame: t/RpcFrameV1? error: String?])
 
 (defrecord EncodeResult [bytes: (U Nil (Vec Int)) error: String?])
+
+(defn response-encode-error-code [error: String?] -> Keyword
+  (cond
+    [(= error recursive-term-depth-error) :term-depth-exceeded]
+    [(= error term-node-count-error) :term-codec-node-limit]
+    [:else :rpc-frame-too-large]))
 
 (defrecord TermDigestResult
   [ok: Bool
@@ -275,13 +286,12 @@
    max-depth: Int] -> Bool
   (if (> depth max-depth)
     (do
-      (decoder-error! decoder "recursive Term exceeds the TermCodecV1 depth bound")
+      (decoder-error! decoder recursive-term-depth-error)
       false)
     (let [node-count (swap! (decoder-nodes decoder) increment-int)]
       (if (> node-count max-nodes)
         (do
-          (decoder-error! decoder
-                          "TermCodecV1 node count exceeds the configured bound")
+          (decoder-error! decoder term-node-count-error)
           false)
         true))))
 
@@ -292,13 +302,12 @@
    max-depth: Int] -> Bool
   (if (> depth max-depth)
     (do
-      (encoder-error! encoder "recursive Term exceeds the TermCodecV1 depth bound")
+      (encoder-error! encoder recursive-term-depth-error)
       false)
     (let [node-count (swap! (encoder-nodes encoder) increment-int)]
       (if (> node-count max-nodes)
         (do
-          (encoder-error! encoder
-                          "TermCodecV1 node count exceeds the configured bound")
+          (encoder-error! encoder term-node-count-error)
           false)
         true))))
 

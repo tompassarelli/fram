@@ -64,6 +64,7 @@ detected loudly (D5) but is not repairable by truncation the way a torn tail is
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
 | A1 | One RPC batch remains one transaction frame; a sequencer cohort prepares FIFO on a private root and publishes all covered frames together after one barrier, or publishes none | BACKED | [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) batch path; `database_test.clj` two-frame cohort success/failure arms |
+| A2 | A write, batch, or successful lease acquire, renew, or release encodes its exact predicted success response before append. Any Term depth, node, or frame-size rejection appends nothing and leaves version and state unchanged | BACKED | [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) pins JVM response rejection before mutation; [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh) proves native lp64/wasm32 parity |
 
 ## Isolation and concurrency
 
@@ -88,8 +89,8 @@ detected loudly (D5) but is not repairable by truncation the way a torn tail is
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
 | N1 | Closed 13-operation FRAMRPC v1 data surface — plus `rpc/checkpoint` on the native engine, which no shipped client can send; unknown tags, fields, or trailing bytes are rejected; EDN is refused on the wire | BACKED | [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj), `native_rpc_server_test.clj`, boundary ratchet |
-| N2 | Limits: body ≤ 1,048,576 B; frame ≤ 1,048,602 B; string ≤ 1 MiB; term nodes ≤ 65,536; depth ≤ 256 | PARTIAL | decode-side truncation and oversize gated; encode-side enforcement untested |
-| N3 | `:rpc/scan`, `:rpc/query`, and `:rpc/occurrences` accept the same page cursor. Both list bounds are now derived from the TermCodecV1 depth budget of 256 rather than guessed: a request list is capped at **250** values (256 less a six-deep request envelope) and refuses typed `:term-depth-exceeded` at encode time, and an unpaged reply is capped at **248** rows (256 less an eight-deep response envelope) and refuses with the same code from a bounded fold. Paging is the escape and answers the same relation. The cliff binds every response, so the contract's 4096-row page ceiling is unusable; keep pages well under 248 rows | PARTIAL | [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) paged reassembly, cursor pinning, bounded unpaged fold; [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh) pins the unpaged bound as its own frame matrix (at the limit answers, one over refuses, paged answers). The v0.5.0 certification measured 247 actions as the largest batch that round-trips: 248-250 commit, then fail to encode their answer — the embed call returns `FRAM_ENGINE_ERROR` with `generated response encode failed` and the instance survives. No at-scale (350k-Triple) gate |
+| N2 | Limits: body ≤ 1,048,576 B; frame ≤ 1,048,602 B; string ≤ 1 MiB; term nodes ≤ 65,536; depth ≤ 256 | PARTIAL | [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj) gates the JVM encode/decode boundaries; native lp64/wasm32 mutation gates cover response body size and depth, while direct native encode-side string and node at-limit/one-over cases remain ungated |
+| N3 | `:rpc/scan`, `:rpc/query`, and `:rpc/occurrences` accept the same page cursor. List bounds derive from the TermCodecV1 depth budget of 256: a request list is capped at **250** values (less a six-deep request envelope), an unpaged reply at **248** rows (less an eight-deep response envelope), and a mutation batch at **247** actions (less a nine-deep receipt envelope). Depth violations refuse typed `:term-depth-exceeded`. Before a write, batch, or successful lease acquire, renew, or release commits, the runtime constructs and encodes its exact predicted response using the real SpaceId, operation, served version, occurrence coordinates or lease epoch, and the lease operation's frozen expiry. A response that exceeds the wire byte budget refuses typed `:rpc-frame-too-large` without advancing version or state. Paging is the escape for reads and answers the same relation. The cliff binds every response, so the contract's 4096-row page ceiling is unusable; keep pages well under 248 rows | BACKED | [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) pins paged reassembly, cursor pinning, bounded unpaged fold, depth rejection, and byte-size rejection with unchanged version and state; [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh) proves the same mutation atomicity across native lp64 and wasm32 |
 
 ## Query
 
@@ -138,7 +139,7 @@ Reference workload NW-1 is a coordination substrate observed near 350k live Trip
 
 | Dimension | Contract |
 |---|---|
-| Request/response | body ≤ 1 MiB; frame ≤ 1 MiB; bulk reads paginate; a request list is bounded at 250 values and an unpaged reply at 248 rows under N3 |
+| Request/response | body ≤ 1 MiB; frame ≤ 1 MiB; bulk reads paginate; a request list is bounded at 250 values and an unpaged reply at 248 rows; mutation replies are exact-preflighted before commit under N3 |
 | Latency | targeted read p95 at 500k Triples and ≤8 clients is TBD and may not be cited |
 | Writes | sustained single-transaction throughput and restart cost per 100k Triples are TBD and may not be cited |
 | Contention | `:rpc/conflict` is normal contract behavior; retry from a fresh base |

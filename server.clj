@@ -475,6 +475,37 @@
      (mapv (fn [index] [index true]) (range (count actions)))]
     (prepare-actions! (database/live-propositions db) actions)))
 
+(defn- predicted-mutation-occurrences [db operations]
+  (when (seq operations)
+    (let [transaction
+          (t/transaction-coordinate
+           (database/database-space db)
+           (term-store/next-sequence (database/database-store db)))]
+      (mapv #(t/occurrence-coordinate transaction %) (range (count operations))))))
+
+(defn- mutation-result [decisions occurrences]
+  (loop [remaining decisions occurrences (vec occurrences) results []]
+    (if (empty? remaining)
+      (framrpc/rpc-mutation-result! results)
+      (let [[input-index changed] (first remaining)
+            occurrence (when changed (first occurrences))]
+        (recur (rest remaining)
+               (if changed (subvec occurrences 1) occurrences)
+               (conj results
+                     (framrpc/rpc-action-result!
+                      input-index changed (if changed [occurrence] []))))))))
+
+(defn- require-encodable-rpc-response!
+  [request served-version payload]
+  (framrpc/encode-rpc-frame-v1!
+   (framrpc/rpc-response-frame
+    0
+    (framrpc/rpc-response!
+     (t/rpcrequest-space request)
+     (t/rpcrequest-op request)
+     served-version nil nil payload)))
+  nil)
+
 (defn- mutation-payload! [db request actions fence cancellation]
   (let [expected (t/rpcrequest-expected-version request)]
     (require-writer!)
@@ -484,21 +515,21 @@
     (let [[operations decisions] (prepare-actions-on-store! db actions)
           base (when (some? expected)
                  (t/transaction-coordinate (database/database-space db) expected))
+          occurrences (predicted-mutation-occurrences db operations)
+          served-version
+          (if (seq operations)
+            (term-store/next-sequence (database/database-store db))
+            (term-store/current-sequence (database/database-store db)))
+          payload (mutation-result decisions occurrences)
+          _ (require-encodable-rpc-response!
+             request served-version payload)
           committed
           (when (seq operations)
             (cancelled! cancellation)
             (database/commit! db {:base base :operations operations}))]
       (when (:reject committed)
         (server-fail! :rpc/conflict "expected-version lost its commit race" {}))
-      (loop [remaining decisions events (vec (:occurrences committed)) results []]
-        (if (empty? remaining)
-          (framrpc/rpc-mutation-result! results)
-          (let [[input-index changed] (first remaining)
-                occurrence (when changed (first events))]
-            (recur (rest remaining) (if changed (subvec events 1) events)
-                   (conj results
-                         (framrpc/rpc-action-result!
-                          input-index changed (if changed [occurrence] []))))))))))
+      payload)))
 
 (defn- handle-write! [request operation cancellation]
   (let [[proposition policy fence-option]
@@ -515,7 +546,14 @@
 (defn- handle-batch! [request cancellation]
   (let [[action-list fence-option]
         (record-fields! (t/rpc-request-payload-value request) :rpc/batch 2)
-        actions (mapv parse-action! (list-values! action-list))
+        action-values (list-values! action-list)
+        _ (when (> (count action-values) framrpc/rpc-v1-max-batch-actions)
+            (server-fail!
+             :term-depth-exceeded
+             "batch action count exceeds the TermCodecV1 depth bound"
+             {:actions (count action-values)
+              :maximum framrpc/rpc-v1-max-batch-actions}))
+        actions (mapv parse-action! action-values)
         [fence-present fence] (option-value! fence-option)]
     (when (empty? actions)
       (server-fail! :rpc-invalid-action "batch requires at least one action" {}))
@@ -1649,6 +1687,11 @@
   (require-expected! db (t/rpcrequest-expected-version request))
   (cancelled! cancellation))
 
+(defn- predicted-next-lease-epoch [db]
+  (let [sequence (term-store/next-sequence (database/database-store db))]
+    (t/occurrence-coordinate
+     (t/transaction-coordinate (database/database-space db) sequence) 0)))
+
 (defn- handle-lease-acquire! [request cancellation]
   (let [[resource holder ttl-ms]
         (record-fields! (t/rpc-request-payload-value request) :lease/acquire 3)
@@ -1661,13 +1704,24 @@
      request cancellation
      (fn [db]
        (lease-mutation-guard! db request cancellation)
-       (let [result (database/acquire-lease! db resource holder ttl-ms
-                                          (System/currentTimeMillis))]
+       (let [now-ms (System/currentTimeMillis)
+             [_ _ _ current-expires-ms]
+             (or (current-fence db resource) [nil nil nil nil])]
+         (when (and current-expires-ms (> current-expires-ms now-ms))
+           (server-fail! :rpc/lease-held "lease resource is already held" {}))
+         (let [epoch (predicted-next-lease-epoch db)
+               expires-ms (+ now-ms ttl-ms)
+               payload
+               (framrpc/rpc-lease-grant!
+                (framrpc/rpc-fence! resource holder (occurrence-epoch epoch))
+                (millis->instant expires-ms))
+               _ (require-encodable-rpc-response!
+                  request (occurrence-epoch epoch) payload)
+               result (database/acquire-lease!
+                       db resource holder ttl-ms now-ms)]
          (when (:reject result)
            (server-fail! :rpc/lease-held "lease resource is already held" {}))
-         (framrpc/rpc-lease-grant!
-          (framrpc/rpc-fence! resource holder (occurrence-epoch (:ok result)))
-          (millis->instant (:expires-ms result))))))))
+           payload))))))
 
 (defn- handle-lease-renew! [request cancellation]
   (let [[fence ttl-ms]
@@ -1680,20 +1734,28 @@
      request cancellation
      (fn [db]
        (lease-mutation-guard! db request cancellation)
-       (let [[current-holder current-epoch occurrence]
+       (let [now-ms (System/currentTimeMillis)
+             [current-holder current-epoch occurrence current-expires-ms]
              (or (current-fence db resource) [nil nil nil nil])]
-         (when-not (and (= holder current-holder) (= epoch current-epoch))
+         (when-not (and (= holder current-holder) (= epoch current-epoch)
+                        (> (or current-expires-ms Long/MIN_VALUE) now-ms))
             (server-fail! :rpc/lease-fence-mismatch
                           "lease fence does not name the current lease" {}))
-         (let [result (database/renew-lease!
-                       db resource holder occurrence ttl-ms
-                       (System/currentTimeMillis))]
+         (let [next-epoch (predicted-next-lease-epoch db)
+               expires-ms (+ now-ms ttl-ms)
+               payload
+               (framrpc/rpc-lease-grant!
+                (framrpc/rpc-fence!
+                 resource holder (occurrence-epoch next-epoch))
+                (millis->instant expires-ms))
+               _ (require-encodable-rpc-response!
+                  request (occurrence-epoch next-epoch) payload)
+               result (database/renew-lease!
+                       db resource holder occurrence ttl-ms now-ms)]
            (when (:reject result)
              (server-fail! :rpc/lease-fence-mismatch
                            "lease fence is stale or expired" {}))
-           (framrpc/rpc-lease-grant!
-            (framrpc/rpc-fence! resource holder (occurrence-epoch (:ok result)))
-            (millis->instant (:expires-ms result)))))))))
+           payload))))))
 
 (defn- handle-lease-release! [request cancellation]
   (let [[resource holder epoch]
@@ -1706,8 +1768,16 @@
              (or (current-fence db resource) [nil nil nil nil])]
          (if-not (and (= holder current-holder) (= epoch current-epoch))
            (framrpc/rpc-lease-released! false)
-           (let [result (database/release-lease! db resource holder occurrence)]
-             (framrpc/rpc-lease-released! (boolean (:ok result))))))))))
+           (let [served-version
+                 (term-store/next-sequence (database/database-store db))
+                 payload (framrpc/rpc-lease-released! true)
+                 _ (require-encodable-rpc-response!
+                    request served-version payload)
+                 result (database/release-lease! db resource holder occurrence)]
+             (when-not (:ok result)
+               (server-fail! :rpc/lease-fence-mismatch
+                             "lease fence is stale or expired" {}))
+             payload)))))))
 
 (defn- handle-lease-check! [payload cancellation snapshot]
   (let [[resource holder epoch] (parse-fence! payload)]

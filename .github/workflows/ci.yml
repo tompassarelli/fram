@@ -23,7 +23,7 @@ jobs:
         with:
           repository: Autonymy/beagle
           # Pin matches flake.nix's beagle.url rev; keep them in sync.
-          ref: 037358da3eada0a262d1a8ecbdcb764bca5c2e23
+          ref: b7662922b8fb5eb65c5d64a5addd352e90a75519
           path: .beagle
 
       - name: Install Racket (Beagle graph-authoring runtime)
@@ -67,6 +67,15 @@ jobs:
 
       - name: Warm JVM deps (cheshire) so the server boots fast
         run: clojure -P
+
+      - name: Install pinned TypeScript for the packed Node package gate
+        run: |
+          typescript_root="$RUNNER_TEMP/fram-typescript"
+          npm install --prefix "$typescript_root" \
+            --ignore-scripts --no-audit --no-fund --package-lock=false \
+            typescript@6.0.3
+          echo "FRAM_TSC=$typescript_root/node_modules/.bin/tsc" >> "$GITHUB_ENV"
+          "$typescript_root/node_modules/.bin/tsc" --version
 
       - name: Occurrence-native component and boundary suites
         run: |

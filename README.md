@@ -107,7 +107,10 @@ engine wire is binary FRAMRPC.
 - `clients/node/framrpc.mjs` is the official zero-dependency Node client for
   direct builder and application traffic. It preserves recursive Terms,
   batches, versions, occurrence replay, paging/cursors, snapshot selectors,
-  and leases across all thirteen FRAMRPC v1 operations.
+  and leases across all thirteen FRAMRPC v1 operations. Its optional
+  `@tompassarelli/framrpc/schema` entry point composes those operations into
+  occurrence-correct single-value replacement, unique creation/upsert, and
+  identity-resolved guarded updates without adding domain roles to the kernel.
 - The Cloudflare shim accepts closed JSON with tagged recursive Terms and lowers
   it to FRAMRPC. It does not accept EDN or an untyped escape hatch.
 - The engine also links as a library: `native/fram.h` publishes embedding ABI

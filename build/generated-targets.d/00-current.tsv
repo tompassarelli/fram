@@ -14,6 +14,7 @@ copy	src/fram/projection_lifecycle.clj	out/fram/projection_lifecycle.clj
 copy	src/fram/candidate_transformer.clj	out/fram/candidate_transformer.clj
 beagle-core	src/fram/slots.bgl	out/fram/slots.clj
 beagle-core	src/fram/types.bgl	out/fram/types.clj
+beagle-core	src/fram/rpc_limits.bgl	out/fram/rpc_limits.clj
 beagle-core	src/fram/store.bgl	out/fram/store.clj
 beagle-core	src/fram/rotation.bgl	out/fram/rotation.clj
 beagle-core	src/fram/txn.bgl	out/fram/txn.clj

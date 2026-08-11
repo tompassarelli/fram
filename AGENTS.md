@@ -31,7 +31,12 @@ only to the revision checked; never treat it as evergreen.
   checker oracle; compiler output and protocol integration may be consumed by
   FRAM under either offered license.
 
-- 2026-08-02 — Beagle packaged-input revision
-  `309c6f216392648f7ec10dfeb7bb7e234c08e60c` is MIT OR Apache-2.0. It is
+- 2026-08-11 — Beagle packaged-input revision
+  `b7662922b8fb5eb65c5d64a5addd352e90a75519` is MIT OR Apache-2.0. It is
   the current `flake.nix` graph-authoring runtime pin and is license-compatible
   with FRAM; update this dated record when the package pin advances.
+
+- 2026-08-11 — TypeScript npm package `6.0.3`, source revision
+  `050880ce59e30b356b686bd3144efe24f875ebc8`, is Apache-2.0. FRAM uses it
+  only as the pinned CI compiler for the packed Node declaration-surface gate;
+  it is not a shipped or runtime dependency.

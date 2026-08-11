@@ -60,6 +60,8 @@ run-shell	current-cache	tests/fri_golden.sh	-
 run-shell	current-model	tests/fri2_replay_oracle_test.sh	-
 run-node	current-cloudflare	tests/cloudflare_worker_client_test.mjs	-
 run-node	current-node-client	tests/node_framrpc_client_test.mjs	-
+run-node	current-node-schema-client	tests/node_schema_client_test.mjs	-
+run-node	current-node-package-types	tests/node_package_types_test.mjs	-
 aggregate-nix	package-closure	tests/package_server_smoke.sh	flake.nix#package_server_smoke
 baseline-shell	vocab-residue	tests/vocab_ratchet_test.sh	tests/vocab_ratchet_test.sh#REGROWTH
 

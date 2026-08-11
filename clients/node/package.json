@@ -1,18 +1,27 @@
 {
   "name": "@tompassarelli/framrpc",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Official zero-dependency Node.js client for binary FRAMRPC v1",
   "type": "module",
   "exports": {
     ".": {
       "types": "./framrpc.d.ts",
       "import": "./framrpc.mjs"
+    },
+    "./schema": {
+      "types": "./schema.d.ts",
+      "import": "./schema.mjs"
     }
   },
   "types": "./framrpc.d.ts",
   "files": [
+    "LICENSE",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
     "framrpc.mjs",
     "framrpc.d.ts",
+    "schema.mjs",
+    "schema.d.ts",
     "README.md"
   ],
   "sideEffects": false,

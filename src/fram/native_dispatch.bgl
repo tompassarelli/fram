@@ -6,6 +6,7 @@
             [fram.native-query-ops :as query-ops]
             [fram.native-wire-codec :as native-wire]
             [fram.rotation :as rot]
+            [fram.rpc-limits :as limits]
             [fram.schema :as schema]
             [fram.store :as store]
             [fram.types :as t]))
@@ -452,21 +453,27 @@
   (->ActionPlan false [] code message))
 
 (defn parse-actions [values: (Vec Any)] -> ActionPlan
-  (if (empty? values)
-    (actions-error :rpc-invalid-action "batch requires at least one action")
-    (loop [remaining: (Vec Any) values index: Int 0 actions: (Vec Action) []]
-      (if (empty? remaining)
-        (->ActionPlan true actions nil nil)
-        (let [parsed: ActionResult (parse-action (first remaining) index)
-              action: Action? (actionresult-action parsed)]
-          (if (and (actionresult-ok parsed) action)
-            (let [present-action: Action action]
-              (recur (vec (rest remaining)) (inc index)
-                     (conj actions present-action)))
-            (actions-error
-             (or (actionresult-code parsed) :rpc-invalid-payload)
-             (or (actionresult-message parsed)
-                 "mutation action is invalid"))))))))
+  (cond
+    [(empty? values)
+     (actions-error :rpc-invalid-action "batch requires at least one action")]
+    [(> (count values) limits/rpc-v1-max-batch-actions)
+     (actions-error
+      :term-depth-exceeded
+      "batch action count exceeds the TermCodecV1 depth bound")]
+    [:else
+     (loop [remaining: (Vec Any) values index: Int 0 actions: (Vec Action) []]
+       (if (empty? remaining)
+         (->ActionPlan true actions nil nil)
+         (let [parsed: ActionResult (parse-action (first remaining) index)
+               action: Action? (actionresult-action parsed)]
+           (if (and (actionresult-ok parsed) action)
+             (let [present-action: Action action]
+               (recur (vec (rest remaining)) (inc index)
+                      (conj actions present-action)))
+             (actions-error
+              (or (actionresult-code parsed) :rpc-invalid-payload)
+              (or (actionresult-message parsed)
+                  "mutation action is invalid"))))))]))
 
 (defn subject-known?
   [propositions: (Vec t/Triple)
@@ -627,6 +634,12 @@
                    [])))))))]
     (rpc-mutation-result results)))
 
+(defn mutation-response-encode-error! [candidate: t/RpcResponse] -> String?
+  (let [encoded
+        (native-wire/encode-response-bytes!
+         (t/->RpcFrameV1 :response 0 0 nil candidate))]
+    (native-wire/encoderesult-error encoded)))
+
 (defn commit-mutation!
   [session: schema/Session
    request: t/RpcRequest
@@ -641,18 +654,32 @@
     (let [operations: (Vec t/CommitOperation)
           (preparedmutation-operations prepared)
           root: (Atom t/TermStore) (schema/store-of session)]
-      (if (empty? operations)
-        (response request served-version
-                  (mutation-results nil
-                                    (preparedmutation-decisions prepared)))
-        (let [transaction: t/Triple
-              (store/commit-transaction! root operations)]
-          (do
-            (schema/refresh! session)
-            (response
-             request (store/current-sequence root)
-             (mutation-results transaction
-                               (preparedmutation-decisions prepared)))))))))
+      (let [changed: Bool (not (empty? operations))
+            predicted-version: Int
+            (if changed (store/next-sequence root) served-version)
+            transaction: t/Triple?
+            (if changed
+              (t/transaction-coordinate (store/space-id root)
+                                        predicted-version)
+              nil)
+            candidate: t/RpcResponse
+            (response request predicted-version
+                      (mutation-results
+                       transaction
+                       (preparedmutation-decisions prepared)))
+            encode-error: String?
+            (mutation-response-encode-error! candidate)]
+        (if encode-error
+          (error-response
+           request served-version
+           (native-wire/response-encode-error-code encode-error) false
+           "mutation response exceeds FRAMRPC v1 encode limits")
+          (if changed
+            (do
+              (store/commit-transaction! root operations)
+              (schema/refresh! session)
+              candidate)
+            candidate))))))
 
 (defn execute-actions!
   [session: schema/Session

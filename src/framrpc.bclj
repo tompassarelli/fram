@@ -2,14 +2,15 @@
 
 ;; framrpc — canonical TermCodecV1 and FRAMRPC v1 framing.
 (ns framrpc
-  (:require [fram.types :as t])
+  (:require [fram.rpc-limits :as limits]
+            [fram.types :as t])
   (:import [java.io ByteArrayOutputStream OutputStream]
            [java.nio ByteBuffer ByteOrder CharBuffer]
            [java.nio.charset CharacterCodingException CodingErrorAction
             StandardCharsets]))
 
 (define-mode strict)
-(def term-codec-v1-depth-limit: Int 256)
+(def term-codec-v1-depth-limit: Int limits/term-codec-v1-max-depth)
 
 (defn- codec-fail! [code: Keyword message: String] -> Any
   (throw (ex-info message {:type code :fram/code code})))
@@ -323,7 +324,7 @@
 (def rpc-v1-max-string-bytes: Int 1048576)
 (def rpc-v1-max-space-bytes: Int 4096)
 (def rpc-v1-max-term-nodes: Int 65536)
-(def rpc-v1-max-term-depth: Int 256)
+(def rpc-v1-max-term-depth: Int limits/term-codec-v1-max-depth)
 (def rpc-v1-magic: Any
   (.getBytes "FRAMRPC\u0000" StandardCharsets/UTF_8))
 
@@ -878,9 +879,12 @@
 ;; A list nests one Term node per value inside a six-deep request envelope, so
 ;; no list longer than this encodes at any nesting; a deeper one fails earlier
 ;; in the encoder, with the same code.
-(def rpc-v1-list-envelope-depth: Int 6)
-(def rpc-v1-max-list-values: Int
-  (- rpc-v1-max-term-depth rpc-v1-list-envelope-depth))
+(def rpc-v1-list-envelope-depth: Int
+  limits/rpc-v1-list-envelope-depth)
+(def rpc-v1-max-list-values: Int limits/rpc-v1-max-list-values)
+(def rpc-v1-mutation-response-wrapper-depth: Int
+  limits/rpc-v1-mutation-response-wrapper-depth)
+(def rpc-v1-max-batch-actions: Int limits/rpc-v1-max-batch-actions)
 
 (defn rpc-list! [values: (Vec Any)] -> Any
   (when (> (count values) rpc-v1-max-list-values)

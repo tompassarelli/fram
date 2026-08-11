@@ -211,6 +211,7 @@ export interface FramClientOptions {
 }
 
 export const FRAMRPC_VERSION: Readonly<{ major: 1; minor: 0 }>;
+export const FRAMRPC_MAX_BATCH_ACTIONS: 247;
 
 export class FramProtocolError extends Error {
   code: string;

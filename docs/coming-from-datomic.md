@@ -67,8 +67,8 @@ version of the statement it quotes ([naming ledger](naming.md)).
 | `:db/ident`, attribute rename | `name!` / `resolve-name`; a rename keeps the original Term as identity, demotes the old spelling to an alias, and preflights collisions before mutating anything | **Present, stronger** |
 | `:db/cardinality` | Declared per predicate. `single` compiles **client-side** to "retract every live `(e, a, *)`, newest first, then assert" | **Declared, compiled by the caller — never enforced at the wire** |
 | `:db/valueType` | `value_kind` is `literal` or `ref`. Client-side projections (pull, export, classification) read it; no engine code checks it | **Declared, unchecked** |
-| `:db/unique` | Nothing. `lookup` selects the first of a possibly-multi group — a view selection, not a uniqueness proof | **Absent** |
-| Upsert by identity | Not on the wire. The nearest thing is an in-process lock-guarded read-then-write on the JVM route | **Absent from FRAMRPC** |
+| `:db/unique` | The kernel and wire stay schema-neutral. The official Node [`@tompassarelli/framrpc/schema`](../clients/node/README.md#schema-aware-application-writes) entry point resolves an identity at one pinned snapshot, rejects duplicate owners, and protects its create/update batch with `expected-version` | **Application constraint, not a stored kernel invariant** |
+| Upsert by identity | `@tompassarelli/framrpc/schema` provides `createUnique`, `upsertUnique`, `updateUnique`, and multi-subject `updateUniqueMany`. Each attempt combines snapshot-pinned reads with one OCC-guarded atomic batch; a conflict retries from a fresh snapshot | **Present in the official Node application layer; no dedicated wire operation** |
 | `:db/isComponent`, cascade retract | Nothing | **Absent** |
 | `retractEntity`, retract by pattern | Only exact-proposition retraction exists | **Absent** |
 | Retraction semantics | Withdraws the newest live equal occurrence, records its exact target, and a retraction with no live match is an explicit unchanged receipt that does not advance the version | **Different** |
@@ -82,9 +82,12 @@ version of the statement it quotes ([naming ledger](naming.md)).
 | Excision | Retention exists as sealed epochs and typed unavailable/expired errors, but active-log compaction and retention policy are ungated (`Q7`) | **Partial** |
 
 One structural note behind several rows: `fram.schema` is an **in-process**
-layer. Embedded callers and the JVM checkout use it; a FRAMRPC client writes
-propositions and compiles single-cardinality supersession itself. The wire is
-deliberately kernel-level.
+layer used by embedded callers and the JVM checkout. The official Node
+`@tompassarelli/framrpc/schema` entry point is the corresponding remote
+application layer: it compiles cardinality replacement, uniqueness checks, and
+guarded updates into ordinary reads plus an `expected-version` FRAMRPC batch.
+The wire remains deliberately kernel-level, so clients that bypass that entry
+point can still write propositions that violate an application's constraints.
 
 ## 3. Workarounds you no longer need
 
@@ -130,7 +133,11 @@ Each row is a work order, not a caveat to be argued away.
 - **Enforce mode.** Profiles are observe-only. Prospective admission and
   advisory lint agree for the declared rules (`P3`), but rejecting a violating
   write before append is unbuilt (`P2`, UNBACKED).
-- **Uniqueness and upsert.** Neither exists at any layer. Performant
+- **Declarative, engine-wide uniqueness.** The official Node schema entry point
+  provides correct unique create/upsert and guarded updates for writes routed
+  through it, including duplicate-owner rejection and conflict retries. Fram
+  still has no stored uniqueness declaration or kernel admission rule, so
+  arbitrary FRAMRPC writes can bypass that application constraint. Engine-wide
   enforcement also wants an index Fram does not have — see the next row.
 - **No value-ordered index.** Equality-prefix probes cover attribute and
   attribute+value lookup in one hop, which is the common Datomic AVET use, but
@@ -166,11 +173,11 @@ knowledge.
 
 | You want | Do this |
 |---|---|
-| Lookup refs | `resolve-name` over the registry's name propositions. It is a convention, not an enforced identity — nothing stops two subjects sharing a name |
+| Lookup refs | For schema-aware Node applications, use `@tompassarelli/framrpc/schema` identities and required-unique guards; duplicate owners reject instead of being selected arbitrarily. `resolve-name` remains the in-process registry convention, not an engine-wide uniqueness rule |
 | Entity API | The pull projection over an immutable store, in process |
 | `d/history` | The `occurrence` relation; follow `:kernel/withdraws` for what a retraction targeted |
 | `d/as-of` / `d/since` | The `:query/as-of` and `:query/since` selectors. Since restricts every base relation to its window, not just `occurrence` |
 | `d/with` | A staged builder read, in process only |
 | Paging | Snapshot-pinned cursors. A paged current query stays stable because the continuation reuses the cursor's resolved version, not head. Keep pages well under the 248-row unpaged bound (`N3`) |
-| Bulk load | Batches of at most 247 actions round-trip; a batch commits as one frame or not at all (`A1`) |
+| Bulk load | Batches have a 247-action depth ceiling and must also fit the exact predicted response byte limit; a batch commits as one frame or not at all (`A1`, `N3`) |
 | "Did my write land" | The mutation receipt returns occurrence coordinates, and `expected-version` gives you OCC: a stale or future version fails `:rpc/conflict` without moving the version (`I2`) |

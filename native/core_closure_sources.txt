@@ -1,5 +1,6 @@
 src/fram/slots.bgl
 src/fram/types.bgl
+src/fram/rpc_limits.bgl
 src/fram/store.bgl
 src/fram/rotation.bgl
 src/fram/txn.bgl

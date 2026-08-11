@@ -25,6 +25,7 @@ const PAGED_OPERATIONS = new Set(['rpc/scan', 'rpc/query', 'rpc/occurrences']);
 const textDecoder = new TextDecoder('utf-8', { fatal: true });
 
 export const FRAMRPC_VERSION = Object.freeze({ major: 1, minor: 0 });
+export const FRAMRPC_MAX_BATCH_ACTIONS = 247;
 
 export class FramProtocolError extends Error {
   constructor(message, code = 'client/protocol', options) {
@@ -1042,6 +1043,12 @@ export function framClient({
     batch: (actions, options = {}) => {
       if (!Array.isArray(actions) || actions.length === 0) {
         fail('batch requires at least one action', 'client/invalid-action');
+      }
+      if (actions.length > FRAMRPC_MAX_BATCH_ACTIONS) {
+        fail(
+          `batch accepts at most ${FRAMRPC_MAX_BATCH_ACTIONS} actions`,
+          'client/action-limit',
+        );
       }
       return call('rpc/batch', rpcRecord('rpc/batch', [
         rpcList(actions.map(actionPayload)), rpcOption(options.fence),

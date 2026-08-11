@@ -3,7 +3,6 @@
 ;; must still fire on the race.
 ;; Run from the repository root: bb -cp out tests/framrpc_write_conc_test.clj
 (require '[framrpc :as wire]
-         '[fram.kernel :as kernel]
          '[fram.types :as t])
 
 (load-file "server.clj")
@@ -99,16 +98,17 @@
     (if code
       {:error code}
       (let [[[input-index changed occurrences]] (action-results response)
-            events (values-list occurrences)]
+            coordinates (values-list occurrences)
+            coordinate (first coordinates)]
         {:error nil
          :version (t/rpcresponse-served-version response)
          :input-index input-index
          :changed changed
-         :occurrence-count (count events)
-         :occurrence-proposition (when (seq events)
-                                   (kernel/proposition-of (first events)))
-         :assertion? (and (seq events)
-                          (kernel/assertion-occurrence? (first events)))
+         :occurrence-count (count coordinates)
+         :coordinate? (and coordinate (t/occurrence-coordinate? coordinate))
+         :coordinate-version
+         (when coordinate (t/triple-t3 (t/triple-t1 coordinate)))
+         :coordinate-ordinal (when coordinate (t/triple-t3 coordinate))
          :proposition proposition}))))
 
 (try
@@ -151,8 +151,9 @@
                                  (= 0 (:input-index %))
                                  (true? (:changed %))
                                  (= 1 (:occurrence-count %))
-                                 (:assertion? %)
-                                 (= (:proposition %) (:occurrence-proposition %)))
+                                 (:coordinate? %)
+                                 (= (:version %) (:coordinate-version %))
+                                 (= 0 (:coordinate-ordinal %)))
                            all-acks)))
       (check! "A: acks carry the full 1..N transaction sequence, none shared"
               (= (set (range 1 (inc issued)))

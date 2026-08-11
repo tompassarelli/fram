@@ -100,10 +100,13 @@
                  (t/rpc-response-payload-value response) :rpc/mutation-result 1)]
             (mapv #(wire/rpc-record-fields! % :rpc/action-result 3)
                   (wire/rpc-list-values! results)))
-          [event] (wire/rpc-list-values! occurrences)]
-      (check! "active write returns logical version and direct occurrence"
+          [coordinate] (wire/rpc-list-values! occurrences)]
+      (check! "active write returns logical version and occurrence coordinate"
               (and changed (= 1 (t/rpcresponse-served-version response))
-                   (= proposition (t/triple-t3 event))))
+                   (t/occurrence-coordinate? coordinate)
+                   (= space (t/triple-t1 (t/triple-t1 coordinate)))
+                   (= 1 (t/triple-t3 (t/triple-t1 coordinate)))
+                   (= 0 (t/triple-t3 coordinate))))
       (check! "native response contains no physical content handle"
               (not (str/includes? (pr-str response) "cid"))))
     (let [append-var (ns-resolve 'database 'append-frame-cohort-durable!)

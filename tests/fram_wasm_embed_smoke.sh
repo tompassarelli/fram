@@ -118,9 +118,8 @@ for hook in allocate deallocate clock_milliseconds storage_append \
     fail "the $hook import was never called"
 done
 
-# The unpaged codec bound, in a store of its own so the row count is exactly
-# what the batches wrote: 40 answers at the limit, 42 must refuse one step over,
-# 43 pages past it. Move unpaged-occurrence-limit and one of the three flips.
+# The unpaged codec bound has one store: 40 answers at 248 rows, 41 adds one
+# row, 42 refuses the resulting 249-row unpaged response, and 43 pages it.
 # Its reopen pass checkpoints, so the refusal must survive the image boot too.
 "$scratch/frames_driver" "$frames" "$frames/manifest-depth.txt" \
   "$frames/manifest-depth-reopen.txt" "$frames/manifest-depth-image.txt" \
@@ -146,19 +145,188 @@ depth_code_hex="$(printf 'term-depth-exceeded' | od -An -tx1 | tr -d ' \n')"
 frame_response_hex() {
   awk -v name="$2" '$1 == "frame" && $2 == name { print $4; exit }' "$1"
 }
+frame_response_body_hex() {
+  local response
+  response="$(frame_response_hex "$1" "$2")"
+  # The first 26 bytes are the frame header, including the differing request id.
+  printf '%s\n' "${response:52}"
+}
 for transcript in "$scratch/native-depth.transcript" \
   "$scratch/wasm-depth.transcript"; do
   frame_response_hex "$transcript" 42-query-bulk-over-limit.bin |
     grep -q "$depth_code_hex" ||
     fail "one row over the unpaged bound was answered instead of refused: $transcript"
-  for answered in 40-query-bulk-at-limit.bin 43-query-bulk-paged.bin; do
+  for answered in 40-query-bulk-at-limit.bin 41-batch-bulk-over-limit.bin \
+    43-query-bulk-paged.bin; do
     ! frame_response_hex "$transcript" "$answered" | grep -q "$depth_code_hex" ||
       fail "$answered was refused for depth; the unpaged bound is too tight: $transcript"
   done
 done
 
-printf 'fram wasm embed smoke: PASS frames=%s depth-frames=%s framlog=%s refused-wasi-calls=0 served-wasi=%s\n' \
+long_frames="$scratch/long-space-frames"
+mkdir -p "$long_frames"
+(cd "$repo" &&
+  bb -cp out tests/wasm_embed/gen_long_space_receipt_frames.clj \
+    "$long_frames") >"$scratch/long-space-generate.log" ||
+  fail "long-SpaceId fixture generation failed"
+long_space="$(<"$long_frames/space.txt")"
+[[ "${#long_space}" -eq 4096 ]] ||
+  fail "long-SpaceId fixture did not contain 4096 ASCII bytes"
+
+"$scratch/frames_driver" "$long_frames" "$long_frames/manifest.txt" \
+  "$long_frames/manifest-empty.txt" "$long_frames/manifest-empty.txt" \
+  "$scratch/native-long-space.framlog" \
+  "$long_space" >"$scratch/native-long-space.transcript" ||
+  fail "native oracle failed the long-SpaceId response-preflight matrix"
+python3 "$repo/tests/wasm_embed/embedder.py" \
+  "$wasm_artifact/lib/libfram.wasm" "$long_frames" \
+  "$long_frames/manifest.txt" "$long_frames/manifest-empty.txt" \
+  "$long_frames/manifest-empty.txt" "$scratch/wasm-long-space.framlog" \
+  "$scratch/wasm-long-space.tally" \
+  "$long_space" >"$scratch/wasm-long-space.transcript" ||
+  fail "external wasm embedder failed the long-SpaceId response-preflight matrix"
+if ! cmp -s "$scratch/native-long-space.transcript" \
+  "$scratch/wasm-long-space.transcript"; then
+  fail "$(printf 'wasm long-SpaceId answers diverge from the native oracle:\n%s' \
+    "$(diff "$scratch/native-long-space.transcript" \
+      "$scratch/wasm-long-space.transcript" | cut -c1-160 | head -6)")"
+fi
+cmp -s "$scratch/native-long-space.framlog" \
+  "$scratch/wasm-long-space.framlog" ||
+  fail "the long-SpaceId FRAMLOG differs between native and wasm32"
+
+frame_too_large_hex="$(printf 'rpc-frame-too-large' | od -An -tx1 | tr -d ' \n')"
+expected_long_space_hex="$(od -An -v -tx1 \
+  "$long_frames/expected-03-batch-241-response.bin" | tr -d ' \n')"
+for transcript in "$scratch/native-long-space.transcript" \
+  "$scratch/wasm-long-space.transcript"; do
+  [[ "$(frame_response_hex "$transcript" 03-batch-241.bin)" == \
+     "$expected_long_space_hex" ]] ||
+    fail "241-action long-SpaceId receipt did not return coordinates 0 through 240: $transcript"
+  frame_response_hex "$transcript" 06-batch-242.bin |
+    grep -q "$frame_too_large_hex" ||
+    fail "242-action long-SpaceId receipt was not rejected before commit: $transcript"
+  [[ "$(frame_response_body_hex "$transcript" 01-version-before.bin)" != \
+     "$(frame_response_body_hex "$transcript" 04-version-after-success.bin)" ]] ||
+    fail "241-action long-SpaceId receipt did not advance the version: $transcript"
+  [[ "$(frame_response_body_hex "$transcript" 04-version-after-success.bin)" == \
+     "$(frame_response_body_hex "$transcript" 07-version-after-rejection.bin)" ]] ||
+    fail "242-action long-SpaceId rejection changed the version: $transcript"
+  [[ "$(frame_response_body_hex "$transcript" 02-scan-before.bin)" != \
+     "$(frame_response_body_hex "$transcript" 05-scan-after-success.bin)" ]] ||
+    fail "241-action long-SpaceId receipt left no scan state: $transcript"
+  [[ "$(frame_response_body_hex "$transcript" 05-scan-after-success.bin)" == \
+     "$(frame_response_body_hex "$transcript" 08-scan-after-rejection.bin)" ]] ||
+    fail "242-action long-SpaceId rejection changed scan state: $transcript"
+done
+
+receipt_frames="$scratch/mutation-receipt-bound-frames"
+mkdir -p "$receipt_frames"
+(cd "$repo" &&
+  bb -cp out tests/wasm_embed/gen_mutation_receipt_bound_frames.clj \
+    "$receipt_frames") >"$scratch/mutation-receipt-bound-generate.log" ||
+  fail "mutation-receipt-bound fixture generation failed"
+receipt_space="$(<"$receipt_frames/space.txt")"
+
+"$scratch/frames_driver" "$receipt_frames" "$receipt_frames/manifest.txt" \
+  "$receipt_frames/manifest-empty.txt" \
+  "$receipt_frames/manifest-empty.txt" \
+  "$scratch/native-mutation-receipt-bound.framlog" \
+  "$receipt_space" >"$scratch/native-mutation-receipt-bound.transcript" ||
+  fail "native oracle failed the mutation-receipt-bound matrix"
+python3 "$repo/tests/wasm_embed/embedder.py" \
+  "$wasm_artifact/lib/libfram.wasm" "$receipt_frames" \
+  "$receipt_frames/manifest.txt" "$receipt_frames/manifest-empty.txt" \
+  "$receipt_frames/manifest-empty.txt" \
+  "$scratch/wasm-mutation-receipt-bound.framlog" \
+  "$scratch/wasm-mutation-receipt-bound.tally" \
+  "$receipt_space" >"$scratch/wasm-mutation-receipt-bound.transcript" ||
+  fail "external wasm embedder failed the mutation-receipt-bound matrix"
+if ! cmp -s "$scratch/native-mutation-receipt-bound.transcript" \
+  "$scratch/wasm-mutation-receipt-bound.transcript"; then
+  fail "$(printf 'wasm mutation-receipt answers diverge from the native oracle:\n%s' \
+    "$(diff "$scratch/native-mutation-receipt-bound.transcript" \
+      "$scratch/wasm-mutation-receipt-bound.transcript" |
+      cut -c1-160 | head -6)")"
+fi
+cmp -s "$scratch/native-mutation-receipt-bound.framlog" \
+  "$scratch/wasm-mutation-receipt-bound.framlog" ||
+  fail "the mutation-receipt-bound FRAMLOG differs between native and wasm32"
+
+expected_receipt_hex="$(od -An -v -tx1 \
+  "$receipt_frames/expected-03-batch-247-response.bin" | tr -d ' \n')"
+for transcript in "$scratch/native-mutation-receipt-bound.transcript" \
+  "$scratch/wasm-mutation-receipt-bound.transcript"; do
+  [[ "$(frame_response_hex "$transcript" 03-batch-247.bin)" == \
+     "$expected_receipt_hex" ]] ||
+    fail "247-action receipt did not return coordinates 0 through 246: $transcript"
+  frame_response_hex "$transcript" 06-batch-248.bin |
+    grep -q "$depth_code_hex" ||
+    fail "248-action batch did not return typed term-depth-exceeded: $transcript"
+  [[ "$(frame_response_body_hex "$transcript" 01-version-before.bin)" != \
+     "$(frame_response_body_hex "$transcript" 04-version-after-success.bin)" ]] ||
+    fail "247-action receipt-bound batch did not advance the version: $transcript"
+  [[ "$(frame_response_body_hex "$transcript" 04-version-after-success.bin)" == \
+     "$(frame_response_body_hex "$transcript" 07-version-after-rejection.bin)" ]] ||
+    fail "248-action rejection changed the receipt-bound version: $transcript"
+  [[ "$(frame_response_body_hex "$transcript" 02-scan-before.bin)" != \
+     "$(frame_response_body_hex "$transcript" 05-scan-after-success.bin)" ]] ||
+    fail "247-action receipt-bound batch left no scan state: $transcript"
+  [[ "$(frame_response_body_hex "$transcript" 05-scan-after-success.bin)" == \
+     "$(frame_response_body_hex "$transcript" 08-scan-after-rejection.bin)" ]] ||
+    fail "248-action rejection changed receipt-bound scan state: $transcript"
+done
+
+lease_frames="$scratch/lease-preflight-frames"
+mkdir -p "$lease_frames"
+(cd "$repo" &&
+  bb -cp out tests/wasm_embed/gen_lease_preflight_frames.clj \
+    "$lease_frames") >"$scratch/lease-preflight-generate.log" ||
+  fail "lease-preflight fixture generation failed"
+lease_space="$(<"$lease_frames/space.txt")"
+
+"$scratch/frames_driver" "$lease_frames" "$lease_frames/manifest.txt" \
+  "$lease_frames/manifest-empty.txt" "$lease_frames/manifest-empty.txt" \
+  "$scratch/native-lease-preflight.framlog" \
+  "$lease_space" >"$scratch/native-lease-preflight.transcript" ||
+  fail "native oracle failed the lease-response-preflight matrix"
+python3 "$repo/tests/wasm_embed/embedder.py" \
+  "$wasm_artifact/lib/libfram.wasm" "$lease_frames" \
+  "$lease_frames/manifest.txt" "$lease_frames/manifest-empty.txt" \
+  "$lease_frames/manifest-empty.txt" \
+  "$scratch/wasm-lease-preflight.framlog" \
+  "$scratch/wasm-lease-preflight.tally" \
+  "$lease_space" >"$scratch/wasm-lease-preflight.transcript" ||
+  fail "external wasm embedder failed the lease-response-preflight matrix"
+if ! cmp -s "$scratch/native-lease-preflight.transcript" \
+  "$scratch/wasm-lease-preflight.transcript"; then
+  fail "$(printf 'wasm lease-preflight answers diverge from the native oracle:\n%s' \
+    "$(diff "$scratch/native-lease-preflight.transcript" \
+      "$scratch/wasm-lease-preflight.transcript" |
+      cut -c1-160 | head -6)")"
+fi
+cmp -s "$scratch/native-lease-preflight.framlog" \
+  "$scratch/wasm-lease-preflight.framlog" ||
+  fail "the lease-preflight FRAMLOG differs between native and wasm32"
+
+for transcript in "$scratch/native-lease-preflight.transcript" \
+  "$scratch/wasm-lease-preflight.transcript"; do
+  frame_response_hex "$transcript" 03-lease-acquire-deep.bin |
+    grep -q "$depth_code_hex" ||
+    fail "deep lease acquire did not return typed term-depth-exceeded: $transcript"
+  [[ "$(frame_response_body_hex "$transcript" 01-version-before.bin)" == \
+     "$(frame_response_body_hex "$transcript" 04-version-after.bin)" ]] ||
+    fail "deep lease rejection changed the version: $transcript"
+  [[ "$(frame_response_body_hex "$transcript" 02-scan-before.bin)" == \
+     "$(frame_response_body_hex "$transcript" 05-scan-after.bin)" ]] ||
+    fail "deep lease rejection changed lease state: $transcript"
+done
+
+printf 'fram wasm embed smoke: PASS frames=%s depth-frames=%s long-space-frames=%s receipt-bound-frames=%s lease-preflight-frames=%s framlog=%s refused-wasi-calls=0 served-wasi=%s\n' \
   "$(grep -c '^frame ' "$scratch/wasm.transcript")" \
   "$(grep -c '^frame ' "$scratch/wasm-depth.transcript")" \
+  "$(grep -c '^frame ' "$scratch/wasm-long-space.transcript")" \
+  "$(grep -c '^frame ' "$scratch/wasm-mutation-receipt-bound.transcript")" \
+  "$(grep -c '^frame ' "$scratch/wasm-lease-preflight.transcript")" \
   "$(sha256sum "$scratch/wasm.framlog" | sed 's/ .*//')" \
   "$(awk '$1 == "served" { printf "%s=%s ", $2, $3 }' "$scratch/wasm.tally")"
