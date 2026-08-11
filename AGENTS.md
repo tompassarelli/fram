@@ -38,5 +38,19 @@ only to the revision checked; never treat it as evergreen.
 
 - 2026-08-11 — TypeScript npm package `6.0.3`, source revision
   `050880ce59e30b356b686bd3144efe24f875ebc8`, is Apache-2.0. FRAM uses it
-  only as the pinned CI compiler for the packed Node declaration-surface gate;
+  only as the pinned CI compiler for the packed Bun declaration-surface gate;
   it is not a shipped or runtime dependency.
+
+- 2026-08-11 — Bun `1.3.13` and `bun-types` `1.3.13`, source revision
+  `bf2e2cecf27e800962b1e7f03d66278f9d5d2e79`: Bun itself and `bun-types`
+  are MIT. Bun's official license also records statically linked
+  JavaScriptCore/WebKit under LGPL-2 and separately licensed linked libraries.
+  FRAM uses the pinned Bun binary as the official JavaScript-client runtime,
+  package tool, and test runner, and its type package only in the packed-client
+  CI gate; neither is shipped with `@tompassarelli/framrpc`. Do not vendor Bun
+  components without reviewing the applicable component license.
+
+- 2026-08-11 — `oven-sh/setup-bun` revision
+  `0c5077e51419868618aeaa5fe8019c62421857d6` is MIT. FRAM uses it only in
+  GitHub Actions to install the exact Bun toolchain; it is not a shipped or
+  runtime dependency.

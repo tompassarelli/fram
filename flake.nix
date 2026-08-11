@@ -435,6 +435,9 @@
       # tests/fram_snapshot_boot_test.sh SKIP, from the flake's own inputs.
       mkDevShell = pkgs: beaglePkg: beagleSource:
         let
+          bun =
+            assert pkgs.bun.version == "1.3.13";
+            pkgs.bun;
           # Bound by absolute path, never added to PATH: a cross cc-wrapper
           # setup hook rebinds CC, which the smoke's native oracle also needs.
           wasiCC = pkgs.pkgsCross.wasi32.stdenv.cc;
@@ -468,6 +471,8 @@
           # plain host cc never raises.
           hardeningDisable = [ "all" ];
           packages = [
+            # Official JavaScript client package, runtime, and test runner.
+            bun
             # clang links wasm32 objects through a bare `wasm-ld`.
             pkgs.lld
             # Reads the linked module for the wasm-embed seam ledger.

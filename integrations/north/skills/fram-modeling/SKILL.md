@@ -26,17 +26,17 @@ not a second semantic source of truth.
 ## 0. Re-ground before designing
 
 Read the current documentation named above, then inspect the typed definitions
-under `fram:src/fram/` and the official client under `fram:clients/node/`.
+under `fram:src/fram/` and the official client under `fram:clients/bun/`.
 The public data boundary is FRAMRPC v1, not an incidental internal Clojure
 function. The checkout CLI requires `FRAM_SPACE_ID` and routes data commands
-through `fram:bin/fram`; Node applications use `fram:clients/node/framrpc.mjs`.
+through `fram:bin/fram`; Bun applications use `fram:clients/bun/framrpc.mjs`.
 The native-first server is the default launcher; `jvm-dev` and `jvm-oracle` are
 explicit development routes.
 
 ## 1. The operating model
 
 - **Write through the public boundary.** `fram:bin/fram tell`, `retract`, and
-  `validate` are convenient CLI projections. For applications, use the Node
+  `validate` are convenient CLI projections. For applications, use the Bun
   client’s `assert`, `retract`, or atomic `batch` methods. Every mutation is
   append-only; replacing a value is a retraction plus an assertion in one
   transaction. Never edit FRAMLOG or generated `fram:out/` directly.
@@ -45,7 +45,7 @@ explicit development routes.
   old proposition remains addressable in history but is absent from the live
   view. Transaction sequence plus operation ordinal define logical order; wall
   clock time is metadata.
-- **Query immutable views.** Use `bin/fram query` or the Node client’s `query`,
+- **Query immutable views.** Use `bin/fram query` or the Bun client’s `query`,
   with `current`, `asOf`, or `since` selectors. Base relations are
   `triple(t1,t2,t3)` for live propositions and
   `occurrence(coordinate,action,proposition)` for history. Queries are
@@ -66,7 +66,7 @@ explicit development routes.
 - **Recursive terms and occurrence semantics:** `fram:README.md` and
   `fram:docs/ontology.md`.
 - **Structured recursive query:** `fram:docs/query-reference.md` and
-  `fram:clients/node/README.md`.
+  `fram:clients/bun/README.md`.
 - **Executable contracts:** `fram:tests/triple_kernel_test.clj`,
   `fram:tests/triple_query_test.clj`, and
   `fram:tests/native_rpc_server_test.clj`.

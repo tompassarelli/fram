@@ -54,7 +54,7 @@ type. See the [naming ledger](docs/naming.md).
 - [Ontology](docs/ontology.md) — modeling rules, the canonical normalized example, profiles, and semantic hints.
 - [Guarantees](docs/guarantees.md) — guarantees, concurrency, workload envelope, and client obligations.
 - [Naming ledger](docs/naming.md) — durable naming verdicts and rejected alternatives.
-- [Node FRAMRPC client](clients/node/README.md) — the complete direct builder and application data plane.
+- [Bun FRAMRPC client](clients/bun/README.md) — the complete direct builder and application data plane.
 - [Isolation and deployment](docs/isolation-and-deployment.md) — trust domains, the three deployment shapes, and the wasm embed contract.
 - [Coming from Datomic](docs/coming-from-datomic.md) — the datom-to-occurrence bridge, the exact-difference table, and the honest not-yet list.
 - [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
@@ -104,7 +104,7 @@ engine wire is binary FRAMRPC.
 - `bin/fram-mcp` is a JSON-RPC-over-stdio edge with exactly five public data
   tools: `tell`, `retract`, `show`, `ask`, and `validate`. Graph authoring and
   deployment control are separate sealed services.
-- `clients/node/framrpc.mjs` is the official zero-dependency Node client for
+- `clients/bun/framrpc.mjs` is the official zero-dependency Bun 1.3.13+ client for
   direct builder and application traffic. It preserves recursive Terms,
   batches, versions, occurrence replay, paging/cursors, snapshot selectors,
   and leases across all thirteen FRAMRPC v1 operations. Its optional

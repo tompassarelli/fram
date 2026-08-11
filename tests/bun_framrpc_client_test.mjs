@@ -1,10 +1,8 @@
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import {
   FRAMRPC_MAX_BATCH_ACTIONS,
   FramRpcError,
@@ -18,16 +16,16 @@ import {
   stringTerm,
   tripleQuery,
   tripleTerm,
-} from '../clients/node/framrpc.mjs';
+} from '../clients/bun/framrpc.mjs';
 import {
   SCHEMA_MAX_BATCH_ACTIONS,
   schemaClient,
-} from '../clients/node/schema.mjs';
+} from '../clients/bun/schema.mjs';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const root = resolve(import.meta.dir, '..');
 const checks = [];
 const I64_MIN = -(1n << 63n);
-const expectedEngine = process.env.FRAM_EXPECTED_ENGINE ?? 'rpc/jvm';
+const expectedEngine = Bun.env.FRAM_EXPECTED_ENGINE ?? 'rpc/jvm';
 
 async function check(label, body) {
   await body();
@@ -36,73 +34,116 @@ async function check(label, body) {
 }
 
 async function freePort() {
-  const server = createServer();
-  await new Promise((resolveListen, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolveListen);
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch() {
+      return new Response(null, { status: 204 });
+    },
   });
-  const { port } = server.address();
-  await new Promise((resolveClose, reject) => server.close(error => error ? reject(error) : resolveClose()));
+  const port = server.port;
+  await server.stop(true);
   return port;
 }
 
 async function startServer(port, log, space) {
-  const child = spawn(resolve(root, 'bin/fram-server'), ['serve', String(port), log, space], {
+  let output = '';
+  let ready = false;
+  let timer;
+  let resolveReady;
+  let rejectReady;
+  const startup = new Promise((resolveStartup, rejectStartup) => {
+    resolveReady = resolveStartup;
+    rejectReady = rejectStartup;
+  });
+  const child = Bun.spawn([
+    resolve(root, 'bin/fram-server'),
+    'serve',
+    String(port),
+    log,
+    space,
+  ], {
     cwd: root,
     env: {
-      ...process.env,
-      FRAM_SERVER_RUNTIME: process.env.FRAM_SERVER_RUNTIME ?? 'jvm-dev',
+      ...Bun.env,
+      FRAM_SERVER_RUNTIME: Bun.env.FRAM_SERVER_RUNTIME ?? 'jvm-dev',
       FRAM_SPACE_ID: space,
       FRAM_GRAPH_OPS_LOG: 'off',
       FRAM_SERVER_QUIET: '1',
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    onExit(_subprocess, exitCode, signalCode, error) {
+      if (!ready) {
+        clearTimeout(timer);
+        rejectReady(new Error(
+          `server exited during startup (${exitCode ?? signalCode})\n${output}`,
+          { cause: error },
+        ));
+      }
+    },
   });
-  let output = '';
-  let ready = false;
-  const startup = new Promise((resolveReady, reject) => {
-    const timer = setTimeout(() => reject(new Error(`server startup timeout\n${output}`)), 60000);
-    const consume = chunk => {
-      output += chunk.toString();
+
+  const consume = async stream => {
+    const decoder = new TextDecoder();
+    try {
+      for await (const chunk of stream) {
+        output += decoder.decode(chunk, { stream: true });
+        if (!ready && output.includes('Fram server listening')) {
+          ready = true;
+          clearTimeout(timer);
+          resolveReady();
+        }
+      }
+      output += decoder.decode();
       if (!ready && output.includes('Fram server listening')) {
         ready = true;
         clearTimeout(timer);
         resolveReady();
       }
-    };
-    child.stdout.on('data', consume);
-    child.stderr.on('data', consume);
-    child.once('exit', code => {
+    } catch (error) {
       if (!ready) {
         clearTimeout(timer);
-        reject(new Error(`server exited during startup (${code})\n${output}`));
+        rejectReady(error);
       }
-    });
-  });
-  await startup;
+    }
+  };
+  void consume(child.stdout);
+  void consume(child.stderr);
+  timer = setTimeout(
+    () => rejectReady(new Error(`server startup timeout\n${output}`)),
+    60000,
+  );
+  try {
+    await startup;
+  } catch (error) {
+    clearTimeout(timer);
+    if (child.exitCode === null) {
+      child.kill('SIGKILL');
+      await child.exited;
+    }
+    throw error;
+  }
   return {
     child,
     output: () => output,
     async stop() {
       if (child.exitCode !== null) return;
       child.kill('SIGTERM');
-      const exited = new Promise(resolveExit => child.once('exit', resolveExit));
-      const forced = new Promise(resolveForce => setTimeout(() => {
-        if (child.exitCode === null) child.kill('SIGKILL');
-        resolveForce();
-      }, 10000));
-      await Promise.race([exited, forced]);
+      const stopped = await Promise.race([
+        child.exited.then(() => true),
+        Bun.sleep(10000).then(() => false),
+      ]);
+      if (!stopped && child.exitCode === null) {
+        child.kill('SIGKILL');
+        await child.exited;
+      }
     },
   };
 }
 
-const tmp = await mkdtemp(resolve(tmpdir(), 'fram-node-client-'));
-const port = await freePort();
-const space = `node-client-${process.pid}`;
-const server = await startServer(port, resolve(tmp, 'history.framlog'), space);
-const fram = framClient({ host: '127.0.0.1', port, space, requestTimeoutMs: 30000 });
-
-try {
+async function exerciseClient(fram) {
   await check('Term constructors preserve i64, float, recursive Triple, and Instant identity', async () => {
     assert.equal(FRAMRPC_MAX_BATCH_ACTIONS, 247);
     assert.equal(SCHEMA_MAX_BATCH_ACTIONS, FRAMRPC_MAX_BATCH_ACTIONS);
@@ -410,11 +451,25 @@ try {
     );
   });
 
-  console.log(`\nnode FRAMRPC client: ${checks.length}/${checks.length} PASS`);
-} catch (error) {
-  console.error(`\nnode FRAMRPC client: FAILED\n${error.stack || error}\n${server.output()}`);
-  process.exitCode = 1;
-} finally {
-  await server.stop();
-  await rm(tmp, { recursive: true, force: true });
+  console.log(`\nBun FRAMRPC client: ${checks.length}/${checks.length} PASS`);
 }
+
+test('Bun FRAMRPC client matches the live server', async () => {
+  const tmp = await mkdtemp(resolve(tmpdir(), 'fram-bun-client-'));
+  let server;
+  try {
+    const port = await freePort();
+    const space = `bun-client-${process.pid}`;
+    server = await startServer(port, resolve(tmp, 'history.framlog'), space);
+    const fram = framClient({ host: '127.0.0.1', port, space, requestTimeoutMs: 30000 });
+    await exerciseClient(fram);
+  } catch (error) {
+    throw new Error(
+      `Bun FRAMRPC client failed\n${server?.output() ?? ''}`,
+      { cause: error },
+    );
+  } finally {
+    await server?.stop();
+    await rm(tmp, { recursive: true, force: true });
+  }
+}, 180000);

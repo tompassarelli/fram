@@ -67,8 +67,8 @@ version of the statement it quotes ([naming ledger](naming.md)).
 | `:db/ident`, attribute rename | `name!` / `resolve-name`; a rename keeps the original Term as identity, demotes the old spelling to an alias, and preflights collisions before mutating anything | **Present, stronger** |
 | `:db/cardinality` | Declared per predicate. `single` compiles **client-side** to "retract every live `(e, a, *)`, newest first, then assert" | **Declared, compiled by the caller — never enforced at the wire** |
 | `:db/valueType` | `value_kind` is `literal` or `ref`. Client-side projections (pull, export, classification) read it; no engine code checks it | **Declared, unchecked** |
-| `:db/unique` | The kernel and wire stay schema-neutral. The official Node [`@tompassarelli/framrpc/schema`](../clients/node/README.md#schema-aware-application-writes) entry point resolves an identity at one pinned snapshot, rejects duplicate owners, and protects its create/update batch with `expected-version` | **Application constraint, not a stored kernel invariant** |
-| Upsert by identity | `@tompassarelli/framrpc/schema` provides `createUnique`, `upsertUnique`, `updateUnique`, and multi-subject `updateUniqueMany`. Each attempt combines snapshot-pinned reads with one OCC-guarded atomic batch; a conflict retries from a fresh snapshot | **Present in the official Node application layer; no dedicated wire operation** |
+| `:db/unique` | The kernel and wire stay schema-neutral. The official Bun [`@tompassarelli/framrpc/schema`](../clients/bun/README.md#schema-aware-application-writes) entry point resolves an identity at one pinned snapshot, rejects duplicate owners, and protects its create/update batch with `expected-version` | **Application constraint, not a stored kernel invariant** |
+| Upsert by identity | `@tompassarelli/framrpc/schema` provides `createUnique`, `upsertUnique`, `updateUnique`, and multi-subject `updateUniqueMany`. Each attempt combines snapshot-pinned reads with one OCC-guarded atomic batch; a conflict retries from a fresh snapshot | **Present in the official Bun application layer; no dedicated wire operation** |
 | `:db/isComponent`, cascade retract | Nothing | **Absent** |
 | `retractEntity`, retract by pattern | Only exact-proposition retraction exists | **Absent** |
 | Retraction semantics | Withdraws the newest live equal occurrence, records its exact target, and a retraction with no live match is an explicit unchanged receipt that does not advance the version | **Different** |
@@ -82,7 +82,7 @@ version of the statement it quotes ([naming ledger](naming.md)).
 | Excision | Retention exists as sealed epochs and typed unavailable/expired errors, but active-log compaction and retention policy are ungated (`Q7`) | **Partial** |
 
 One structural note behind several rows: `fram.schema` is an **in-process**
-layer used by embedded callers and the JVM checkout. The official Node
+layer used by embedded callers and the JVM checkout. The official Bun
 `@tompassarelli/framrpc/schema` entry point is the corresponding remote
 application layer: it compiles cardinality replacement, uniqueness checks, and
 guarded updates into ordinary reads plus an `expected-version` FRAMRPC batch.
@@ -133,7 +133,7 @@ Each row is a work order, not a caveat to be argued away.
 - **Enforce mode.** Profiles are observe-only. Prospective admission and
   advisory lint agree for the declared rules (`P3`), but rejecting a violating
   write before append is unbuilt (`P2`, UNBACKED).
-- **Declarative, engine-wide uniqueness.** The official Node schema entry point
+- **Declarative, engine-wide uniqueness.** The official Bun schema entry point
   provides correct unique create/upsert and guarded updates for writes routed
   through it, including duplicate-owner rejection and conflict retries. Fram
   still has no stored uniqueness declaration or kernel admission rule, so
@@ -173,7 +173,7 @@ knowledge.
 
 | You want | Do this |
 |---|---|
-| Lookup refs | For schema-aware Node applications, use `@tompassarelli/framrpc/schema` identities and required-unique guards; duplicate owners reject instead of being selected arbitrarily. `resolve-name` remains the in-process registry convention, not an engine-wide uniqueness rule |
+| Lookup refs | For schema-aware Bun applications, use `@tompassarelli/framrpc/schema` identities and required-unique guards; duplicate owners reject instead of being selected arbitrarily. `resolve-name` remains the in-process registry convention, not an engine-wide uniqueness rule |
 | Entity API | The pull projection over an immutable store, in process |
 | `d/history` | The `occurrence` relation; follow `:kernel/withdraws` for what a retraction targeted |
 | `d/as-of` / `d/since` | The `:query/as-of` and `:query/since` selectors. Since restricts every base relation to its window, not just `occurrence` |

@@ -10,7 +10,7 @@ This is a library an application embeds, not a deployment. Nothing here is
 deployed on its own; `wrangler.example.toml` shows the shape your Worker needs.
 
 For a Worker that talks to a Fram *server* over FRAMRPC, use
-`clients/node` behind a shim instead — that is a different regime with
+`clients/bun` behind a shim instead — that is a different regime with
 different guarantees.
 
 ## Build the engine module

@@ -38,12 +38,12 @@ takes `:rpc/unit`, refuses a page cursor, writes the
 [snapshot image](glossary.md#storage-and-query) to the second storage object,
 appends nothing to the FRAMLOG, changes no store state, and answers sequence,
 watermark, stamp, fingerprint, and image byte count. It is an operator and
-embedder control, not application traffic: the JVM oracle route, the Node
+embedder control, not application traffic: the JVM oracle route, the Bun
 client, the shim, and `bin/fram` all stay at the thirteen data operations.
 [`../tests/fram_snapshot_boot_test.sh`](../tests/fram_snapshot_boot_test.sh)
 gates the operation and the boot route it feeds.
 
-The official zero-dependency [`clients/node/framrpc.mjs`](../clients/node/framrpc.mjs) client connects directly and exposes all thirteen operations with recursive Terms, batches, versions, snapshots, paging, replay, and leases.
+The official zero-dependency [`clients/bun/framrpc.mjs`](../clients/bun/framrpc.mjs) client requires Bun 1.3.13 or newer, connects directly, and exposes all thirteen operations with recursive Terms, batches, versions, snapshots, paging, replay, and leases.
 
 ## Deployment shapes
 
@@ -207,7 +207,7 @@ The patterns that keep growth proportional to change:
 ## Probes
 
 - [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj): recursive Term records and codec.
-- [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) and [`../tests/node_framrpc_client_test.mjs`](../tests/node_framrpc_client_test.mjs): real listener and official client.
+- [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) and [`../tests/bun_framrpc_client_test.mjs`](../tests/bun_framrpc_client_test.mjs): real listener and official client.
 - [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj): closed operation boundary.
 - [`../tests/writer_authority_test.clj`](../tests/writer_authority_test.clj): writer-authority and JVM-oracle compatibility behavior.
 - [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh): the wasm host-import regime end to end — pinned seams, native/wasm response and FRAMLOG byte identity, the snapshot image, the unpaged codec bound, and the WASI call tally.

@@ -1,9 +1,10 @@
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import {
   FRAMRPC_MAX_BATCH_ACTIONS,
   FramRpcError,
   framClient,
-} from '../clients/node/framrpc.mjs';
+} from '../clients/bun/framrpc.mjs';
 import {
   SCHEMA_MAX_BATCH_ACTIONS,
   SCHEMA_MAX_GUARD_CONCURRENCY,
@@ -11,7 +12,7 @@ import {
   SCHEMA_MAX_REQUIRE_UNIQUE,
   SchemaConstraintError,
   schemaClient,
-} from '../clients/node/schema.mjs';
+} from '../clients/bun/schema.mjs';
 
 const PAGE_A = Object.freeze(['string', '@page-a']);
 const PAGE_B = Object.freeze(['string', '@page-b']);
@@ -36,12 +37,8 @@ const DRAFT = Object.freeze(['keyword', 'draft']);
 const CANONICAL = Object.freeze(['keyword', 'canonical']);
 const REVISION_TEXT = Object.freeze(['string', 'Revision text']);
 
-const checks = [];
-
-async function check(label, body) {
-  await body();
-  checks.push(label);
-  console.log(`  [PASS] ${label}`);
+function check(label, body) {
+  test(label, body);
 }
 
 function rpcError(code, version, { retryable = false, message = code } = {}) {
@@ -225,7 +222,7 @@ function assertNoIo(calls) {
   assert.equal(calls.batch.length, 0);
 }
 
-await check('schema aliases the canonical FRAMRPC batch depth ceiling', async () => {
+check('schema aliases the canonical FRAMRPC batch depth ceiling', async () => {
   assert.equal(SCHEMA_MAX_BATCH_ACTIONS, FRAMRPC_MAX_BATCH_ACTIONS);
   assert.equal(FRAMRPC_MAX_BATCH_ACTIONS, 247);
   const disconnected = framClient({ space: 'batch-limit-test', port: 1 });
@@ -238,7 +235,7 @@ await check('schema aliases the canonical FRAMRPC batch depth ceiling', async ()
   );
 });
 
-await check('createUnique pins its identity read and guards creation with the same expected version', async () => {
+check('createUnique pins its identity read and guards creation with the same expected version', async () => {
   const fram = mockFram({ versions: [7n], queryResults: [[]] });
   const schema = schemaClient(fram.client);
 
@@ -261,7 +258,7 @@ await check('createUnique pins its identity read and guards creation with the sa
   ]);
 });
 
-await check('replaceSingle retracts every value from one pinned snapshot and asserts exactly once', async () => {
+check('replaceSingle retracts every value from one pinned snapshot and asserts exactly once', async () => {
   const fram = mockFram({
     versions: [11n],
     scanResults: [[
@@ -283,7 +280,7 @@ await check('replaceSingle retracts every value from one pinned snapshot and ass
   ]);
 });
 
-await check('replaceSingle preserves duplicate live occurrences across pinned pages', async () => {
+check('replaceSingle preserves duplicate live occurrences across pinned pages', async () => {
   const cursor = Object.freeze([
     'triple',
     Object.freeze(['keyword', 'schema/page']),
@@ -325,7 +322,7 @@ await check('replaceSingle preserves duplicate live occurrences across pinned pa
   ]);
 });
 
-await check('an initial scan/version skew retries without sending a stale batch', async () => {
+check('an initial scan/version skew retries without sending a stale batch', async () => {
   const fram = mockFram({
     versions: [70n, 71n],
     scanResults: [
@@ -356,7 +353,7 @@ await check('an initial scan/version skew retries without sending a stale batch'
   ]);
 });
 
-await check('an OCC race re-reads a fresh pinned snapshot before retrying', async () => {
+check('an OCC race re-reads a fresh pinned snapshot before retrying', async () => {
   const fram = mockFram({
     versions: [20n, 21n],
     queryResults: [[], []],
@@ -377,7 +374,7 @@ await check('an OCC race re-reads a fresh pinned snapshot before retrying', asyn
   );
 });
 
-await check('createUnique rejects an identity already owned by another subject without mutation', async () => {
+check('createUnique rejects an identity already owned by another subject without mutation', async () => {
   const fram = mockFram({ versions: [30n], queryResults: [[[PAGE_B]]] });
   const schema = schemaClient(fram.client);
 
@@ -394,7 +391,7 @@ await check('createUnique rejects an identity already owned by another subject w
   assert.equal(fram.calls.batch.length, 0);
 });
 
-await check('upsertUnique reuses the sole identity match as the write subject', async () => {
+check('upsertUnique reuses the sole identity match as the write subject', async () => {
   const fram = mockFram({ versions: [40n], queryResults: [[[PAGE_B]]] });
   const schema = schemaClient(fram.client);
 
@@ -412,7 +409,7 @@ await check('upsertUnique reuses the sole identity match as the write subject', 
   ]);
 });
 
-await check('upsertUnique rejects an identity resolved to multiple subjects', async () => {
+check('upsertUnique rejects an identity resolved to multiple subjects', async () => {
   const fram = mockFram({ versions: [41n], queryResults: [[[PAGE_B], [PAGE_C]]] });
   const schema = schemaClient(fram.client);
 
@@ -427,7 +424,7 @@ await check('upsertUnique rejects an identity resolved to multiple subjects', as
   assert.equal(fram.calls.batch.length, 0);
 });
 
-await check('updateUnique rejects a missing or duplicate source before scanning or writing', async () => {
+check('updateUnique rejects a missing or duplicate source before scanning or writing', async () => {
   const cases = [
     { owners: [], code: 'schema/identity-missing' },
     { owners: [[PAGE_A], [PAGE_B]], code: 'schema/duplicate-identity' },
@@ -448,7 +445,7 @@ await check('updateUnique rejects a missing or duplicate source before scanning 
   }
 });
 
-await check('updateUnique rejects allowedCurrent on a multi field before I/O', async () => {
+check('updateUnique rejects allowedCurrent on a multi field before I/O', async () => {
   const fram = mockFram();
   const schema = schemaClient(fram.client);
   await assert.rejects(
@@ -463,7 +460,7 @@ await check('updateUnique rejects allowedCurrent on a multi field before I/O', a
   assertNoIo(fram.calls);
 });
 
-await check('updateUnique rejects a field predicate equal to its identity predicate before I/O', async () => {
+check('updateUnique rejects a field predicate equal to its identity predicate before I/O', async () => {
   const fram = mockFram();
   const schema = schemaClient(fram.client);
   await assert.rejects(
@@ -474,7 +471,7 @@ await check('updateUnique rejects a field predicate equal to its identity predic
   assertNoIo(fram.calls);
 });
 
-await check('updateUnique requires each exact identity to resolve solely to its required subject', async () => {
+check('updateUnique requires each exact identity to resolve solely to its required subject', async () => {
   const cases = [
     { owners: [], code: 'schema/required-identity-missing' },
     { owners: [[PAGE_C]], code: 'schema/required-identity-missing' },
@@ -499,7 +496,7 @@ await check('updateUnique requires each exact identity to resolve solely to its 
   }
 });
 
-await check('single update accepts duplicate allowed current occurrences and replaces every occurrence at one version', async () => {
+check('single update accepts duplicate allowed current occurrences and replaces every occurrence at one version', async () => {
   const fram = mockFram({
     versions: [85n],
     queryResults: [[[PAGE_A]], [[PAGE_B]]],
@@ -528,7 +525,7 @@ await check('single update accepts duplicate allowed current occurrences and rep
   ]);
 });
 
-await check('allowedCurrent rejects absent, different, and multiple distinct current values without writing', async () => {
+check('allowedCurrent rejects absent, different, and multiple distinct current values without writing', async () => {
   const cases = [
     [],
     [tripleFixture(PAGE_A, TITLE, OLD_TITLE_B)],
@@ -557,7 +554,7 @@ await check('allowedCurrent rejects absent, different, and multiple distinct cur
   }
 });
 
-await check('multi update supports empty replacement and deduplicates exact desired Terms', async () => {
+check('multi update supports empty replacement and deduplicates exact desired Terms', async () => {
   const removing = mockFram({
     versions: [90n],
     queryResults: [[[PAGE_A]]],
@@ -593,7 +590,7 @@ await check('multi update supports empty replacement and deduplicates exact desi
   ]);
 });
 
-await check('an update OCC conflict reruns source, required identities, and current guards', async () => {
+check('an update OCC conflict reruns source, required identities, and current guards', async () => {
   const fram = mockFram({
     versions: [100n, 101n],
     queryResults: [
@@ -627,7 +624,7 @@ await check('an update OCC conflict reruns source, required identities, and curr
   ]);
 });
 
-await check('an update scan skew reruns every guard and never submits the stale attempt', async () => {
+check('an update scan skew reruns every guard and never submits the stale attempt', async () => {
   const fram = mockFram({
     versions: [110n, 111n],
     queryResults: [
@@ -661,7 +658,7 @@ await check('an update scan skew reruns every guard and never submits the stale 
   ]);
 });
 
-await check('updateUniqueMany replaces multiple fields and subjects in one pinned batch', async () => {
+check('updateUniqueMany replaces multiple fields and subjects in one pinned batch', async () => {
   const fram = mockFram({
     versions: [140n],
     queryResults: [[[REVISION_A]], [[PAGE_A]], [[PAGE_B]]],
@@ -690,7 +687,7 @@ await check('updateUniqueMany replaces multiple fields and subjects in one pinne
   ]);
 });
 
-await check('an exact single replacement is a no-op but duplicate occurrences still collapse', async () => {
+check('an exact single replacement is a no-op but duplicate occurrences still collapse', async () => {
   const exact = mockFram({
     versions: [141n],
     queryResults: [[[PAGE_A]]],
@@ -726,7 +723,7 @@ await check('an exact single replacement is a no-op but duplicate occurrences st
   ]);
 });
 
-await check('empty allowedCurrent is an absence CAS and one failed cell prevents the whole command', async () => {
+check('empty allowedCurrent is an absence CAS and one failed cell prevents the whole command', async () => {
   const fram = mockFram({
     versions: [143n],
     queryResults: [[[REVISION_A]], [[PAGE_A]]],
@@ -747,7 +744,7 @@ await check('empty allowedCurrent is an absence CAS and one failed cell prevents
   assert.equal(fram.calls.batch.length, 0);
 });
 
-await check('updateUniqueMany rejects duplicate resolved cells and cross-alias identity writes', async () => {
+check('updateUniqueMany rejects duplicate resolved cells and cross-alias identity writes', async () => {
   const duplicate = mockFram({
     versions: [144n],
     queryResults: [[[PAGE_A]], [[PAGE_A]]],
@@ -799,7 +796,7 @@ await check('updateUniqueMany rejects duplicate resolved cells and cross-alias i
   assert.equal(identityWrite.calls.batch.length, 0);
 });
 
-await check('a later multi-update scan skew replans every source and field', async () => {
+check('a later multi-update scan skew replans every source and field', async () => {
   const fram = mockFram({
     versions: [150n, 151n],
     queryResults: [
@@ -824,7 +821,7 @@ await check('a later multi-update scan skew replans every source and field', asy
   assert.equal(fram.calls.batch[0].options.expectedVersion, 151n);
 });
 
-await check('a multi-update conflict rereads and rebuilds the whole command', async () => {
+check('a multi-update conflict rereads and rebuilds the whole command', async () => {
   const fram = mockFram({
     versions: [152n, 153n],
     queryResults: [
@@ -854,7 +851,7 @@ await check('a multi-update conflict rereads and rebuilds the whole command', as
   ]);
 });
 
-await check('updateUniqueMany enforces the aggregate 247-action boundary without splitting', async () => {
+check('updateUniqueMany enforces the aggregate 247-action boundary without splitting', async () => {
   const current = (subject, predicate, count) => Array.from(
     { length: count },
     (_, index) => tripleFixture(subject, predicate, ['integer', String(index)]),
@@ -895,7 +892,7 @@ await check('updateUniqueMany enforces the aggregate 247-action boundary without
   assert.equal(overflow.calls.batch.length, 0);
 });
 
-await check('updateUniqueMany validates structure before I/O and skips an empty action plan', async () => {
+check('updateUniqueMany validates structure before I/O and skips an empty action plan', async () => {
   for (const input of [
     { updates: [] },
     { updates: [{ identity: { predicate: SLUG, value: HOME }, fields: [] }] },
@@ -943,7 +940,7 @@ await check('updateUniqueMany validates structure before I/O and skips an empty 
   assert.equal(empty.calls.batch.length, 0);
 });
 
-await check('createUnique checks required identities at the same version as creation', async () => {
+check('createUnique checks required identities at the same version as creation', async () => {
   const fram = mockFram({
     versions: [120n],
     queryResults: [[], [[PAGE_B]]],
@@ -964,7 +961,7 @@ await check('createUnique checks required identities at the same version as crea
   assert.equal(fram.calls.batch[0].options.expectedVersion, 120n);
 });
 
-await check('createUnique rejects more than 247 batch actions before mutation', async () => {
+check('createUnique rejects more than 247 batch actions before mutation', async () => {
   const fields = Array.from({ length: 247 }, (_, index) => ({
     predicate: Object.freeze(['keyword', `field/${index}`]),
     value: Object.freeze(['integer', String(index)]),
@@ -985,7 +982,7 @@ await check('createUnique rejects more than 247 batch actions before mutation', 
   assertNoIo(fram.calls);
 });
 
-await check('upsertUnique rejects an oversized desired field list before I/O', async () => {
+check('upsertUnique rejects an oversized desired field list before I/O', async () => {
   const fields = Array.from({ length: SCHEMA_MAX_BATCH_ACTIONS }, (_, index) => ({
     predicate: Object.freeze(['keyword', `upsert-field/${index}`]),
     value: Object.freeze(['integer', String(index)]),
@@ -1006,7 +1003,7 @@ await check('upsertUnique rejects an oversized desired field list before I/O', a
   assertNoIo(fram.calls);
 });
 
-await check('updateUnique rejects an oversized desired value list before I/O', async () => {
+check('updateUnique rejects an oversized desired value list before I/O', async () => {
   const values = Array.from(
     { length: SCHEMA_MAX_BATCH_ACTIONS + 1 },
     (_, index) => Object.freeze(['integer', String(index)]),
@@ -1025,7 +1022,7 @@ await check('updateUnique rejects an oversized desired value list before I/O', a
   assertNoIo(fram.calls);
 });
 
-await check('updateUnique rejects an oversized allowedCurrent guard before I/O', async () => {
+check('updateUnique rejects an oversized allowedCurrent guard before I/O', async () => {
   const allowedCurrent = Array.from(
     { length: SCHEMA_MAX_BATCH_ACTIONS + 1 },
     (_, index) => Object.freeze(['integer', String(index)]),
@@ -1041,7 +1038,7 @@ await check('updateUnique rejects an oversized allowedCurrent guard before I/O',
   assertNoIo(fram.calls);
 });
 
-await check('schema mutations reject an oversized requireUnique list before I/O', async () => {
+check('schema mutations reject an oversized requireUnique list before I/O', async () => {
   const requireUnique = Array.from(
     { length: SCHEMA_MAX_REQUIRE_UNIQUE + 1 },
     () => requiredAuthor(),
@@ -1062,7 +1059,7 @@ await check('schema mutations reject an oversized requireUnique list before I/O'
   assertNoIo(fram.calls);
 });
 
-await check('requireUnique resolution keeps query concurrency bounded', async () => {
+check('requireUnique resolution keeps query concurrency bounded', async () => {
   const version = 130n;
   const requireUnique = Array.from(
     { length: SCHEMA_MAX_GUARD_CONCURRENCY * 2 + 1 },
@@ -1135,7 +1132,7 @@ await check('requireUnique resolution keeps query concurrency bounded', async ()
   });
 });
 
-await check('upsertUnique keeps single-field scan concurrency bounded', async () => {
+check('upsertUnique keeps single-field scan concurrency bounded', async () => {
   const version = 131n;
   const fields = Array.from(
     { length: SCHEMA_MAX_GUARD_CONCURRENCY * 2 + 1 },
@@ -1201,7 +1198,7 @@ await check('upsertUnique keeps single-field scan concurrency bounded', async ()
   assert.deepEqual(calls, { version: 1, query: 1, batch: 1 });
 });
 
-await check('schema reads reject repeated cursors and pages beyond their ceiling', async () => {
+check('schema reads reject repeated cursors and pages beyond their ceiling', async () => {
   const cursorA = Object.freeze(['keyword', 'schema/cursor-a']);
   const cursorB = Object.freeze(['keyword', 'schema/cursor-b']);
   const repeated = mockFram({
@@ -1244,7 +1241,7 @@ await check('schema reads reject repeated cursors and pages beyond their ceiling
   assert.equal(overPages.calls.batch.length, 0);
 });
 
-await check('two scan pages can expose the 248th occurrence action-limit sentinel', async () => {
+check('two scan pages can expose the 248th occurrence action-limit sentinel', async () => {
   const cursor = Object.freeze(['keyword', 'schema/cursor-overflow']);
   const occurrence = tripleFixture(PAGE_A, TAG, WIKI_TAG);
   const fram = mockFram({
@@ -1275,7 +1272,7 @@ await check('two scan pages can expose the 248th occurrence action-limit sentine
   assert.equal(fram.calls.batch.length, 0);
 });
 
-await check('non-conflict write errors propagate unchanged and are not retried', async () => {
+check('non-conflict write errors propagate unchanged and are not retried', async () => {
   const failure = rpcError('rpc/unavailable', 60n, {
     retryable: true,
     message: 'server unavailable',
@@ -1298,5 +1295,3 @@ await check('non-conflict write errors propagate unchanged and are not retried',
   assert.equal(fram.calls.version.length, 1);
   assert.equal(fram.calls.batch.length, 1);
 });
-
-console.log(`node schema client: ${checks.length} checks passed`);

@@ -1,6 +1,6 @@
 # `@tompassarelli/framrpc`
 
-The official Node.js client for Fram's binary FRAMRPC v1 data plane. It is an
+The official Bun client for Fram's binary FRAMRPC v1 data plane. It is an
 ES module with no runtime dependencies and exposes all thirteen frozen native
 operations.
 
@@ -11,10 +11,10 @@ pagination. `fram-mcp` remains the narrower agent-facing JSON-RPC surface.
 ## Install from a Fram checkout
 
 ```console
-$ npm install /path/to/fram/clients/node
+$ bun add /path/to/fram/clients/bun
 ```
 
-Node.js 20 or newer is required.
+Bun 1.3.13 or newer is required.
 
 ## Connect
 
@@ -112,7 +112,7 @@ The cursor pins the original snapshot; a continuation reports that pinned
 
 Terms use the same exact tagged arrays as Fram's JSON edge:
 
-| Fram type | Node representation |
+| Fram type | Bun representation |
 |---|---|
 | String | `['string', value]` |
 | Int | `['integer', canonicalDecimal]` |
