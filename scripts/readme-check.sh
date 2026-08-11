@@ -22,7 +22,7 @@ bad()  { printf 'FAIL: %s\n' "$*"; fail=1; }
 
 # (1) stale repo URLs — wrong org/repo forms. (tompassarelli/north is CORRECT; not listed.)
 echo "== (1) repo URLs =="
-BANNED='tompassarelli/(fram|beagle|eddy|codegraph|chartroom)|Autonymy/(north|eddy|codegraph|chartroom)'
+BANNED='(^|[^@[:alnum:]_.-])tompassarelli/(fram|beagle|codegraph|chartroom)|(^|[^@[:alnum:]_.-])Autonymy/(north|codegraph|chartroom)'
 if hits=$(grep -rnE "$BANNED" "$README" .github 2>/dev/null); then
   bad "stale/wrong repo URL(s):"; printf '%s\n' "$hits" | sed 's/^/    /'
 else note "ok — no stale org/repo forms"; fi

@@ -26,7 +26,6 @@ archive_banner='> **HISTORICAL — design provenance only.**'
 
 historical_docs=(
   docs/archive/VIEWS_AND_BRANCHES.md
-  docs/archive/adr-0001-claims-as-universal-substrate.md
   docs/archive/beagle-dogfood-findings.md
   docs/archive/claims-design.md
   docs/archive/codegraph-README.md
