@@ -10,8 +10,8 @@
 #   (3) bin entrypoints   — every `bin/fram-*` named in README must exist + be executable.
 #   (4) referenced paths  — every relative link/path in README must exist.
 #   (5) licensing        — canonical texts, chooser, README, and package metadata agree.
-#   (6) the core loop runs — import / validate / call / query / export on a SCRATCH copy
-#                            of threads/ (the canonical facts.log is never touched).
+#   (6) the core loop runs — README data verbs against an isolated FRAMRPC server
+#                            and scratch FRAMLOG (canonical state is never touched).
 #   --local additionally checks the toolchain (bb / clojure / java) is on PATH.
 set -uo pipefail
 cd "$(dirname "$0")/.."                      # repo root
@@ -60,7 +60,7 @@ expect_text() {
   else bad "$1 is missing: $2"; fi
 }
 expect_sha LICENSE 51bd50bac830296b4e643a0fb74995b6a36592aca2a039c5587cdae0fa4115dd
-expect_sha LICENSE-APACHE 481d039b296107335037f88f33e435b75f931cf3605f222d5c3c634a4b70ec5f
+expect_sha LICENSE-APACHE 997f18d91914283787c07673bad98cfdeb38628e02c9a7e07a3b21d99a4b86d7
 expect_sha LICENSE-MIT 51adc9bf9e72be82d08c2a694bcca11a6ac1b9e520bb537e1100a158d7d0d06d
 expect_sha codegraph/LICENSE 361f8dc2cdf2e37f8ec56468127d0f54d679b78f450ca72ac0b226a46cccc3de
 expect_sha codegraph/LICENSE-APACHE cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
@@ -78,19 +78,103 @@ expect_text README.md 'license-MIT_OR_Apache--2.0-blue.svg'
 expect_text deploy/cloudflare/package.json '"license": "MIT OR Apache-2.0"'
 expect_text flake.nix 'license = with licenses; [ mit asl20 ];'
 
-# (6) the core loop runs — on a scratch copy; canonical facts.log untouched.
-echo "== (6) core engine loop (scratch copy) =="
+# (6) the current README data loop runs against an isolated FRAMRPC server.
+echo "== (6) core engine loop (scratch FRAMRPC server) =="
 WD=$(mktemp -d)
-trap 'rm -rf "$WD"' EXIT
-cp -r threads "$WD/threads"
-export FRAM_THREADS="$WD/threads" FRAM_LOG="$WD/facts.log"
-run() { echo "   \$ $*"; if "$@" >/dev/null 2>&1; then note "ok"; else bad "command failed: $*"; fi; }
-run bin/fram import
-run bin/fram validate
-ID=$(grep -hoE '^@[0-9-]+' "$WD"/threads/*.md 2>/dev/null | head -1 | tr -d '@')
-[ -n "${ID:-}" ] && run bin/fram call title-of "{:id \"$ID\"}"
-run bin/fram query '{:find "po" :rules [{:head {:rel "po" :args [{:var "x"} {:var "y"}]} :body [{:rel "triple" :args [{:var "x"} "part_of" {:var "y"}]}]}]}'
-run bin/fram export "$WD/regen"
+server_pid=""
+cleanup() {
+  if [[ -n "$server_pid" ]] && kill -0 "$server_pid" 2>/dev/null; then
+    kill -TERM "$server_pid" 2>/dev/null || true
+    for _ in $(seq 1 100); do
+      kill -0 "$server_pid" 2>/dev/null || break
+      sleep 0.05
+    done
+    if kill -0 "$server_pid" 2>/dev/null; then
+      kill -KILL "$server_pid" 2>/dev/null || true
+    fi
+  fi
+  if [[ -n "$server_pid" ]]; then wait "$server_pid" 2>/dev/null || true; fi
+  server_pid=""
+  rm -rf "${WD:?}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+export FRAM_SERVER_PORT
+FRAM_SERVER_PORT=$(bb -e '(with-open [socket (java.net.ServerSocket. 0)] (print (.getLocalPort socket)))')
+export FRAM_SPACE_ID=readme-check-space
+export FRAM_LOG="$WD/history.framlog"
+unset FRAM_TELEMETRY_LOG FRAM_SERVER_TLS_KEYSTORE FRAM_SERVER_TLS_TRUSTSTORE \
+  FRAM_SERVER_TLS_PASS FRAM_SERVER_TLS_PASS_FILE
+export FRAM_SERVER_CONNECT=127.0.0.1
+export FRAM_SERVER_CONNECT_TIMEOUT_MS=500
+export FRAM_SERVER_HANDSHAKE_TIMEOUT_MS=500
+export FRAM_SERVER_READ_TIMEOUT_MS=2000
+env -u FRAM_JAVA -u FRAM_SERVER_CLASSPATH_FILE -u FRAM_LISTEN_FD \
+  FRAM_SERVER_RUNTIME=jvm-dev FRAM_BIND=127.0.0.1 FRAM_SNAPSHOT_BOOT=0 \
+  FRAM_SERVER_QUIET=1 FRAM_PACKAGED=0 \
+  bin/fram-server serve "$FRAM_SERVER_PORT" "$FRAM_LOG" "$FRAM_SPACE_ID" \
+  >"$WD/server.log" 2>&1 &
+server_pid=$!
+
+ready=0
+startup_deadline=$((SECONDS + 30))
+while (( SECONDS < startup_deadline )); do
+  if version=$(timeout --foreground 1s bin/fram version 2>/dev/null) &&
+     [[ "$version" == "0" ]]; then
+    ready=1
+    break
+  fi
+  if ! kill -0 "$server_pid" 2>/dev/null; then break; fi
+  sleep 0.05
+done
+
+if [[ "$ready" -ne 1 ]]; then
+  bad "scratch FRAMRPC server did not become ready"
+  sed -n '1,80p' "$WD/server.log" | sed 's/^/    /'
+else
+  run_contains() {
+    local expected="$1"
+    shift
+    echo "   \$ $*"
+    if ! "$@" >"$WD/command.out" 2>&1; then
+      bad "command failed: $*"
+      sed -n '1,40p' "$WD/command.out" | sed 's/^/    /'
+    elif grep -Fq -- "$expected" "$WD/command.out"; then
+      note "ok"
+    else
+      bad "command output did not contain '$expected': $*"
+      sed -n '1,40p' "$WD/command.out" | sed 's/^/    /'
+    fi
+  }
+  run_exact() {
+    local expected="$1"
+    shift
+    echo "   \$ $*"
+    if ! "$@" >"$WD/command.out" 2>&1; then
+      bad "command failed: $*"
+      sed -n '1,40p' "$WD/command.out" | sed 's/^/    /'
+    elif grep -Fxq -- "$expected" "$WD/command.out"; then
+      note "ok"
+    else
+      bad "command output was not exactly '$expected': $*"
+      sed -n '1,40p' "$WD/command.out" | sed 's/^/    /'
+    fi
+  }
+  run_contains 'committed via server (v1)' \
+    bin/fram tell :email :grouped-under :contact
+  run_contains 'committed via server (v2)' \
+    bin/fram tell Alice :email alice@example.com
+  run_contains ':email  alice@example.com' bin/fram show Alice
+  run_contains '["@Alice" "alice@example.com"]' \
+    bin/fram query '{:find "emails" :rules [{:head {:rel "emails" :args [{:var "who"} {:var "email"}]} :body [{:rel "triple" :args [{:var "who"} :email {:var "email"}]}]}]}'
+  run_contains ':kernel/asserts' bin/fram occurrences
+  run_exact valid bin/fram validate
+  run_contains 'committed via server (v3)' \
+    bin/fram retract Alice :email alice@example.com
+  run_exact 3 bin/fram version
+fi
 
 # --local: toolchain present
 if [ "${1:-}" = "--local" ]; then

@@ -2,6 +2,29 @@
 # Fram CLI. Public data commands require FRAM_SPACE_ID and speak FRAMRPC.
 # Legacy migration/projection commands retain their explicit local-file setup.
 HERE="${BASH_SOURCE[0]%/*}/.."
+
+usage() {
+  printf '%s\n' \
+    'fram usage:' \
+    '  tell <subject> <slot> <value>' \
+    '  retract <subject> <slot> <value> (alias: untell)' \
+    '  tell-existing <subject> <slot> <value>' \
+    '  retract-existing <subject> <slot> <value> (alias: untell-existing)' \
+    '  show <subject>' \
+    '  query <edn>' \
+    '  scan <t1|_> <t2|_> <t3|_>' \
+    '  occurrences' \
+    '  version | status | validate' \
+    '  selfcheck --deep'
+}
+
+case "${1:-}" in
+  ""|-h|--help)
+    usage
+    exit 0
+    ;;
+esac
+
 # Deep server/recovery selfcheck is a bash-orchestrated command (boots isolated
 # scratch coordinators with trap-based cleanup) — dispatch before the bb exec.
 if [[ "${1:-}" == "selfcheck" ]]; then
