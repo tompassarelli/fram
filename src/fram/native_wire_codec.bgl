@@ -366,9 +366,7 @@
            :rpc/invalid)]))
     :rpc/invalid))
 
-(defn read-term!
-  [decoder: Decoder
-   depth: Int] -> t/Term
+(defn read-term! [decoder: Decoder depth: Int] -> t/Term
   (read-term-limited! decoder depth rpc-v1-max-string-bytes
                       rpc-v1-max-term-nodes rpc-v1-max-term-depth))
 

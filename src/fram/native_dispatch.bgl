@@ -321,9 +321,7 @@
         (doseq [frame frames] (store/replay-transaction! copy frame))
         copy))))
 
-(defn scan-rotation!
-  [session: schema/Session
-   version: Int] -> rot/Rotation
+(defn scan-rotation! [session: schema/Session version: Int] -> rot/Rotation
   (let [root (schema/store-of session)]
     (if (= version (store/current-sequence root))
       (schema/view session)
