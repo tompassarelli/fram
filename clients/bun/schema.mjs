@@ -2,7 +2,7 @@ import {
   FRAMRPC_MAX_BATCH_ACTIONS,
   FramRpcError,
   term,
-} from './framrpc.mjs';
+} from './framrpc-core.mjs';
 
 export const SCHEMA_MAX_BATCH_ACTIONS = FRAMRPC_MAX_BATCH_ACTIONS;
 export const SCHEMA_MAX_CONFLICT_RETRIES = 32;

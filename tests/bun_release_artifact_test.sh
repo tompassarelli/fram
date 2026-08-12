@@ -126,6 +126,7 @@ bun -e '
   const root = resolve(Bun.argv.at(-1));
   const allowedBare = new Set([
     "@tompassarelli/framrpc",
+    "@tompassarelli/framrpc/core",
     "fs",
     "fs/promises",
     "path",
@@ -149,6 +150,60 @@ bun -e '
     }
   }
 ' "$extract/package"
+
+# The schema entry is part of the Worker surface. Walk its packed, transitive
+# module graph rather than trusting a source-tree filename check: neither the
+# Bun TCP entry nor any bare runtime dependency may be reachable from schema or
+# core. Then make Bun accept the complete namespaces as a browser bundle, which
+# exercises the same no-Node-builtins boundary a Worker deployment needs.
+# The following single-quoted string is Bun source, not shell.
+# shellcheck disable=SC2016
+bun -e '
+  import { dirname, relative, resolve } from "node:path";
+  const root = resolve(Bun.argv.at(-1));
+  const pending = ["schema.mjs", "framrpc-core.mjs"];
+  const visited = new Set();
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (visited.has(entry)) continue;
+    visited.add(entry);
+    const path = resolve(root, entry);
+    const source = await Bun.file(path).text();
+    const edges = source.matchAll(/\b(?:import|export)\s+(?:[^"\x27]*?\s+from\s*)?["\x27]([^"\x27]+)["\x27]/g);
+    for (const edge of edges) {
+      const specifier = edge[1];
+      if (!specifier.startsWith(".")) {
+        throw new Error(`${entry}: Worker graph reaches bare import ${specifier}`);
+      }
+      const target = resolve(dirname(path), specifier);
+      const member = relative(root, target);
+      if (member.startsWith("..") || member === "framrpc.mjs") {
+        throw new Error(`${entry}: Worker graph reaches forbidden module ${member}`);
+      }
+      if (!(await Bun.file(target).exists())) {
+        throw new Error(`${entry}: Worker graph has unresolved module ${specifier}`);
+      }
+      pending.push(member);
+    }
+  }
+  if (!visited.has("schema.mjs") || !visited.has("framrpc-core.mjs")) {
+    throw new Error("packed Worker graph omitted schema or the runtime-neutral core");
+  }
+' "$extract/package"
+
+cat >"$extract/package/worker-probe.mjs" <<'PROBE'
+import * as core from './framrpc-core.mjs';
+import * as schema from './schema.mjs';
+globalThis.__framWorkerProbe = [Object.keys(core), Object.keys(schema)];
+PROBE
+bun build "$extract/package/worker-probe.mjs" --target=browser \
+  --outfile="$scratch/framrpc-worker-probe.js" >/dev/null
+[[ -s "$scratch/framrpc-worker-probe.js" ]] ||
+  fail "schema and core did not produce a browser-target bundle"
+! grep -Fq 'node:net' "$scratch/framrpc-worker-probe.js" ||
+  fail "schema and core browser bundle retained node:net"
+! grep -Fq 'framrpc.mjs' "$scratch/framrpc-worker-probe.js" ||
+  fail "schema and core browser bundle retained the TCP entry"
 
 # Install the local tarball with an empty cache, offline mode, and an unusable
 # registry. Successful root and schema imports therefore come from the artifact

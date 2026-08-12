@@ -4,9 +4,11 @@ import type {
   MutationActionResult,
   Term,
   TermInput,
-} from '@tompassarelli/framrpc';
+} from '@tompassarelli/framrpc/core';
 
-export { FRAMRPC_MAX_BATCH_ACTIONS as SCHEMA_MAX_BATCH_ACTIONS } from '@tompassarelli/framrpc';
+export {
+  FRAMRPC_MAX_BATCH_ACTIONS as SCHEMA_MAX_BATCH_ACTIONS,
+} from '@tompassarelli/framrpc/core';
 export const SCHEMA_MAX_CONFLICT_RETRIES: 32;
 export const SCHEMA_MAX_REQUIRE_UNIQUE: 247;
 export const SCHEMA_MAX_GUARD_CONCURRENCY: 8;
