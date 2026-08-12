@@ -587,7 +587,9 @@
                      (term-store/replay-transaction! root frame)
                      (recur (deref (wire/decoder-position decoder))))]))]))]))))
 
-(defn boot-framlog! [configured-space-id: String bytes: ByteSource] -> BootResult
+(defn boot-framlog!
+  [configured-space-id: String
+   bytes: ByteSource] -> BootResult
   (cond
     [(= 0 (count bytes))
      (let [header (encode-header! configured-space-id)]

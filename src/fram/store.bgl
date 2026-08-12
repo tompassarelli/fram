@@ -137,6 +137,16 @@
                         (quot log-bytes 32)
                         (quot log-bytes 128)))
 
+;; A fold-open store keeps active positions in nested mutable cells. A fork
+;; owns those cells separately so either writer can advance without changing
+;; the other store's liveness; their persistent position vectors stay shared.
+(defn- fork-position-cells
+  [cells: (Vec (Atom (Vec Int)))] -> (Vec (Atom (Vec Int)))
+  (mapv
+   (fn [cell: (Atom (Vec Int))] -> (Atom (Vec Int))
+     (atom (deref cell)))
+   cells))
+
 ;; A store is an identity, so a caller that wants the current state as a frozen
 ;; rollback point or as a private scratch takes a fork: fresh cells over the
 ;; same persistent values. The slot tables stay shared exactly as they were
@@ -152,7 +162,7 @@
    (atom (store-operations store))
    (atom (store-withdrawal-targets store))
    (atom (store-active-buckets store))
-   (atom (store-active-cells store))
+   (atom (fork-position-cells (store-active-cells store)))
    (atom (store-fold-open store))
    (atom (store-atom-slots store))
    (atom (store-triple-slots store))

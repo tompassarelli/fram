@@ -119,6 +119,8 @@
 (defrecord ActiveBucket [triple-handle: Int positions: (Vec Int)])
 (defrecord CommitOperation [action: Keyword proposition: Triple])
 (defrecord TransactionFrame [sequence: Int operations: (Vec CommitOperation)])
+;; While fold-open, active-cells carries every bucket's positions and the
+;; ActiveBucket rows carry only their handle.
 ;; Every mutable field is a cell, so the record itself is written once and no
 ;; append ever copies it. A TermStore is therefore an identity, not a value:
 ;; one owner mutates it, and a second store is built by loading a dump.
@@ -131,8 +133,6 @@
    operations: (Atom (Vec OperationRow))
    withdrawal-targets: (Atom (Vec Int))
    active-buckets: (Atom (Vec ActiveBucket))
-   ;; While fold-open these carry every bucket's positions and the
-   ;; ActiveBucket rows carry only their handle.
    active-cells: (Atom (Vec (Atom (Vec Int))))
    fold-open: (Atom Bool)
    atom-slots: (Atom slots/TermSlots)

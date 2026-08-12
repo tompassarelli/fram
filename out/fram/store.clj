@@ -121,8 +121,11 @@
 (defn new-term-store-for-log [^String space-id log-bytes]
   (new-term-store-sized space-id (quot log-bytes 64) (quot log-bytes 32) (quot log-bytes 128)))
 
+(defn- fork-position-cells [cells]
+  (mapv (fn [cell] (atom (deref cell))) cells))
+
 (defn fork-state [store]
-  (t/->TermStore (t/termstore-space-id store) (atom (store-next-sequence store)) (atom (store-atoms store)) (atom (store-triples store)) (atom (store-transactions store)) (atom (store-operations store)) (atom (store-withdrawal-targets store)) (atom (store-active-buckets store)) (atom (store-active-cells store)) (atom (store-fold-open store)) (atom (store-atom-slots store)) (atom (store-triple-slots store)) (atom (store-active-slots store))))
+  (t/->TermStore (t/termstore-space-id store) (atom (store-next-sequence store)) (atom (store-atoms store)) (atom (store-triples store)) (atom (store-transactions store)) (atom (store-operations store)) (atom (store-withdrawal-targets store)) (atom (store-active-buckets store)) (atom (fork-position-cells (store-active-cells store))) (atom (store-fold-open store)) (atom (store-atom-slots store)) (atom (store-triple-slots store)) (atom (store-active-slots store))))
 
 (defn fork-store [ctx]
   (atom (fork-state (deref ctx))))

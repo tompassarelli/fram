@@ -133,6 +133,28 @@
 (def growth-restored (store/new-term-store "growth-space"))
 (store/load-term-store! growth-restored growth-dump)
 
+;; A fork taken during a fused replay owns its nested liveness cells. The two
+;; writers then reuse the same private row positions through shared append-only
+;; slot candidates; full-row and full-handle confirmation keeps them isolated.
+(def fork-proposition (t/triple "fork" :state "shared"))
+(def fork-parent-only (t/triple "fork" :parent "only"))
+(def fork-child-only (t/triple "fork" :child "only"))
+(def fork-parent (store/new-term-store "fork-space"))
+(store/commit-transaction! fork-parent
+                           [(store/assert-operation fork-proposition)])
+(store/open-fold! fork-parent)
+(def fork-child (store/fork-store fork-parent))
+(store/commit-transaction! fork-child
+                           [(store/retract-operation fork-proposition)])
+(def fork-parent-after-child-version (store/current-sequence fork-parent))
+(def fork-parent-after-child-live (store/live-propositions fork-parent))
+(store/commit-transaction! fork-child
+                           [(store/assert-operation fork-child-only)])
+(store/commit-transaction! fork-parent
+                           [(store/assert-operation fork-parent-only)])
+(store/close-fold! fork-parent)
+(store/close-fold! fork-child)
+
 (def checks
   [["store carries immutable SpaceId" (= "msa-space" (store/space-id ctx))]
    ["first commit receives logical transaction sequence 1"
@@ -246,6 +268,16 @@
          (= growth-dump (store/dump-term-store growth-restored))
          (= (store/semantic-history growth-context)
             (store/semantic-history growth-restored)))]
+   ["a fold-open child cannot change its parent's version or liveness"
+    (and (= 1 fork-parent-after-child-version)
+         (= [fork-proposition] fork-parent-after-child-live))]
+   ["divergent forks isolate liveness while reusing private row positions"
+    (and (= 2 (store/current-sequence fork-parent))
+         (= 3 (store/current-sequence fork-child))
+         (= #{fork-proposition fork-parent-only}
+            (set (store/live-propositions fork-parent)))
+         (= #{fork-child-only}
+            (set (store/live-propositions fork-child))))]
    ["replay rejects nonmonotonic transaction coordinates"
     (= :nonmonotonic-transaction-sequence
        (error-type #(store/replay-transaction!
