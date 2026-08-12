@@ -451,6 +451,125 @@ async function exerciseClient(fram) {
     );
   });
 
+  await check('schema mixed transactions create planned graphs and update existing owners atomically', async () => {
+    const schema = schemaClient(fram);
+    const page = tripleTerm(keywordTerm('entity'), keywordTerm('page'), stringTerm('home'));
+    const slug = tripleTerm(keywordTerm('field'), keywordTerm('page'), keywordTerm('slug'));
+    const home = stringTerm('home');
+    const temporary = keywordTerm('page/temporary-title');
+    const temporaryValue = stringTerm('remove me');
+    const graphId = keywordTerm('graph/id');
+    const graphNext = keywordTerm('graph/next');
+    const requestId = keywordTerm('request/id');
+    const requestRoot = keywordTerm('request/root');
+    const claim = stringTerm('@request-graph-1');
+    const claimValue = stringTerm('graph-request-1');
+    const nodeA = stringTerm('@graph-a');
+    const nodeB = stringTerm('@graph-b');
+    const nodeC = stringTerm('@graph-c');
+    const idA = stringTerm('a');
+    const idB = stringTerm('b');
+    const idC = stringTerm('c');
+
+    await fram.assert(page, temporary, temporaryValue);
+    const mixed = await schema.transactUnique({
+      creates: [
+        {
+          subject: claim,
+          identity: { predicate: requestId, value: claimValue },
+          fields: [{ predicate: requestRoot, value: nodeA }],
+        },
+        {
+          subject: nodeA,
+          identity: { predicate: graphId, value: idA },
+          fields: [{ predicate: graphNext, value: nodeB }],
+        },
+        {
+          subject: nodeB,
+          identity: { predicate: graphId, value: idB },
+          fields: [{ predicate: graphNext, value: nodeC }],
+        },
+        {
+          subject: nodeC,
+          identity: { predicate: graphId, value: idC },
+          fields: [{ predicate: graphNext, value: nodeA }],
+        },
+      ],
+      updates: [{
+        identity: { predicate: slug, value: home },
+        fields: [{
+          predicate: temporary,
+          values: [],
+          cardinality: 'single',
+          allowedCurrent: [temporaryValue],
+        }],
+      }],
+      requireUnique: [
+        { subject: claim, predicate: requestId, value: claimValue },
+        { subject: nodeA, predicate: graphId, value: idA },
+        { subject: nodeB, predicate: graphId, value: idB },
+        { subject: nodeC, predicate: graphId, value: idC },
+      ],
+    });
+    assert.deepEqual(mixed.createdSubjects, [claim, nodeA, nodeB, nodeC]);
+    assert.deepEqual(mixed.updatedSubjects, [page]);
+    assert.equal(mixed.preflight.actionCount, 9);
+    assert.equal(mixed.result.length, 9);
+    assert.deepEqual(
+      (await fram.scan({ t1: nodeA, t2: graphNext })).result,
+      [tripleTerm(nodeA, graphNext, nodeB)],
+    );
+    assert.deepEqual(
+      (await fram.scan({ t1: nodeB, t2: graphNext })).result,
+      [tripleTerm(nodeB, graphNext, nodeC)],
+    );
+    assert.deepEqual(
+      (await fram.scan({ t1: nodeC, t2: graphNext })).result,
+      [tripleTerm(nodeC, graphNext, nodeA)],
+    );
+    assert.deepEqual((await fram.scan({ t1: page, t2: temporary })).result, []);
+
+    const staleSubject = stringTerm('@stale-create');
+    const beforeStale = await fram.version();
+    await assert.rejects(
+      schema.transactUnique({
+        creates: [{
+          subject: staleSubject,
+          identity: { predicate: graphId, value: stringTerm('stale') },
+          fields: [],
+        }],
+        updates: [{
+          identity: { predicate: slug, value: home },
+          fields: [{
+            predicate: temporary,
+            values: [stringTerm('must not appear')],
+            cardinality: 'single',
+            allowedCurrent: [temporaryValue],
+          }],
+        }],
+      }),
+      error => error.code === 'schema/current-value-rejected',
+    );
+    assert.equal((await fram.version()).servedVersion, beforeStale.servedVersion);
+    assert.deepEqual((await fram.scan({ t1: staleSubject })).result, []);
+
+    const beforeExistingClaim = await fram.version();
+    await assert.rejects(
+      schema.transactUnique({
+        creates: [{
+          subject: claim,
+          identity: { predicate: requestId, value: claimValue },
+          fields: [],
+        }],
+      }),
+      error => error.code === 'schema/identity-exists',
+    );
+    assert.equal(
+      (await fram.version()).servedVersion,
+      beforeExistingClaim.servedVersion,
+    );
+  });
+
   console.log(`\nBun FRAMRPC client: ${checks.length}/${checks.length} PASS`);
 }
 

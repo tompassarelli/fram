@@ -16,6 +16,7 @@ export const SCHEMA_ERROR_CODES = Object.freeze({
   IDENTITY_EXISTS: 'schema/identity-exists',
   IDENTITY_MISSING: 'schema/identity-missing',
   DUPLICATE_IDENTITY: 'schema/duplicate-identity',
+  DUPLICATE_CREATE_SUBJECT: 'schema/duplicate-create-subject',
   DUPLICATE_UPDATE_TARGET: 'schema/duplicate-update-target',
   REQUIRED_IDENTITY_MISSING: 'schema/required-identity-missing',
   CURRENT_VALUE_REJECTED: 'schema/current-value-rejected',
@@ -96,6 +97,10 @@ function termKey(value) {
   return JSON.stringify(value);
 }
 
+function identityKey(identity) {
+  return JSON.stringify([identity.predicate, identity.value]);
+}
+
 function sameTerm(left, right) {
   return termKey(left) === termKey(right);
 }
@@ -153,8 +158,8 @@ function normalizeRequireUnique(value, label) {
   });
 }
 
-function normalizeField(value, index) {
-  const label = `fields[${index}]`;
+function normalizeField(value, index, fieldLabel = 'fields') {
+  const label = `${fieldLabel}[${index}]`;
   exactKeys(value, ['predicate', 'value', 'cardinality'], label);
   const cardinality = own(value, 'cardinality') ? value.cardinality : 'single';
   if (cardinality !== 'single' && cardinality !== 'multi') {
@@ -171,25 +176,33 @@ function normalizeField(value, index) {
   };
 }
 
-function normalizeUniqueInput(value) {
-  exactKeys(value, ['subject', 'identity', 'fields', 'requireUnique'], 'unique input');
-  const subject = term(required(value, 'subject', 'unique input'));
-  const identity = normalizeIdentity(required(value, 'identity', 'unique input'));
-  const requireUnique = normalizeRequireUnique(value.requireUnique, 'requireUnique');
+function normalizeCreateRecord(value, label, allowRequireUnique) {
+  exactKeys(
+    value,
+    allowRequireUnique
+      ? ['subject', 'identity', 'fields', 'requireUnique']
+      : ['subject', 'identity', 'fields'],
+    label,
+  );
+  const subject = term(required(value, 'subject', label));
+  const identity = normalizeIdentity(
+    required(value, 'identity', label),
+    `${label}.identity`,
+  );
   const fieldsInput = own(value, 'fields') ? value.fields : [];
   if (!Array.isArray(fieldsInput)) {
     schemaError(
       SCHEMA_ERROR_CODES.INVALID_INPUT,
-      'unique input.fields must be an array',
-      { label: 'unique input.fields' },
+      `${label}.fields must be an array`,
+      { label: `${label}.fields` },
     );
   }
-  enforceActionCount(fieldsInput.length + 1, 'unique input.fields plus identity');
+  enforceActionCount(fieldsInput.length + 1, `${label}.fields plus identity`);
 
   const fields = [];
   const predicates = new Map();
   for (let index = 0; index < fieldsInput.length; index += 1) {
-    const field = normalizeField(fieldsInput[index], index);
+    const field = normalizeField(fieldsInput[index], index, `${label}.fields`);
     if (sameTerm(field.predicate, identity.predicate)) {
       schemaError(
         SCHEMA_ERROR_CODES.INVALID_INPUT,
@@ -229,7 +242,14 @@ function normalizeUniqueInput(value) {
     }
     fields.push(field);
   }
-  return { subject, identity, fields, requireUnique };
+  return { subject, identity, fields };
+}
+
+function normalizeUniqueInput(value) {
+  return {
+    ...normalizeCreateRecord(value, 'unique input', true),
+    requireUnique: normalizeRequireUnique(value.requireUnique, 'requireUnique'),
+  };
 }
 
 function normalizeUpdateField(value, label, identity) {
@@ -256,10 +276,10 @@ function normalizeUpdateField(value, label, identity) {
     );
   }
   enforceActionCount(valuesInput.length, `${label}.values`);
-  if (cardinality === 'single' && valuesInput.length !== 1) {
+  if (cardinality === 'single' && valuesInput.length > 1) {
     schemaError(
       SCHEMA_ERROR_CODES.INVALID_INPUT,
-      'a single-cardinality update requires exactly one desired value',
+      'a single-cardinality update accepts zero or one desired value',
       { label, cardinality, values: valuesInput.length },
     );
   }
@@ -402,6 +422,141 @@ function normalizeUpdateManyInput(value) {
     updates,
     requireUnique: normalizeRequireUnique(value.requireUnique, 'requireUnique'),
   };
+}
+
+function normalizeUniqueTransaction(value) {
+  const label = 'unique transaction';
+  exactKeys(value, ['creates', 'updates', 'requireUnique'], label);
+  const createsInput = own(value, 'creates') ? value.creates : [];
+  const updatesInput = own(value, 'updates') ? value.updates : [];
+  if (!Array.isArray(createsInput)) {
+    schemaError(
+      SCHEMA_ERROR_CODES.INVALID_INPUT,
+      `${label}.creates must be an array`,
+      { label: `${label}.creates` },
+    );
+  }
+  if (!Array.isArray(updatesInput)) {
+    schemaError(
+      SCHEMA_ERROR_CODES.INVALID_INPUT,
+      `${label}.updates must be an array`,
+      { label: `${label}.updates` },
+    );
+  }
+  if (createsInput.length === 0 && updatesInput.length === 0) {
+    schemaError(
+      SCHEMA_ERROR_CODES.INVALID_INPUT,
+      `${label} requires at least one create or update`,
+      { label },
+    );
+  }
+  if (createsInput.length > SCHEMA_MAX_BATCH_ACTIONS) {
+    schemaError(
+      SCHEMA_ERROR_CODES.INVALID_INPUT,
+      `${label}.creates accepts at most ${SCHEMA_MAX_BATCH_ACTIONS} entries`,
+      {
+        label: `${label}.creates`,
+        entries: createsInput.length,
+        maximum: SCHEMA_MAX_BATCH_ACTIONS,
+      },
+    );
+  }
+
+  const creates = createsInput.map((create, index) => (
+    normalizeCreateRecord(create, `creates[${index}]`, false)
+  ));
+  const createIdentities = new Map();
+  const createSubjects = new Map();
+  for (let index = 0; index < creates.length; index += 1) {
+    const create = creates[index];
+    const plannedIdentity = identityKey(create.identity);
+    const priorIdentity = createIdentities.get(plannedIdentity);
+    if (priorIdentity !== undefined) {
+      schemaError(
+        SCHEMA_ERROR_CODES.DUPLICATE_IDENTITY,
+        'two creates declare the same identity',
+        { identity: create.identity, first: priorIdentity, second: index },
+      );
+    }
+    createIdentities.set(plannedIdentity, index);
+
+    const plannedSubject = termKey(create.subject);
+    const priorSubject = createSubjects.get(plannedSubject);
+    if (priorSubject !== undefined) {
+      schemaError(
+        SCHEMA_ERROR_CODES.DUPLICATE_CREATE_SUBJECT,
+        'two creates declare the same subject',
+        { subject: create.subject, first: priorSubject, second: index },
+      );
+    }
+    createSubjects.set(plannedSubject, index);
+  }
+
+  const updates = updatesInput.length === 0
+    ? []
+    : normalizeUpdateManyInput({ updates: updatesInput }).updates;
+  for (let createIndex = 0; createIndex < creates.length; createIndex += 1) {
+    for (const field of creates[createIndex].fields) {
+      const identityOwner = createIdentities.get(identityKey({
+        predicate: field.predicate,
+        value: field.value,
+      }));
+      if (identityOwner !== undefined) {
+        schemaError(
+          SCHEMA_ERROR_CODES.DUPLICATE_IDENTITY,
+          'a create field also asserts a planned identity',
+          {
+            identity: creates[identityOwner].identity,
+            owner: identityOwner,
+            fieldCreate: createIndex,
+          },
+        );
+      }
+    }
+  }
+  for (let updateIndex = 0; updateIndex < updates.length; updateIndex += 1) {
+    for (const field of updates[updateIndex].fields) {
+      for (const valueInput of field.values) {
+        const identityOwner = createIdentities.get(identityKey({
+          predicate: field.predicate,
+          value: valueInput,
+        }));
+        if (identityOwner !== undefined) {
+          schemaError(
+            SCHEMA_ERROR_CODES.DUPLICATE_IDENTITY,
+            'an update value also asserts a planned identity',
+            {
+              identity: creates[identityOwner].identity,
+              owner: identityOwner,
+              update: updateIndex,
+              predicate: field.predicate,
+            },
+          );
+        }
+      }
+    }
+  }
+  const requireUnique = normalizeRequireUnique(value.requireUnique, 'requireUnique');
+  for (const requirement of requireUnique) {
+    const createIndex = createIdentities.get(identityKey(requirement));
+    if (createIndex !== undefined
+        && !sameTerm(creates[createIndex].subject, requirement.subject)) {
+      schemaError(
+        SCHEMA_ERROR_CODES.REQUIRED_IDENTITY_MISSING,
+        'required planned identity does not resolve to its required subject',
+        { requirement, subject: creates[createIndex].subject },
+      );
+    }
+  }
+  let desiredActions = creates.reduce(
+    (count, create) => count + create.fields.length + 1,
+    0,
+  );
+  for (const update of updates) {
+    for (const field of update.fields) desiredActions += field.values.length;
+  }
+  enforceActionCount(desiredActions, `${label} desired values`);
+  return { creates, updates, requireUnique };
 }
 
 function singleColumnQuery(relation, variable, tripleArgs) {
@@ -590,6 +745,43 @@ function summarizeMany(subjects, asOf, response = null) {
   });
 }
 
+function summarizeTransaction(
+  createdSubjects,
+  updatedSubjects,
+  asOf,
+  response = null,
+  preflight = null,
+) {
+  const exactCreatedSubjects = Object.freeze([...createdSubjects]);
+  const exactUpdatedSubjects = Object.freeze([...updatedSubjects]);
+  if (response === null) {
+    return Object.freeze({
+      createdSubjects: exactCreatedSubjects,
+      updatedSubjects: exactUpdatedSubjects,
+      changed: false,
+      servedVersion: asOf,
+      result: [],
+      preflight: null,
+    });
+  }
+  const servedVersion = responseVersion(response, 'batch');
+  if (!Array.isArray(response.result)) {
+    schemaError(
+      SCHEMA_ERROR_CODES.INVALID_RESPONSE,
+      'batch response result must be an array',
+      null,
+    );
+  }
+  return Object.freeze({
+    createdSubjects: exactCreatedSubjects,
+    updatedSubjects: exactUpdatedSubjects,
+    changed: response.result.some(action => action.changed === true),
+    servedVersion,
+    result: response.result,
+    preflight,
+  });
+}
+
 function typedConflict(error) {
   return error instanceof FramRpcError
     && error.code === 'rpc/conflict'
@@ -601,7 +793,7 @@ export function schemaClient(fram, {
   queryTimeoutMs = 5000,
 } = {}) {
   inputObject(fram, 'fram client');
-  for (const method of ['version', 'query', 'scan', 'batch']) {
+  for (const method of ['version', 'query', 'scan', 'preflightBatch', 'batch']) {
     if (typeof fram[method] !== 'function') {
       schemaError(
         SCHEMA_ERROR_CODES.INVALID_INPUT,
@@ -795,18 +987,36 @@ export function schemaClient(fram, {
     }
   }
 
-  async function write(subject, created, asOf, actions) {
+  async function commit(asOf, actions) {
     enforceActionLimit(actions);
-    if (actions.length === 0) return summarize(subject, created, asOf);
-    const response = await fram.batch(actions, { expectedVersion: asOf });
+    if (actions.length === 0) return { response: null, preflight: null };
+    const preflight = fram.preflightBatch(actions, { expectedVersion: asOf });
+    const response = await fram.batch(actions, {
+      expectedVersion: asOf,
+      preflight,
+    });
+    return { response, preflight };
+  }
+
+  async function write(subject, created, asOf, actions) {
+    const { response } = await commit(asOf, actions);
     return summarize(subject, created, asOf, response);
   }
 
   async function writeMany(subjects, asOf, actions) {
-    enforceActionLimit(actions);
-    if (actions.length === 0) return summarizeMany(subjects, asOf);
-    const response = await fram.batch(actions, { expectedVersion: asOf });
+    const { response } = await commit(asOf, actions);
     return summarizeMany(subjects, asOf, response);
+  }
+
+  async function writeTransaction(createdSubjects, updatedSubjects, asOf, actions) {
+    const { response, preflight } = await commit(asOf, actions);
+    return summarizeTransaction(
+      createdSubjects,
+      updatedSubjects,
+      asOf,
+      response,
+      preflight,
+    );
   }
 
   async function replaceSingle(subjectInput, predicateInput, valueInput) {
@@ -868,123 +1078,214 @@ export function schemaClient(fram, {
     });
   }
 
+  async function resolveUpdates(updates, asOf) {
+    const ownerLists = await mapWithConcurrency(
+      updates,
+      SCHEMA_MAX_GUARD_CONCURRENCY,
+      update => ownersAt(update.identity, asOf),
+    );
+    const resolved = updates.map((update, updateIndex) => ({
+      ...update,
+      subject: requireSource(ownerLists[updateIndex], update.identity),
+      updateIndex,
+    }));
+
+    const lookupPredicates = new Map();
+    for (const update of resolved) {
+      const subjectKey = termKey(update.subject);
+      const predicates = lookupPredicates.get(subjectKey) ?? [];
+      if (!predicates.some(predicate => sameTerm(predicate, update.identity.predicate))) {
+        predicates.push(update.identity.predicate);
+      }
+      lookupPredicates.set(subjectKey, predicates);
+    }
+
+    const cells = [];
+    const cellKeys = new Map();
+    for (const update of resolved) {
+      const protectedPredicates = lookupPredicates.get(termKey(update.subject));
+      for (let fieldIndex = 0; fieldIndex < update.fields.length; fieldIndex += 1) {
+        const field = update.fields[fieldIndex];
+        if (protectedPredicates.some(predicate => sameTerm(predicate, field.predicate))) {
+          schemaError(
+            SCHEMA_ERROR_CODES.INVALID_INPUT,
+            'an update field cannot replace a lookup identity predicate on its subject',
+            {
+              subject: update.subject,
+              predicate: field.predicate,
+              update: update.updateIndex,
+              field: fieldIndex,
+            },
+          );
+        }
+        const cellKey = JSON.stringify([update.subject, field.predicate]);
+        const prior = cellKeys.get(cellKey);
+        if (prior) {
+          schemaError(
+            SCHEMA_ERROR_CODES.DUPLICATE_UPDATE_TARGET,
+            'two updates resolve to the same subject and field predicate',
+            {
+              subject: update.subject,
+              predicate: field.predicate,
+              first: prior,
+              second: { update: update.updateIndex, field: fieldIndex },
+            },
+          );
+        }
+        cellKeys.set(cellKey, { update: update.updateIndex, field: fieldIndex });
+        cells.push({
+          subject: update.subject,
+          field,
+          updateIndex: update.updateIndex,
+          fieldIndex,
+        });
+      }
+    }
+    return { resolved, cells };
+  }
+
+  function rejectCreateUpdateCellCollisions(creates, cells) {
+    const createCells = new Map();
+    for (let createIndex = 0; createIndex < creates.length; createIndex += 1) {
+      const create = creates[createIndex];
+      for (const predicate of [
+        create.identity.predicate,
+        ...create.fields.map(field => field.predicate),
+      ]) {
+        const key = JSON.stringify([create.subject, predicate]);
+        if (!createCells.has(key)) {
+          createCells.set(key, { create: createIndex, predicate });
+        }
+      }
+    }
+    for (const cell of cells) {
+      const createCell = createCells.get(JSON.stringify([cell.subject, cell.field.predicate]));
+      if (createCell !== undefined) {
+        schemaError(
+          SCHEMA_ERROR_CODES.DUPLICATE_UPDATE_TARGET,
+          'a create and update target the same subject and field predicate',
+          {
+            subject: cell.subject,
+            predicate: cell.field.predicate,
+            create: createCell.create,
+            update: cell.updateIndex,
+            field: cell.fieldIndex,
+          },
+        );
+      }
+    }
+  }
+
+  function requirementsOutsideCreateSet(requirements, creates) {
+    const planned = new Map(creates.map(create => [identityKey(create.identity), create]));
+    const live = [];
+    for (const requirement of requirements) {
+      const create = planned.get(identityKey(requirement));
+      if (create === undefined) {
+        live.push(requirement);
+      } else if (!sameTerm(create.subject, requirement.subject)) {
+        schemaError(
+          SCHEMA_ERROR_CODES.REQUIRED_IDENTITY_MISSING,
+          'required planned identity does not resolve to its required subject',
+          { requirement, subject: create.subject },
+        );
+      }
+    }
+    return live;
+  }
+
+  async function appendUpdateActions(actions, cells, asOf) {
+    const currentValues = await mapWithConcurrency(
+      cells,
+      SCHEMA_MAX_GUARD_CONCURRENCY,
+      cell => valuesAt(cell.subject, cell.field.predicate, asOf),
+    );
+    for (let cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
+      const cell = cells[cellIndex];
+      const current = currentValues[cellIndex];
+      const field = cell.field;
+      if (field.allowedCurrent !== null) {
+        const distinctCurrent = distinctTerms(current);
+        const accepted = field.allowedCurrent.length === 0
+          ? distinctCurrent.length === 0
+          : distinctCurrent.length === 1
+            && field.allowedCurrent.some(allowed => (
+              sameTerm(allowed, distinctCurrent[0])
+            ));
+        if (!accepted) {
+          schemaError(
+            SCHEMA_ERROR_CODES.CURRENT_VALUE_REJECTED,
+            'current field value does not satisfy allowedCurrent',
+            {
+              subject: cell.subject,
+              predicate: field.predicate,
+              current: distinctCurrent,
+              allowed: field.allowedCurrent,
+              update: cell.updateIndex,
+              field: cell.fieldIndex,
+            },
+          );
+        }
+      }
+      const exactSingleNoop = field.cardinality === 'single'
+        && current.length === field.values.length
+        && (current.length === 0 || sameTerm(current[0], field.values[0]));
+      if (exactSingleNoop) continue;
+      actions.push(...current.map(oldValue => (
+        retractAction(cell.subject, field.predicate, oldValue)
+      )));
+      actions.push(...field.values.map(desired => (
+        assertAction(cell.subject, field.predicate, desired)
+      )));
+      enforceActionLimit(actions);
+    }
+    return actions;
+  }
+
   async function executeUpdateUniqueMany(input) {
     return retrying(async asOf => {
-      const ownerLists = await mapWithConcurrency(
-        input.updates,
-        SCHEMA_MAX_GUARD_CONCURRENCY,
-        update => ownersAt(update.identity, asOf),
-      );
-      const resolved = input.updates.map((update, updateIndex) => ({
-        ...update,
-        subject: requireSource(ownerLists[updateIndex], update.identity),
-        updateIndex,
-      }));
-
-      const lookupPredicates = new Map();
-      for (const update of resolved) {
-        const subjectKey = termKey(update.subject);
-        const predicates = lookupPredicates.get(subjectKey) ?? [];
-        if (!predicates.some(predicate => sameTerm(predicate, update.identity.predicate))) {
-          predicates.push(update.identity.predicate);
-        }
-        lookupPredicates.set(subjectKey, predicates);
-      }
-
-      const cells = [];
-      const cellKeys = new Map();
-      for (const update of resolved) {
-        const protectedPredicates = lookupPredicates.get(termKey(update.subject));
-        for (let fieldIndex = 0; fieldIndex < update.fields.length; fieldIndex += 1) {
-          const field = update.fields[fieldIndex];
-          if (protectedPredicates.some(predicate => sameTerm(predicate, field.predicate))) {
-            schemaError(
-              SCHEMA_ERROR_CODES.INVALID_INPUT,
-              'an update field cannot replace a lookup identity predicate on its subject',
-              {
-                subject: update.subject,
-                predicate: field.predicate,
-                update: update.updateIndex,
-                field: fieldIndex,
-              },
-            );
-          }
-          const cellKey = JSON.stringify([update.subject, field.predicate]);
-          const prior = cellKeys.get(cellKey);
-          if (prior) {
-            schemaError(
-              SCHEMA_ERROR_CODES.DUPLICATE_UPDATE_TARGET,
-              'two updates resolve to the same subject and field predicate',
-              {
-                subject: update.subject,
-                predicate: field.predicate,
-                first: prior,
-                second: { update: update.updateIndex, field: fieldIndex },
-              },
-            );
-          }
-          cellKeys.set(cellKey, { update: update.updateIndex, field: fieldIndex });
-          cells.push({
-            subject: update.subject,
-            field,
-            updateIndex: update.updateIndex,
-            fieldIndex,
-          });
-        }
-      }
-
+      const { resolved, cells } = await resolveUpdates(input.updates, asOf);
       await requireUniqueAt(input.requireUnique, asOf);
-      const currentValues = await mapWithConcurrency(
-        cells,
-        SCHEMA_MAX_GUARD_CONCURRENCY,
-        cell => valuesAt(cell.subject, cell.field.predicate, asOf),
-      );
-      const actions = [];
-      for (let cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
-        const cell = cells[cellIndex];
-        const current = currentValues[cellIndex];
-        const field = cell.field;
-        if (field.allowedCurrent !== null) {
-          const distinctCurrent = distinctTerms(current);
-          const accepted = field.allowedCurrent.length === 0
-            ? distinctCurrent.length === 0
-            : distinctCurrent.length === 1
-              && field.allowedCurrent.some(allowed => (
-                sameTerm(allowed, distinctCurrent[0])
-              ));
-          if (!accepted) {
-            schemaError(
-              SCHEMA_ERROR_CODES.CURRENT_VALUE_REJECTED,
-              'current field value does not satisfy allowedCurrent',
-              {
-                subject: cell.subject,
-                predicate: field.predicate,
-                current: distinctCurrent,
-                allowed: field.allowedCurrent,
-                update: cell.updateIndex,
-                field: cell.fieldIndex,
-              },
-            );
-          }
-        }
-        const exactSingleNoop = field.cardinality === 'single'
-          && current.length === 1
-          && sameTerm(current[0], field.values[0]);
-        if (exactSingleNoop) continue;
-        actions.push(...current.map(oldValue => (
-          retractAction(cell.subject, field.predicate, oldValue)
-        )));
-        actions.push(...field.values.map(desired => (
-          assertAction(cell.subject, field.predicate, desired)
-        )));
-        enforceActionLimit(actions);
-      }
+      const actions = await appendUpdateActions([], cells, asOf);
       return writeMany(resolved.map(update => update.subject), asOf, actions);
+    });
+  }
+
+  async function executeUniqueTransaction(input) {
+    return retrying(async asOf => {
+      const createOwnerLists = await mapWithConcurrency(
+        input.creates,
+        SCHEMA_MAX_GUARD_CONCURRENCY,
+        create => ownersAt(create.identity, asOf),
+      );
+      for (let index = 0; index < input.creates.length; index += 1) {
+        rejectOwners(createOwnerLists[index], input.creates[index].identity, true);
+      }
+
+      const { resolved, cells } = await resolveUpdates(input.updates, asOf);
+      rejectCreateUpdateCellCollisions(input.creates, cells);
+      await requireUniqueAt(
+        requirementsOutsideCreateSet(input.requireUnique, input.creates),
+        asOf,
+      );
+      const actions = input.creates.flatMap(create => createActions(create));
+      enforceActionLimit(actions);
+      await appendUpdateActions(actions, cells, asOf);
+      return writeTransaction(
+        input.creates.map(create => create.subject),
+        resolved.map(update => update.subject),
+        asOf,
+        actions,
+      );
     });
   }
 
   async function updateUniqueMany(value) {
     return executeUpdateUniqueMany(normalizeUpdateManyInput(value));
+  }
+
+  async function transactUnique(value) {
+    return executeUniqueTransaction(normalizeUniqueTransaction(value));
   }
 
   async function updateUnique(value) {
@@ -1008,5 +1309,6 @@ export function schemaClient(fram, {
     upsertUnique,
     updateUnique,
     updateUniqueMany,
+    transactUnique,
   });
 }

@@ -131,8 +131,20 @@ export interface BatchAction {
   existing?: boolean;
 }
 
-export interface BatchOptions extends RequestOptions {
+export interface BatchPreflight {
+  readonly actionCount: number;
+  readonly requestBytes: number;
+  readonly bodyBytes: number;
+  readonly termCount: number;
+  readonly maxTermDepth: number;
+}
+
+export interface BatchPreflightOptions extends RequestOptions {
   fence?: TripleTerm;
+}
+
+export interface BatchOptions extends BatchPreflightOptions {
+  preflight?: BatchPreflight;
 }
 
 export interface FramResponse<Result> {
@@ -193,7 +205,8 @@ export interface FramClient {
     options?: WriteOptions): Promise<FramResponse<MutationActionResult[]>>;
   retract(t1: TermInput, t2: TermInput, t3: TermInput,
     options?: WriteOptions): Promise<FramResponse<MutationActionResult[]>>;
-  batch(actions: BatchAction[], options?: BatchOptions): Promise<FramResponse<MutationActionResult[]>>;
+  preflightBatch(actions: readonly BatchAction[], options?: BatchPreflightOptions): BatchPreflight;
+  batch(actions: readonly BatchAction[], options?: BatchOptions): Promise<FramResponse<MutationActionResult[]>>;
   leaseAcquire(resource: TermInput, holder: TermInput, ttlMs: IntegerInput,
     options?: RequestOptions): Promise<FramResponse<LeaseGrant>>;
   leaseRenew(fence: TripleTerm, ttlMs: IntegerInput,

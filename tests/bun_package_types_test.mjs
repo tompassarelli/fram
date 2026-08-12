@@ -63,7 +63,7 @@ import {
   FRAMRPC_MAX_BATCH_ACTIONS,
   keywordTerm,
 } from '@tompassarelli/framrpc';
-import type { FramClient, Term } from '@tompassarelli/framrpc';
+import type { BatchPreflight, FramClient, Term } from '@tompassarelli/framrpc';
 import {
   SCHEMA_MAX_BATCH_ACTIONS,
   SCHEMA_MAX_READ_PAGES,
@@ -72,6 +72,7 @@ import {
 } from '@tompassarelli/framrpc/schema';
 import type {
   SchemaConstraintCode,
+  UniqueTransaction,
   UpdateUniqueManyMutation,
   UpdateUniqueMutation,
 } from '@tompassarelli/framrpc/schema';
@@ -98,12 +99,40 @@ const many: UpdateUniqueManyMutation = {
     }],
   }],
 };
+const transaction: UniqueTransaction = {
+  creates: [{
+    subject: 'revision-1',
+    identity: { predicate: keywordTerm('revision/id'), value: 'revision-1' },
+    fields: [],
+  }],
+  updates: [{
+    identity: update.identity,
+    fields: [{
+      predicate: keywordTerm('page/temporary-title'),
+      values: [],
+      cardinality: 'single',
+    }],
+  }],
+};
+const preflight: BatchPreflight = fram.preflightBatch([{
+  op: 'assert',
+  t1: 'page-1',
+  t2: keywordTerm('page/state'),
+  t3: state,
+}], { expectedVersion: 1n });
 const code: SchemaConstraintCode = 'schema/current-value-rejected';
 const protocolActions: 247 = FRAMRPC_MAX_BATCH_ACTIONS;
 const schemaActions: typeof FRAMRPC_MAX_BATCH_ACTIONS = SCHEMA_MAX_BATCH_ACTIONS;
 const pages: 2 = SCHEMA_MAX_READ_PAGES;
 void schema.updateUnique(update);
 void schema.updateUniqueMany(many);
+void schema.transactUnique(transaction);
+void fram.batch([{
+  op: 'assert',
+  t1: 'page-1',
+  t2: keywordTerm('page/state'),
+  t3: state,
+}], { expectedVersion: 1n, preflight });
 void SchemaConstraintError;
 void code;
 void protocolActions;

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   FRAMRPC_MAX_BATCH_ACTIONS,
   FramRpcError,
+  FramTransportError,
   framClient,
 } from '../clients/bun/framrpc.mjs';
 import {
@@ -63,7 +64,9 @@ function mockFram({
   scanResults = [],
   batchOutcomes = [],
 } = {}) {
-  const calls = { version: [], query: [], scan: [], reads: [], batch: [] };
+  const calls = {
+    version: [], query: [], scan: [], reads: [], preflightBatch: [], batch: [],
+  };
   let versionIndex = 0;
   let queryIndex = 0;
   let scanIndex = 0;
@@ -111,6 +114,17 @@ function mockFram({
           result: outcome.result ?? [],
           page: outcome.page ?? null,
         };
+      },
+      preflightBatch(actions, options) {
+        const preflight = Object.freeze({
+          actionCount: actions.length,
+          requestBytes: 100 + actions.length,
+          bodyBytes: 74 + actions.length,
+          termCount: actions.length * 10,
+          maxTermDepth: 8,
+        });
+        calls.preflightBatch.push({ actions, options, preflight });
+        return preflight;
       },
       async batch(actions, options) {
         calls.batch.push({ actions, options });
@@ -219,6 +233,7 @@ function assertPinnedReads(calls, expectedVersions) {
 function assertNoIo(calls) {
   assert.equal(calls.version.length, 0);
   assert.equal(calls.reads.length, 0);
+  assert.equal(calls.preflightBatch.length, 0);
   assert.equal(calls.batch.length, 0);
 }
 
@@ -232,6 +247,45 @@ check('schema aliases the canonical FRAMRPC batch depth ceiling', async () => {
       () => ({ op: 'assert', t1: 'subject', t2: 'predicate', t3: 'value' }),
     )),
     error => error.code === 'client/action-limit',
+  );
+});
+
+check('batch preflight reports exact deterministic request metrics and is rechecked before I/O', async () => {
+  const disconnected = framClient({ space: 'preflight-test', port: 1 });
+  const actions = [
+    { op: 'assert', t1: PAGE_A, t2: TITLE, t3: NEW_TITLE },
+    { op: 'retract', t1: PAGE_B, t2: TAG, t3: WIKI_TAG },
+  ];
+  const preflight = disconnected.preflightBatch(actions, { expectedVersion: 7n });
+  assert(Object.isFrozen(preflight));
+  assert.deepEqual(
+    disconnected.preflightBatch(actions, { expectedVersion: 7n }),
+    preflight,
+  );
+  assert.equal(preflight.actionCount, actions.length);
+  assert.equal(preflight.requestBytes, preflight.bodyBytes + 26);
+  assert(preflight.termCount > actions.length);
+  assert(preflight.maxTermDepth > 0);
+  assert.equal(
+    preflight.bodyBytes,
+    disconnected.preflightBatch(actions).bodyBytes + 8,
+  );
+
+  await assert.rejects(
+    disconnected.batch(actions, {
+      expectedVersion: 7n,
+      preflight: { ...preflight, termCount: preflight.termCount + 1 },
+    }),
+    error => error.code === 'client/preflight-mismatch',
+  );
+  assert.throws(
+    () => disconnected.preflightBatch([{
+      op: 'assert',
+      t1: PAGE_A,
+      t2: TITLE,
+      t3: 'x'.repeat(1024 * 1024),
+    }]),
+    error => error.code === 'client/frame-too-large',
   );
 });
 
@@ -249,8 +303,14 @@ check('createUnique pins its identity read and guards creation with the same exp
   });
 
   assertPinnedReads(fram.calls, [7n]);
+  assert.equal(fram.calls.preflightBatch.length, 1);
+  assert.equal(fram.calls.preflightBatch[0].options.expectedVersion, 7n);
   assert.equal(fram.calls.batch.length, 1);
   assert.equal(fram.calls.batch[0].options.expectedVersion, 7n);
+  assert.equal(
+    fram.calls.batch[0].options.preflight,
+    fram.calls.preflightBatch[0].preflight,
+  );
   assert.deepEqual(semanticActions(fram.calls.batch[0].actions), [
     { op: 'assert', terms: [PAGE_A, SLUG, HOME] },
     { op: 'assert', terms: [PAGE_A, TITLE, NEW_TITLE] },
@@ -1096,6 +1156,15 @@ check('requireUnique resolution keeps query concurrency bounded', async () => {
       calls.scan += 1;
       throw new Error('unexpected scan');
     },
+    preflightBatch(actions) {
+      return {
+        actionCount: actions.length,
+        requestBytes: 100 + actions.length,
+        bodyBytes: 74 + actions.length,
+        termCount: actions.length * 10,
+        maxTermDepth: 8,
+      };
+    },
     async batch(actions, options) {
       calls.batch += 1;
       return {
@@ -1167,6 +1236,15 @@ check('upsertUnique keeps single-field scan concurrency bounded', async () => {
       await scanGate;
       activeScans -= 1;
       return { servedVersion: version, result: [] };
+    },
+    preflightBatch(actions) {
+      return {
+        actionCount: actions.length,
+        requestBytes: 100 + actions.length,
+        bodyBytes: 74 + actions.length,
+        termCount: actions.length * 10,
+        maxTermDepth: 8,
+      };
     },
     async batch(actions, options) {
       calls.batch += 1;
@@ -1270,6 +1348,292 @@ check('two scan pages can expose the 248th occurrence action-limit sentinel', as
   );
   assert.equal(fram.calls.scan.length, SCHEMA_MAX_READ_PAGES);
   assert.equal(fram.calls.batch.length, 0);
+});
+
+check('transactUnique creates a mutually-referencing set with planned uniqueness guards', async () => {
+  const alpha = Object.freeze(['string', 'alpha']);
+  const beta = Object.freeze(['string', 'beta']);
+  const gamma = Object.freeze(['string', 'gamma']);
+  const fram = mockFram({
+    versions: [170n],
+    queryResults: [[], [], []],
+  });
+  const result = await schemaClient(fram.client).transactUnique({
+    creates: [
+      {
+        subject: PAGE_A,
+        identity: { predicate: SLUG, value: alpha },
+        fields: [{ predicate: TAG, value: PAGE_B }],
+      },
+      {
+        subject: PAGE_B,
+        identity: { predicate: SLUG, value: beta },
+        fields: [{ predicate: TAG, value: PAGE_C }],
+      },
+      {
+        subject: PAGE_C,
+        identity: { predicate: SLUG, value: gamma },
+        fields: [{ predicate: TAG, value: PAGE_A }],
+      },
+    ],
+    requireUnique: [
+      { subject: PAGE_A, predicate: SLUG, value: alpha },
+      { subject: PAGE_B, predicate: SLUG, value: beta },
+      { subject: PAGE_C, predicate: SLUG, value: gamma },
+    ],
+  });
+
+  assert.deepEqual(result.createdSubjects, [PAGE_A, PAGE_B, PAGE_C]);
+  assert.deepEqual(result.updatedSubjects, []);
+  assert.equal(result.changed, true);
+  assert.equal(result.servedVersion, 171n);
+  assert.equal(fram.calls.query.length, 3);
+  assert.equal(fram.calls.scan.length, 0);
+  assert.equal(fram.calls.preflightBatch.length, 1);
+  assert.equal(result.preflight, fram.calls.preflightBatch[0].preflight);
+  assert.equal(fram.calls.batch[0].options.preflight, result.preflight);
+  assert.deepEqual(semanticActions(fram.calls.batch[0].actions), [
+    { op: 'assert', terms: [PAGE_A, SLUG, alpha] },
+    { op: 'assert', terms: [PAGE_A, TAG, PAGE_B] },
+    { op: 'assert', terms: [PAGE_B, SLUG, beta] },
+    { op: 'assert', terms: [PAGE_B, TAG, PAGE_C] },
+    { op: 'assert', terms: [PAGE_C, SLUG, gamma] },
+    { op: 'assert', terms: [PAGE_C, TAG, PAGE_A] },
+  ]);
+});
+
+check('transactUnique mixes create and update while zero desired single values clear the cell', async () => {
+  const child = Object.freeze(['string', 'child']);
+  const fram = mockFram({
+    versions: [171n],
+    queryResults: [[], [[PAGE_A]]],
+    scanResults: [[tripleFixture(PAGE_A, TITLE, OLD_TITLE_A)]],
+  });
+  const result = await schemaClient(fram.client).transactUnique({
+    creates: [{
+      subject: PAGE_C,
+      identity: { predicate: SLUG, value: child },
+      fields: [{ predicate: TAG, value: PAGE_A }],
+    }],
+    updates: [{
+      identity: { predicate: SLUG, value: HOME },
+      fields: [{
+        predicate: TITLE,
+        values: [],
+        cardinality: 'single',
+        allowedCurrent: [OLD_TITLE_A],
+      }],
+    }],
+    requireUnique: [{ subject: PAGE_C, predicate: SLUG, value: child }],
+  });
+
+  assert.deepEqual(result.createdSubjects, [PAGE_C]);
+  assert.deepEqual(result.updatedSubjects, [PAGE_A]);
+  assert.equal(result.preflight.actionCount, 3);
+  assert.deepEqual(semanticActions(fram.calls.batch[0].actions), [
+    { op: 'assert', terms: [PAGE_C, SLUG, child] },
+    { op: 'assert', terms: [PAGE_C, TAG, PAGE_A] },
+    { op: 'retract', terms: [PAGE_A, TITLE, OLD_TITLE_A] },
+  ]);
+});
+
+check('an already-empty single clear is an update-only transaction no-op', async () => {
+  const fram = mockFram({
+    versions: [172n],
+    queryResults: [[[PAGE_A]]],
+    scanResults: [[]],
+  });
+  const result = await schemaClient(fram.client).transactUnique({
+    updates: [{
+      identity: { predicate: SLUG, value: HOME },
+      fields: [{
+        predicate: TITLE,
+        values: [],
+        cardinality: 'single',
+        allowedCurrent: [],
+      }],
+    }],
+  });
+  assert.deepEqual(result, {
+    createdSubjects: [],
+    updatedSubjects: [PAGE_A],
+    changed: false,
+    servedVersion: 172n,
+    result: [],
+    preflight: null,
+  });
+  assert.equal(fram.calls.preflightBatch.length, 0);
+  assert.equal(fram.calls.batch.length, 0);
+});
+
+check('transactUnique rejects duplicate planned identities and subjects before I/O', async () => {
+  const duplicateIdentity = mockFram();
+  await assert.rejects(
+    schemaClient(duplicateIdentity.client).transactUnique({
+      creates: [
+        { subject: PAGE_A, identity: { predicate: SLUG, value: HOME }, fields: [] },
+        { subject: PAGE_B, identity: { predicate: SLUG, value: HOME }, fields: [] },
+      ],
+    }),
+    error => error.code === 'schema/duplicate-identity',
+  );
+  assertNoIo(duplicateIdentity.calls);
+
+  const duplicateSubject = mockFram();
+  await assert.rejects(
+    schemaClient(duplicateSubject.client).transactUnique({
+      creates: [
+        { subject: PAGE_A, identity: { predicate: SLUG, value: HOME }, fields: [] },
+        { subject: PAGE_A, identity: { predicate: REVISION_ID, value: REV_1 }, fields: [] },
+      ],
+    }),
+    error => error.code === 'schema/duplicate-create-subject',
+  );
+  assertNoIo(duplicateSubject.calls);
+
+  const fieldCollision = mockFram();
+  await assert.rejects(
+    schemaClient(fieldCollision.client).transactUnique({
+      creates: [
+        { subject: PAGE_A, identity: { predicate: SLUG, value: HOME }, fields: [] },
+        {
+          subject: PAGE_B,
+          identity: { predicate: REVISION_ID, value: REV_1 },
+          fields: [{ predicate: SLUG, value: HOME }],
+        },
+      ],
+    }),
+    error => error.code === 'schema/duplicate-identity',
+  );
+  assertNoIo(fieldCollision.calls);
+
+  const updateCollision = mockFram();
+  await assert.rejects(
+    schemaClient(updateCollision.client).transactUnique({
+      creates: [{
+        subject: PAGE_A,
+        identity: { predicate: SLUG, value: HOME },
+        fields: [],
+      }],
+      updates: [{
+        identity: { predicate: REVISION_ID, value: REV_1 },
+        fields: [{ predicate: SLUG, values: [HOME], cardinality: 'multi' }],
+      }],
+    }),
+    error => error.code === 'schema/duplicate-identity',
+  );
+  assertNoIo(updateCollision.calls);
+
+  const resolvedCellCollision = mockFram({
+    versions: [173n],
+    queryResults: [[], [[PAGE_A]]],
+  });
+  await assert.rejects(
+    schemaClient(resolvedCellCollision.client).transactUnique({
+      creates: [{
+        subject: PAGE_A,
+        identity: { predicate: REVISION_ID, value: REV_1 },
+        fields: [{ predicate: TITLE, value: NEW_TITLE }],
+      }],
+      updates: [{
+        identity: { predicate: SLUG, value: HOME },
+        fields: [{
+          predicate: TITLE,
+          values: [OLD_TITLE_A],
+          cardinality: 'single',
+        }],
+      }],
+    }),
+    error => error.code === 'schema/duplicate-update-target',
+  );
+  assert.equal(resolvedCellCollision.calls.version.length, 1);
+  assert.equal(resolvedCellCollision.calls.query.length, 2);
+  assert.equal(resolvedCellCollision.calls.scan.length, 0);
+  assert.equal(resolvedCellCollision.calls.preflightBatch.length, 0);
+  assert.equal(resolvedCellCollision.calls.batch.length, 0);
+
+  const mismatchedGuard = mockFram();
+  await assert.rejects(
+    schemaClient(mismatchedGuard.client).transactUnique({
+      creates: [{
+        subject: PAGE_A,
+        identity: { predicate: SLUG, value: HOME },
+        fields: [],
+      }],
+      requireUnique: [{ subject: PAGE_B, predicate: SLUG, value: HOME }],
+    }),
+    error => error.code === 'schema/required-identity-missing',
+  );
+  assertNoIo(mismatchedGuard.calls);
+});
+
+check('a planned idempotency claim is re-resolved after conflict before any second write', async () => {
+  const requestId = Object.freeze(['string', 'request-1']);
+  const requestIdentity = Object.freeze(['keyword', 'request/id']);
+  const fram = mockFram({
+    versions: [180n, 181n],
+    queryResults: [[], [], [[PAGE_C]], []],
+    batchOutcomes: [conflict(180n)],
+  });
+  await assert.rejects(
+    schemaClient(fram.client).transactUnique({
+      creates: [
+        {
+          subject: PAGE_C,
+          identity: { predicate: requestIdentity, value: requestId },
+          fields: [],
+        },
+        {
+          subject: PAGE_A,
+          identity: { predicate: SLUG, value: HOME },
+          fields: [],
+        },
+      ],
+    }),
+    error => error.code === 'schema/identity-exists'
+      && sameTermFixture(error.detail.identity.predicate, requestIdentity),
+  );
+  assert.equal(fram.calls.version.length, 2);
+  assert.equal(fram.calls.query.length, 4);
+  assert.equal(fram.calls.preflightBatch.length, 1);
+  assert.equal(fram.calls.batch.length, 1);
+});
+
+check('transport ambiguity is never retried and conflict exhaustion remains typed', async () => {
+  const ambiguity = new FramTransportError('connection ended after write');
+  const ambiguous = mockFram({
+    versions: [190n],
+    queryResults: [[]],
+    batchOutcomes: [ambiguity],
+  });
+  await assert.rejects(
+    schemaClient(ambiguous.client).createUnique({
+      subject: PAGE_A,
+      identity: { predicate: SLUG, value: HOME },
+      fields: [],
+    }),
+    error => error === ambiguity,
+  );
+  assert.equal(ambiguous.calls.version.length, 1);
+  assert.equal(ambiguous.calls.batch.length, 1);
+
+  const exhausted = mockFram({
+    versions: [191n, 192n],
+    queryResults: [[], []],
+    batchOutcomes: [conflict(191n), conflict(192n)],
+  });
+  await assert.rejects(
+    schemaClient(exhausted.client, { maxConflictRetries: 1 }).createUnique({
+      subject: PAGE_A,
+      identity: { predicate: SLUG, value: HOME },
+      fields: [],
+    }),
+    error => error.code === 'schema/conflict-exhausted'
+      && error.detail.attempts === 2
+      && error.detail.reason === 'rpc/conflict',
+  );
+  assert.equal(exhausted.calls.preflightBatch.length, 2);
+  assert.equal(exhausted.calls.batch.length, 2);
 });
 
 check('non-conflict write errors propagate unchanged and are not retried', async () => {

@@ -1,4 +1,5 @@
 import type {
+  BatchPreflight,
   FramClient,
   MutationActionResult,
   Term,
@@ -17,6 +18,7 @@ export const SCHEMA_ERROR_CODES: Readonly<{
   IDENTITY_EXISTS: 'schema/identity-exists';
   IDENTITY_MISSING: 'schema/identity-missing';
   DUPLICATE_IDENTITY: 'schema/duplicate-identity';
+  DUPLICATE_CREATE_SUBJECT: 'schema/duplicate-create-subject';
   DUPLICATE_UPDATE_TARGET: 'schema/duplicate-update-target';
   REQUIRED_IDENTITY_MISSING: 'schema/required-identity-missing';
   CURRENT_VALUE_REJECTED: 'schema/current-value-rejected';
@@ -52,10 +54,13 @@ export interface RequiredUniqueIdentity extends UniqueIdentity {
   subject: TermInput;
 }
 
-export interface UniqueMutation {
+export interface UniqueCreate {
   subject: TermInput;
   identity: UniqueIdentity;
   fields: readonly SchemaField[];
+}
+
+export interface UniqueMutation extends UniqueCreate {
   requireUnique?: readonly RequiredUniqueIdentity[];
 }
 
@@ -91,6 +96,12 @@ export interface UpdateUniqueManyMutation {
   requireUnique?: readonly RequiredUniqueIdentity[];
 }
 
+export interface UniqueTransaction {
+  creates?: readonly UniqueCreate[];
+  updates?: readonly UniqueTargetUpdate[];
+  requireUnique?: readonly RequiredUniqueIdentity[];
+}
+
 export interface SchemaMutationResult {
   readonly subject: Term;
   readonly created: boolean;
@@ -104,6 +115,15 @@ export interface SchemaBatchMutationResult {
   readonly changed: boolean;
   readonly servedVersion: bigint;
   readonly result: MutationActionResult[];
+}
+
+export interface UniqueTransactionResult {
+  readonly createdSubjects: readonly Term[];
+  readonly updatedSubjects: readonly Term[];
+  readonly changed: boolean;
+  readonly servedVersion: bigint;
+  readonly result: MutationActionResult[];
+  readonly preflight: BatchPreflight | null;
 }
 
 export interface SchemaClientOptions {
@@ -121,9 +141,10 @@ export interface SchemaClient {
   upsertUnique(input: UniqueMutation): Promise<SchemaMutationResult>;
   updateUnique(input: UpdateUniqueMutation): Promise<SchemaMutationResult>;
   updateUniqueMany(input: UpdateUniqueManyMutation): Promise<SchemaBatchMutationResult>;
+  transactUnique(input: UniqueTransaction): Promise<UniqueTransactionResult>;
 }
 
 export function schemaClient(
-  fram: Pick<FramClient, 'version' | 'query' | 'scan' | 'batch'>,
+  fram: Pick<FramClient, 'version' | 'query' | 'scan' | 'preflightBatch' | 'batch'>,
   options?: SchemaClientOptions,
 ): SchemaClient;

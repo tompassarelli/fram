@@ -165,6 +165,7 @@ export const tripleTerm = (t1, t2, t3) => [
 
 export function validateTerm(value, depth = 0, budget = { nodes: 0 }) {
   if (depth > MAX_TERM_DEPTH) fail('Term exceeds the nesting limit', 'client/term-depth');
+  budget.maxDepth = Math.max(budget.maxDepth ?? 0, depth);
   budget.nodes += 1;
   if (budget.nodes > MAX_TERM_NODES) fail('Term exceeds the node limit', 'client/term-nodes');
   if (!Array.isArray(value) || typeof value[0] !== 'string') {
@@ -568,13 +569,13 @@ function requestControls(operation, options) {
   return { expectedVersion, page, timeoutMs };
 }
 
-function encodeRequestFrame(requestId, space, operation, payload, options) {
+function encodeRequest(requestId, space, operation, payload, options) {
   if (typeof space !== 'string' || !space) fail('space must be a nonempty string', 'client/invalid-space');
   strictUtf8(space, MAX_SPACE_BYTES, 'SpaceId');
   if (!OPERATIONS.has(operation)) fail(`${operation} is outside FRAMRPC v1`, 'client/unsupported-operation');
   const controls = requestControls(operation, options);
   const body = new Writer();
-  const budget = { nodes: 0 };
+  const budget = { nodes: 0, maxDepth: 0 };
   writeTerm(body, stringTerm(space), budget);
   writeTerm(body, keywordTerm(operation), budget);
   writePresence(body, controls.expectedVersion);
@@ -599,7 +600,59 @@ function encodeRequestFrame(requestId, space, operation, payload, options) {
   header.u32(body.length);
   header.i64(requestId);
   header.push(body.finish());
-  return header.finish();
+  return {
+    frame: header.finish(),
+    bodyBytes: body.length,
+    termCount: budget.nodes,
+    maxTermDepth: budget.maxDepth,
+  };
+}
+
+function batchPreflight(encoded, actionCount) {
+  return Object.freeze({
+    actionCount,
+    requestBytes: encoded.frame.length,
+    bodyBytes: encoded.bodyBytes,
+    termCount: encoded.termCount,
+    maxTermDepth: encoded.maxTermDepth,
+  });
+}
+
+const BATCH_PREFLIGHT_FIELDS = Object.freeze([
+  'actionCount',
+  'requestBytes',
+  'bodyBytes',
+  'termCount',
+  'maxTermDepth',
+]);
+
+function expectedBatchPreflight(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    fail('batch preflight must be an object', 'client/preflight-mismatch');
+  }
+  const keys = Object.keys(value);
+  if (keys.length !== BATCH_PREFLIGHT_FIELDS.length
+      || keys.some(key => !BATCH_PREFLIGHT_FIELDS.includes(key))) {
+    fail('batch preflight fields do not match the public contract', 'client/preflight-mismatch');
+  }
+  for (const field of BATCH_PREFLIGHT_FIELDS) {
+    if (!Number.isSafeInteger(value[field]) || value[field] < 0) {
+      fail(`batch preflight.${field} must be a nonnegative safe integer`, 'client/preflight-mismatch');
+    }
+  }
+  return value;
+}
+
+function requireMatchingPreflight(expected, actual) {
+  const supplied = expectedBatchPreflight(expected);
+  for (const field of BATCH_PREFLIGHT_FIELDS) {
+    if (supplied[field] !== actual[field]) {
+      fail(
+        `batch preflight ${field} changed from ${supplied[field]} to ${actual[field]}`,
+        'client/preflight-mismatch',
+      );
+    }
+  }
 }
 
 function responsePage(reader) {
@@ -989,6 +1042,38 @@ function publicResponse(response) {
   };
 }
 
+function prepareBatch(actions, options, allowPreflight) {
+  if (!Array.isArray(actions) || actions.length === 0) {
+    fail('batch requires at least one action', 'client/invalid-action');
+  }
+  if (actions.length > FRAMRPC_MAX_BATCH_ACTIONS) {
+    fail(
+      `batch accepts at most ${FRAMRPC_MAX_BATCH_ACTIONS} actions`,
+      'client/action-limit',
+    );
+  }
+  exactKeys(
+    options,
+    allowPreflight
+      ? ['expectedVersion', 'signal', 'fence', 'preflight']
+      : ['expectedVersion', 'signal', 'fence'],
+    'batch options',
+  );
+  const requestOptions = {};
+  if (own(options, 'expectedVersion')) requestOptions.expectedVersion = options.expectedVersion;
+  if (own(options, 'signal')) requestOptions.signal = options.signal;
+  return {
+    actionCount: actions.length,
+    payload: rpcRecord('rpc/batch', [
+      rpcList(actions.map(actionPayload)), rpcOption(options.fence),
+    ]),
+    requestOptions,
+    preflight: allowPreflight && own(options, 'preflight')
+      ? options.preflight
+      : null,
+  };
+}
+
 export function framClient({
   host = '127.0.0.1', port = 7977, space,
   requestTimeoutMs = 15000,
@@ -1002,13 +1087,22 @@ export function framClient({
   }
   let nextRequestId = 1n;
 
-  async function call(operation, payload, options = {}) {
+  async function call(
+    operation,
+    payload,
+    options = {},
+    preflight = null,
+    actionCount = 0,
+  ) {
     const requestId = nextRequestId;
     nextRequestId = nextRequestId === I64_MAX ? 1n : nextRequestId + 1n;
-    const frame = encodeRequestFrame(requestId, space, operation, payload, options);
+    const encoded = encodeRequest(requestId, space, operation, payload, options);
+    if (preflight !== null) {
+      requireMatchingPreflight(preflight, batchPreflight(encoded, actionCount));
+    }
     const queryTimeout = own(options, 'timeoutMs') ? Number(options.timeoutMs) + 1000 : 0;
     const response = await exchange({
-      host, port, frame,
+      host, port, frame: encoded.frame,
       expected: { requestId, space, operation },
       timeoutMs: Math.max(requestTimeoutMs, queryTimeout),
       signal: options.signal,
@@ -1040,19 +1134,26 @@ export function framClient({
     retract: (t1, t2, t3, options = {}) => call(
       'rpc/retract', writePayload(tripleTerm(t1, t2, t3), options), options,
     ),
+    preflightBatch: (actions, options = {}) => {
+      const prepared = prepareBatch(actions, options, false);
+      const encoded = encodeRequest(
+        0n,
+        space,
+        'rpc/batch',
+        prepared.payload,
+        prepared.requestOptions,
+      );
+      return batchPreflight(encoded, prepared.actionCount);
+    },
     batch: (actions, options = {}) => {
-      if (!Array.isArray(actions) || actions.length === 0) {
-        fail('batch requires at least one action', 'client/invalid-action');
-      }
-      if (actions.length > FRAMRPC_MAX_BATCH_ACTIONS) {
-        fail(
-          `batch accepts at most ${FRAMRPC_MAX_BATCH_ACTIONS} actions`,
-          'client/action-limit',
-        );
-      }
-      return call('rpc/batch', rpcRecord('rpc/batch', [
-        rpcList(actions.map(actionPayload)), rpcOption(options.fence),
-      ]), options);
+      const prepared = prepareBatch(actions, options, true);
+      return call(
+        'rpc/batch',
+        prepared.payload,
+        prepared.requestOptions,
+        prepared.preflight,
+        prepared.actionCount,
+      );
     },
     leaseAcquire: (resource, holder, ttlMs, options = {}) => call(
       'rpc/lease-acquire', rpcRecord('lease/acquire', [

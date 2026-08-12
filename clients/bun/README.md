@@ -29,7 +29,7 @@ const fram = framClient({
 
 const version = await fram.version();
 
-await fram.batch([
+const actions = [
   {
     op: 'assert',
     t1: '@document-1',
@@ -42,7 +42,14 @@ await fram.batch([
     t2: keywordTerm('kind'),
     t3: keywordTerm('note'),
   },
-], { expectedVersion: version.servedVersion });
+];
+const preflight = fram.preflightBatch(actions, {
+  expectedVersion: version.servedVersion,
+});
+await fram.batch(actions, {
+  expectedVersion: version.servedVersion,
+  preflight,
+});
 ```
 
 Every response includes the exact `servedVersion`, optional page metadata, the
@@ -149,6 +156,15 @@ Terms, so large action Terms do not enlarge the response. FRAM still
 exact-preflights the response frame before commit because SpaceId size and the
 receipt-envelope width determine its encoded bytes.
 
+`preflightBatch(actions, options)` is a synchronous, no-send helper over the
+exact request encoder. It returns a frozen
+`{ actionCount, requestBytes, bodyBytes, termCount, maxTermDepth }` object and
+enforces the same frame, Term-node, Term-depth, and action ceilings as the
+eventual call. Pass that object back as `batch(..., { preflight })`; the client
+re-encodes the request and throws `FramProtocolError` with
+`client/preflight-mismatch` before opening a connection if any metric changed.
+This helper is client-side and does not add a fourteenth FRAMRPC operation.
+
 ## Schema-aware application writes
 
 The optional `@tompassarelli/framrpc/schema` entry point builds reusable
@@ -223,9 +239,34 @@ await schema.updateUniqueMany({
     },
   ],
 });
+
+await schema.transactUnique({
+  creates: [{
+    subject: '@revision-2',
+    identity: { predicate: keywordTerm('revision/id'), value: 'rev-2' },
+    fields: [{
+      predicate: keywordTerm('revision/page'),
+      value: '@page-1',
+      cardinality: 'single',
+    }],
+  }],
+  updates: [{
+    identity: { predicate: keywordTerm('page/slug'), value: 'home' },
+    fields: [{
+      predicate: keywordTerm('page/temporary-title'),
+      values: [],
+      cardinality: 'single',
+    }],
+  }],
+  requireUnique: [{
+    subject: '@revision-2',
+    predicate: keywordTerm('revision/id'),
+    value: 'rev-2',
+  }],
+});
 ```
 
-The wrapper exposes five mutations:
+The wrapper exposes six mutations:
 
 - `replaceSingle(subject, predicate, value)` retracts every current value and
   asserts the requested value once.
@@ -238,6 +279,8 @@ The wrapper exposes five mutations:
   OCC batch.
 - `updateUniqueMany({ updates, requireUnique })` resolves every source and
   replaces multiple fields across multiple subjects in one guarded OCC batch.
+- `transactUnique({ creates, updates, requireUnique })` combines a create set
+  and updates of existing identity owners in one guarded OCC batch.
 
 `fields[].cardinality` defaults to `single`. An update scans every live
 occurrence of a single-valued field, including duplicate equal propositions;
@@ -246,8 +289,9 @@ not repeat the identity predicate in `fields`. Tagged Terms pass through
 unchanged, including recursive Triple, Instant, integer, and float
 representations.
 
-`updateUnique` requires exactly one desired `values` entry for `single` and
-accepts zero or more for `multi`. Duplicate desired Terms are asserted once.
+`updateUnique` accepts zero or one desired `values` entry for `single` and zero
+or more for `multi`; zero desired single values clear the cell. Duplicate
+desired Terms are asserted once.
 Every existing occurrence is retracted, including duplicate equal
 propositions. When `allowedCurrent` is present, the current occurrences must
 either be absent when the allowed set is empty, or represent exactly one
@@ -270,6 +314,21 @@ subject. Source identities, command-level `requireUnique` guards, current
 field values, and every generated retraction all come from one pinned snapshot.
 One failed guard prevents the entire command from writing.
 
+`transactUnique` requires at least one create or update. Every planned create
+declares one identity, and duplicate planned identities or subjects are
+rejected before I/O. A create field or update value cannot separately assert a
+planned identity. Create identities must be absent and update identities must
+resolve to existing subjects at the attempt's pinned snapshot. A
+`requireUnique` entry may name a planned create: it is satisfied by that exact
+planned subject after the complete create set passes its absence checks, which
+permits mutual and cyclic references in the same batch. Other guards are
+resolved from the live snapshot. A request/idempotency claim is therefore an
+ordinary planned create with a unique identity. After an OCC conflict the whole
+plan is rebuilt, and a claim won by another attempt becomes the typed
+`schema/identity-exists` result before a second write is sent. If a resolved
+update and a create target the same subject/predicate cell, the command is
+rejected instead of relying on action order.
+
 Each attempt reads a version, resolves identity with a structured query at that
 exact snapshot, and accepts current scans only when they serve the same version.
 It then submits one batch with that `expectedVersion`. A current scan that races
@@ -279,11 +338,14 @@ retries after the initial attempt and the configurable hard ceiling is 32.
 Duplicate identity owners are never selected arbitrarily.
 
 Schema batches are capped at 247 actions, the FRAMRPC v1 mutation-response depth
-ceiling exported by the base client. FRAM also exact-preflights the encoded
-mutation response size and may reject a long-SpaceId or wide receipt envelope
-atomically before commit. Submitted action Terms are absent from that response,
-and the schema client does not guess its byte size. The depth cap applies to the
-complete `updateUniqueMany` command and it is never split. Inputs are
+ceiling exported by the base client. Before sending, the schema client calls
+`preflightBatch` with the exact actions and expected version and attaches the
+result to `batch`, so a changed request is rejected locally. FRAM also
+exact-preflights the encoded mutation response size and may reject a
+long-SpaceId or wide receipt envelope atomically before commit. Submitted
+action Terms are absent from that response. The depth cap applies to each
+complete `updateUniqueMany` or `transactUnique` command and it is never split.
+Inputs are
 bounded before any FRAM call: unique creation accepts at most 246 fields because
 its identity is also an action, updates accept at most 247 targets, fields,
 desired values, or `allowedCurrent` entries, and `requireUnique` accepts at most
@@ -301,6 +363,7 @@ with one of these stable codes:
 - `schema/identity-exists`
 - `schema/identity-missing`
 - `schema/duplicate-identity`
+- `schema/duplicate-create-subject`
 - `schema/duplicate-update-target`
 - `schema/required-identity-missing`
 - `schema/current-value-rejected`
@@ -312,7 +375,10 @@ Single-subject methods return
 `subject` is the exact selected Term and `result` is the official batch action
 receipt array. A mutation needing no batch returns an empty result at its pinned
 version. `updateUniqueMany` instead returns
-`{ subjects, changed, servedVersion, result }`.
+`{ subjects, changed, servedVersion, result }`. `transactUnique` returns
+`{ createdSubjects, updatedSubjects, changed, servedVersion, result, preflight }`;
+the subject arrays align with the input create and update arrays, and
+`preflight` is null only when an update-only plan needs no batch.
 
 FRAMRPC v1 serves one request per TCP connection. The client follows that
 contract directly without HTTP, JSON, MCP, or a Clojure shim. The server socket
