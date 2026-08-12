@@ -20,6 +20,7 @@
     "LICENSE-APACHE",
     "framrpc.mjs",
     "framrpc.d.ts",
+    "backup.mjs",
     "schema.mjs",
     "schema.d.ts",
     "README.md"

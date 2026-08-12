@@ -39,7 +39,10 @@ takes `:rpc/unit`, refuses a page cursor, writes the
 appends nothing to the FRAMLOG, changes no store state, and answers sequence,
 watermark, stamp, fingerprint, and image byte count. It is an operator and
 embedder control, not application traffic: the JVM oracle route, the Bun
-client, the shim, and `bin/fram` all stay at the thirteen data operations.
+`framClient` object, the shim, and `bin/fram` all stay at the thirteen data
+operations. The Bun module exposes only one separately named fixed operator
+helper, `framNativeCheckpoint`, for `bin/fram-backup`; it cannot select a raw
+operation and is not a method on the data client.
 [`../tests/fram_snapshot_boot_test.sh`](../tests/fram_snapshot_boot_test.sh)
 gates the operation and the boot route it feeds.
 
@@ -161,9 +164,67 @@ embedder that answers no `fd_write` sees only the trap. Size the store to the
 budget;
 the measured shapes are in [`../RELEASE-v0.5.0.md`](../RELEASE-v0.5.0.md).
 
-## Durable state and handoff
+## Durable state, backup, and restore
 
-Back up `history.framlog` as an append-only binary artifact with its SpaceId. Inspect it through scan, query, occurrences, and validate, never text scraping. Legacy flat logs enter only through the one-shot migration against explicit quiescent source and destination paths.
+`history.framlog` is the authority. The adjacent snapshot image is derived
+restart acceleration, not backup authority. `bin/fram-backup` is the supported
+live POSIX/native backup path:
+
+```sh
+bin/fram-backup create \
+  --output /srv/backups/fram-2026-08-12T0900Z \
+  --log /var/lib/fram/history.framlog \
+  --artifact-receipt "$FRAM_NATIVE_ARTIFACT_DIR/READY" \
+  --space-id "$FRAM_SPACE_ID" \
+  --host "${FRAM_SERVER_CONNECT:-127.0.0.1}" \
+  --port "${FRAM_SERVER_PORT:-7977}"
+
+bin/fram-backup verify \
+  --backup /srv/backups/fram-2026-08-12T0900Z \
+  --space-id "$FRAM_SPACE_ID"
+```
+
+The output path must be absolute and absent. Create opens the supplied FRAMLOG
+as a non-symlink regular file before asking the native server for a checkpoint.
+It verifies the log header SpaceId and the newly written adjacent snapshot
+sidecar against the checkpoint receipt; this binds the cutoff to the supplied
+server storage path. It then copies exactly the durable prefix through the
+returned watermark. Later appends may continue and are not part of that
+backup.
+
+A complete backup contains exactly `history.framlog`, `artifact.READY`,
+`manifest.json`, and `manifest.sha256`. The manifest uses canonical UTF-8 JSON
+with decimal strings for every i64 or byte count and records the SpaceId,
+served version, cutoff, checkpoint metadata, SHA-256 of the exact history
+prefix, SHA-256 of the exact READY receipt, and its native build closure hash.
+`manifest.json` is the backup commit point and is installed last by atomic
+rename after the other files and directory have been synced. A failed create
+may leave an output directory without that commit point; verification refuses
+it. The snapshot is intentionally absent because restore can fold canonical
+history and regenerate derived state.
+
+Restore is a gate, not a second storage subsystem:
+
+```sh
+backup=/srv/backups/fram-2026-08-12T0900Z
+restore=/var/lib/fram-restored
+bin/fram-backup verify --backup "$backup" --space-id "$FRAM_SPACE_ID"
+test ! -e "$restore/history.framlog"
+mkdir -p "$restore"
+cp "$backup/history.framlog" "$restore/history.framlog"
+cmp "$backup/artifact.READY" "$FRAM_NATIVE_ARTIFACT_DIR/READY"
+FRAM_SPACE_ID="$FRAM_SPACE_ID" bin/fram-server serve \
+  "${FRAM_SERVER_PORT:-7977}" "$restore/history.framlog"
+```
+
+Use fresh target storage and the exact artifact receipt carried by the backup.
+A different SpaceId fails closed during boot before mutation. Native systemd readiness is
+emitted only after the restored log has folded/replayed; the first
+`rpc/version` must equal `manifest.json`'s `servedVersion`. Only then admit
+writes. The recovery gate writes once, restarts again, and proves that the new
+write survived. Inspect history through scan, query, occurrences, and validate,
+never text scraping. Legacy flat logs enter only through the one-shot migration
+against explicit quiescent source and destination paths.
 
 Source head exposes no deployment-control operation. Runtime publication uses
 systemd socket activation and a generation symlink outside the data protocol.
@@ -212,3 +273,4 @@ The patterns that keep growth proportional to change:
 - [`../tests/writer_authority_test.clj`](../tests/writer_authority_test.clj): writer-authority and JVM-oracle compatibility behavior.
 - [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh): the wasm host-import regime end to end — pinned seams, native/wasm response and FRAMLOG byte identity, the snapshot image, the unpaged codec bound, and the WASI call tally.
 - [`../tests/fram_snapshot_boot_test.sh`](../tests/fram_snapshot_boot_test.sh): `rpc/checkpoint`, snapshot boot, and the degrade-to-fold path for a damaged image.
+- [`../tests/fram_backup_restore_test.sh`](../tests/fram_backup_restore_test.sh): live cutoff backup, canonical hash verification, fresh-storage restore, wrong-SpaceId refusal, and a post-restore write across another restart.

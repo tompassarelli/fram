@@ -9,6 +9,7 @@ import {
   float64Term,
   float64Value,
   framClient,
+  framNativeCheckpoint,
   instantTerm,
   integerTerm,
   keywordTerm,
@@ -144,6 +145,12 @@ async function startServer(port, log, space) {
 }
 
 async function exerciseClient(fram) {
+  await check('native checkpoint is fixed and absent from the data client object', async () => {
+    assert.equal(typeof framNativeCheckpoint, 'function');
+    assert.equal(fram.checkpoint, undefined);
+    assert.equal(fram.raw, undefined);
+  });
+
   await check('Term constructors preserve i64, float, recursive Triple, and Instant identity', async () => {
     assert.equal(FRAMRPC_MAX_BATCH_ACTIONS, 247);
     assert.equal(SCHEMA_MAX_BATCH_ACTIONS, FRAMRPC_MAX_BATCH_ACTIONS);

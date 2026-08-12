@@ -21,6 +21,7 @@ const OPERATIONS = new Set([
   'rpc/lease-acquire', 'rpc/lease-renew', 'rpc/lease-release',
   'rpc/lease-check',
 ]);
+const NATIVE_OPERATOR_OPERATIONS = new Set(['rpc/checkpoint']);
 const PAGED_OPERATIONS = new Set(['rpc/scan', 'rpc/query', 'rpc/occurrences']);
 const textDecoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -569,10 +570,10 @@ function requestControls(operation, options) {
   return { expectedVersion, page, timeoutMs };
 }
 
-function encodeRequest(requestId, space, operation, payload, options) {
+function encodeRequest(requestId, space, operation, payload, options, operations = OPERATIONS) {
   if (typeof space !== 'string' || !space) fail('space must be a nonempty string', 'client/invalid-space');
   strictUtf8(space, MAX_SPACE_BYTES, 'SpaceId');
-  if (!OPERATIONS.has(operation)) fail(`${operation} is outside FRAMRPC v1`, 'client/unsupported-operation');
+  if (!operations.has(operation)) fail(`${operation} is outside this FRAMRPC surface`, 'client/unsupported-operation');
   const controls = requestControls(operation, options);
   const body = new Writer();
   const budget = { nodes: 0, maxDepth: 0 };
@@ -1040,6 +1041,67 @@ function publicResponse(response) {
     result: operationResult(response.operation, response.payload),
     payload: response.payload,
   };
+}
+
+function checkpointResult(response) {
+  if (response.error) throw new FramRpcError(response);
+  if (response.page !== null || response.payload === null) {
+    fail('checkpoint response has an invalid envelope', 'client/invalid-record');
+  }
+  const fields = rawRecordFields(response.payload, 'rpc/checkpoint', 5);
+  const values = fields.map((value, index) => intValue(value, `checkpoint field ${index}`));
+  if (values.some(value => value < 0n)) {
+    fail('checkpoint fields must be nonnegative', 'client/invalid-record');
+  }
+  if (values[0] !== response.servedVersion) {
+    fail('checkpoint payload version disagrees with its envelope', 'client/invalid-record');
+  }
+  if (values[3] > U32_MAX) {
+    fail('checkpoint snapshot CRC32 is outside u32', 'client/invalid-record');
+  }
+  return Object.freeze({
+    space: response.space,
+    operation: response.operation,
+    servedVersion: response.servedVersion,
+    watermarkBytes: values[1],
+    createdAtUnixMs: values[2],
+    snapshotCrc32: values[3],
+    snapshotBytes: values[4],
+  });
+}
+
+// Operator-only fixed capability. It is deliberately absent from framClient,
+// cannot select another operation, and leaves the thirteen-operation data
+// surface closed. The native server uses the returned watermark as a durable
+// FRAMLOG backup cutoff; other server routes may reject the operation.
+export async function framNativeCheckpoint({
+  host = '127.0.0.1', port = 7977, space, requestTimeoutMs = 15000,
+} = {}) {
+  if (typeof host !== 'string' || !host) fail('host must be a nonempty string', 'client/invalid-host');
+  if (!Number.isInteger(port) || port < 1 || port > 65535) fail('port must be from 1 through 65535', 'client/invalid-port');
+  if (typeof space !== 'string' || !space) fail('space must be a nonempty string', 'client/invalid-space');
+  strictUtf8(space, MAX_SPACE_BYTES, 'SpaceId');
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1) {
+    fail('requestTimeoutMs must be a positive safe integer', 'client/invalid-timeout');
+  }
+  const operation = 'rpc/checkpoint';
+  const requestId = 1n;
+  const encoded = encodeRequest(
+    requestId,
+    space,
+    operation,
+    unit,
+    {},
+    NATIVE_OPERATOR_OPERATIONS,
+  );
+  const response = await exchange({
+    host,
+    port,
+    frame: encoded.frame,
+    expected: { requestId, space, operation },
+    timeoutMs: requestTimeoutMs,
+  });
+  return checkpointResult(response);
 }
 
 function prepareBatch(actions, options, allowPreflight) {

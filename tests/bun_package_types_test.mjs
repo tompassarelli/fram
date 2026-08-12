@@ -61,6 +61,7 @@ test('packed Bun consumer accepts the public declaration surface', async () => {
     await Bun.write(resolve(scratch, 'consumer.mts'), `
 import {
   FRAMRPC_MAX_BATCH_ACTIONS,
+  framNativeCheckpoint,
   keywordTerm,
 } from '@tompassarelli/framrpc';
 import type { BatchPreflight, FramClient, Term } from '@tompassarelli/framrpc';
@@ -124,6 +125,7 @@ const code: SchemaConstraintCode = 'schema/current-value-rejected';
 const protocolActions: 247 = FRAMRPC_MAX_BATCH_ACTIONS;
 const schemaActions: typeof FRAMRPC_MAX_BATCH_ACTIONS = SCHEMA_MAX_BATCH_ACTIONS;
 const pages: 2 = SCHEMA_MAX_READ_PAGES;
+const checkpoint = framNativeCheckpoint({ space: 'operator-space' });
 void schema.updateUnique(update);
 void schema.updateUniqueMany(many);
 void schema.transactUnique(transaction);
@@ -138,6 +140,7 @@ void code;
 void protocolActions;
 void schemaActions;
 void pages;
+void checkpoint;
 `);
 
     run(Bun.argv[0], [

@@ -101,6 +101,11 @@ engine wire is binary FRAMRPC.
   `scan`, `occurrences`, `version`, `status`, and `validate`) over FRAMRPC.
   Explicit local migration/projection/admin commands are separate from that
   wire path.
+- `bin/fram-backup` is the Bun-first native operator path. It takes a live
+  checkpoint, copies the exact durable FRAMLOG prefix at that cutoff, and
+  publishes a canonical hash manifest with the SpaceId, served version, and
+  exact native artifact READY receipt. It does not add an application data
+  operation or treat the derived snapshot image as authoritative backup data.
 - `bin/fram-mcp` is a JSON-RPC-over-stdio edge with exactly five public data
   tools: `tell`, `retract`, `show`, `ask`, and `validate`. Graph authoring and
   deployment control are separate sealed services.
@@ -112,6 +117,9 @@ engine wire is binary FRAMRPC.
   occurrence-correct single-value replacement, unique creation/upsert,
   identity-resolved guarded updates, and mixed create/update transactions
   without adding domain roles to the kernel.
+  The same module owns the codec for the separately named, fixed
+  `framNativeCheckpoint` operator capability used by `fram-backup`; that
+  capability is deliberately absent from the ordinary `framClient` object.
 - The Cloudflare shim accepts closed JSON with tagged recursive Terms and lowers
   it to FRAMRPC. It does not accept EDN or an untyped escape hatch.
 - The engine also links as a library: `native/fram.h` publishes embedding ABI

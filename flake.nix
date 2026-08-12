@@ -38,6 +38,7 @@
           # JVM oracle's exact classpath is resolved once during the build from the
           # pure cache above. Native remains the launcher's default route.
           runtimePackages = [
+            pkgs.bun
             pkgs.babashka
             pkgs.coreutils
             pkgs.bash
@@ -77,6 +78,7 @@
 
           nativeBuildInputs = [
             pkgs.makeWrapper
+            pkgs.bun
             pkgs.babashka
             pkgs.clojure
             pkgs.coreutils
@@ -88,11 +90,14 @@
           installPhase = ''
             runHook preInstall
 
-            mkdir -p $out/libexec/fram/tests $out/libexec/fram/codegraph $out/bin
+            mkdir -p $out/libexec/fram/tests $out/libexec/fram/codegraph \
+              $out/libexec/fram/clients/bun $out/bin
             cp -r out bin src database.clj server.clj writer_authority.clj fri.clj \
               rotations.clj deps.edn \
               $out/libexec/fram/
             cp tests/fram_mcp.clj $out/libexec/fram/tests/
+            cp clients/bun/backup.mjs clients/bun/framrpc.mjs \
+              $out/libexec/fram/clients/bun/
             # Only codegraph's source is executable runtime input. build/ is a
             # generated analysis corpus with checkout-local paths; docs/tests are
             # development assets and do not belong in the closure.
@@ -153,7 +158,7 @@
               rm -rf .cpcache
             )
 
-            # Absolute interpreters for #!/usr/bin/env bash | bb shebangs.
+            # Absolute interpreters for #!/usr/bin/env bash | bb | bun shebangs.
             patchShebangs $out/libexec/fram/bin
 
             for s in $out/libexec/fram/bin/*; do
@@ -164,7 +169,7 @@
               # but require an external Beagle toolchain and are not advertised
               # as self-contained package commands.
               case "$name" in
-                fram|fram-cutover|fram-server|fram-mcp) ;;
+                fram|fram-backup|fram-cutover|fram-server|fram-mcp) ;;
                 *) continue ;;
               esac
               chmod +x "$s"
@@ -200,10 +205,11 @@
           '';
 
           meta = with pkgs.lib; {
-            description = "Fram fact-engine CLI, MCP server, primer, and native-first server launcher";
+            description = "Fram fact-engine CLI, backup operator, MCP server, primer, and native-first server launcher";
             longDescription = ''
-              Self-contained CLI, MCP server, primer, and native-first server
-              launcher with an explicitly selected packaged JVM oracle.
+              Self-contained data CLI, native backup operator, MCP server,
+              primer, and native-first server launcher with an explicitly
+              selected packaged JVM oracle.
               Beagle graph-authoring helpers are retained under libexec and require
               an external BEAGLE_HOME toolchain; they are not public package commands.
             '';

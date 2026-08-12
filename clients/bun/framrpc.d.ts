@@ -223,6 +223,16 @@ export interface FramClientOptions {
   requestTimeoutMs?: number;
 }
 
+export interface FramNativeCheckpointResult {
+  readonly space: string;
+  readonly operation: 'rpc/checkpoint';
+  readonly servedVersion: bigint;
+  readonly watermarkBytes: bigint;
+  readonly createdAtUnixMs: bigint;
+  readonly snapshotCrc32: bigint;
+  readonly snapshotBytes: bigint;
+}
+
 export const FRAMRPC_VERSION: Readonly<{ major: 1; minor: 0 }>;
 export const FRAMRPC_MAX_BATCH_ACTIONS: 247;
 
@@ -256,4 +266,6 @@ export function listValues(value: Term): Term[];
 export function recordFields(value: Term, tag: string, count: number): Term[];
 export function lowerQueryPlan(value: StructuredQuery): TripleTerm;
 export function tripleQuery(pattern?: TriplePattern): TripleTerm;
+/** Operator-only fixed capability; deliberately absent from FramClient. */
+export function framNativeCheckpoint(options: FramClientOptions): Promise<FramNativeCheckpointResult>;
 export function framClient(options: FramClientOptions): FramClient;

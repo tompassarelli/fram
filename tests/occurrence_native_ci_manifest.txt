@@ -60,12 +60,14 @@ run-shell	current-cache	tests/fri_golden.sh	-
 run-shell	current-model	tests/fri2_replay_oracle_test.sh	-
 run-node	current-cloudflare	tests/cloudflare_worker_client_test.mjs	-
 run-bun	current-bun-client	tests/bun_framrpc_client_test.mjs	-
+run-bun	current-bun-backup	tests/bun_backup_test.mjs	-
 run-bun	current-bun-schema-client	tests/bun_schema_client_test.mjs	-
 run-bun	current-bun-package-types	tests/bun_package_types_test.mjs	-
 aggregate-nix	package-closure	tests/package_server_smoke.sh	flake.nix#package_server_smoke
 baseline-shell	vocab-residue	tests/vocab_ratchet_test.sh	tests/vocab_ratchet_test.sh#REGROWTH
 
 exclude-runner	runner-capacity	tests/fram_snapshot_boot_test.sh	tests/fram_snapshot_boot_test.sh#--host server
+exclude-runner	runner-capacity	tests/fram_backup_restore_test.sh	tests/fram_backup_restore_test.sh#--host server
 
 exclude-gate	removed-flat-cli	scripts/readme-check.sh	scripts/readme-check.sh#core.engine.loop
 exclude-gate	removed-flat-store	bench/propagation/check-budget.clj	bench/propagation/sweep.clj#fram.schema

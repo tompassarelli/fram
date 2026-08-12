@@ -121,6 +121,10 @@ grep -Fq 'occurrence(coordinate, action, proposition)' docs/query-reference.md |
   fail 'query reference lacks the occurrence base relation'
 grep -Fq 'FRAMRPC v1' docs/isolation-and-deployment.md ||
   fail 'wire reference lacks FRAMRPC v1'
+grep -Fq '`manifest.json` is the backup commit point' docs/isolation-and-deployment.md ||
+  fail 'deployment reference lacks the atomic backup commit point'
+grep -Fq 'different SpaceId fails closed during boot before mutation' docs/isolation-and-deployment.md ||
+  fail 'deployment reference lacks the restore SpaceId refusal'
 grep -Fq '../native/wasm-embed.seams' docs/isolation-and-deployment.md ||
   fail 'the embed contract does not point at the seam fixture that pins it'
 grep -Fq 'The honest not-yet list' docs/coming-from-datomic.md ||

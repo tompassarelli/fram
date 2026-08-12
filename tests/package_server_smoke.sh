@@ -18,7 +18,8 @@ case "$package_root" in /nix/store/*) ;; *)
 runtime="$package_root/libexec/fram"
 required=(
   "$package_root/bin/fram" "$package_root/bin/fram-server"
-  "$package_root/bin/fram-mcp"
+  "$package_root/bin/fram-backup" "$package_root/bin/fram-mcp"
+  "$runtime/clients/bun/backup.mjs" "$runtime/clients/bun/framrpc.mjs"
   "$runtime/bin/fram-fast.clj" "$runtime/bin/fram-migrate-triple-log"
   "$runtime/database.clj" "$runtime/server.clj"
   "$runtime/writer_authority.clj" "$runtime/rotations.clj"
@@ -29,6 +30,11 @@ required=(
 for path in "${required[@]}"; do
   [[ -e "$path" ]] || { echo "fram package smoke: missing runtime asset: $path" >&2; exit 1; }
 done
+if ! "$env_bin" -i "$package_root/bin/fram-backup" --help \
+    | "$grep_bin" -Fq 'fram-backup create'; then
+  echo "fram package smoke: packaged backup operator did not start under an empty environment" >&2
+  exit 1
+fi
 
 hidden_commands=(fram-code-author fram-code-off fram-code-on fram-code-status
   fram-commit-code fram-defcheck fram-defcheck-server.rkt fram-edit-code

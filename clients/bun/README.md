@@ -1,8 +1,8 @@
 # `@tompassarelli/framrpc`
 
 The official Bun client for Fram's binary FRAMRPC v1 data plane. It is an
-ES module with no runtime dependencies and exposes all thirteen frozen native
-operations.
+ES module with no runtime dependencies. The `framClient` object exposes all
+thirteen frozen data operations.
 
 Use this client for application and builder traffic that needs exact recursive
 Terms, atomic batches, optimistic versions, occurrence replay, or pinned
@@ -164,6 +164,17 @@ eventual call. Pass that object back as `batch(..., { preflight })`; the client
 re-encodes the request and throws `FramProtocolError` with
 `client/preflight-mismatch` before opening a connection if any metric changed.
 This helper is client-side and does not add a fourteenth FRAMRPC operation.
+
+### Native operator checkpoint
+
+`framNativeCheckpoint(options)` is one separately named, fixed operator
+capability used by `bin/fram-backup`. It sends only `rpc/checkpoint`, cannot be
+used as a generic operation escape hatch, and is deliberately absent from the
+ordinary `framClient` object. The native server writes its derived snapshot
+image and returns the exact durable FRAMLOG watermark, served version,
+timestamp, snapshot CRC32, and snapshot byte count. Application and builder
+traffic should use `framClient`; the JVM routes may reject this native-only
+operator operation.
 
 ## Schema-aware application writes
 
