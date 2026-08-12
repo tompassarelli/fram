@@ -8,6 +8,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   ChunkedRange,
   FramDurableObjectBase,
+  framAdminEntrypoint,
   framDataPlaneEntrypoint,
   hex,
 } from "../../src/adapter.mjs";
@@ -34,9 +35,10 @@ function json(body, status = 200) {
   });
 }
 
-export class FramLog extends FramDurableObjectBase {
+class FramHarness {
   constructor(state, env) {
-    super(state, env, framModule, {
+    this.state = state;
+    this.base = new FramDurableObjectBase(state, env, framModule, {
       spaceId: SPACE,
       logLabel: "in-memory",
       instance: {
@@ -44,6 +46,46 @@ export class FramLog extends FramDurableObjectBase {
         arena: { initialPages: 128 },
       },
     });
+  }
+
+  fram() {
+    return this.base.fram();
+  }
+
+  recycle() {
+    return this.base.recycle();
+  }
+
+  query(frame) {
+    return this.base.query(frame);
+  }
+
+  transact(frame) {
+    return this.base.transact(frame);
+  }
+
+  checkpoint(frame) {
+    return this.base.checkpoint(frame);
+  }
+
+  exchange(frame, options) {
+    return this.base.exchange(frame, options);
+  }
+
+  exportFramlog() {
+    return this.base.exportFramlog();
+  }
+
+  restoreFramlog(backup, options) {
+    return this.base.restoreFramlog(backup, options);
+  }
+
+  get openResult() {
+    return this.base.openResult;
+  }
+
+  get store() {
+    return this.base.store;
   }
 
   async fetch(request) {
@@ -56,7 +98,10 @@ export class FramLog extends FramDurableObjectBase {
       if (url.pathname === "/concurrent-boot") return await this.race(url);
       if (url.pathname === "/ready") return json({ ready: true });
     } catch (error) {
-      return json({ fatal: `${error.message}`, stack: error.stack }, 500);
+      return json(
+        { fatal: `${error.message}`, code: error.code ?? null, stack: error.stack },
+        500,
+      );
     }
     return json({ fatal: `no such route: ${url.pathname}` }, 404);
   }
@@ -192,11 +237,37 @@ export class FramLog extends FramDurableObjectBase {
 
 // Distinct namespaces isolate harness scenarios while every object is still
 // addressed by the one exact SpaceId carried in its frames.
-export class FramWarm extends FramLog {}
-export class FramMatrix extends FramLog {}
-export class FramDepth extends FramLog {}
-export class FramMultichunk extends FramLog {}
-export class FramRace extends FramLog {}
+class FramHarnessObject extends DurableObject {
+  #fram;
+
+  constructor(state, env) {
+    super(state, env);
+    this.#fram = new FramHarness(state, env);
+  }
+
+  fetch(request) {
+    return this.#fram.fetch(request);
+  }
+
+  exchange(frame, options) {
+    return this.#fram.exchange(frame, options);
+  }
+
+  exportFramlog() {
+    return this.#fram.exportFramlog();
+  }
+
+  restoreFramlog(backup, options) {
+    return this.#fram.restoreFramlog(backup, options);
+  }
+}
+
+export class FramWarm extends FramHarnessObject {}
+export class FramMatrix extends FramHarnessObject {}
+export class FramRestored extends FramHarnessObject {}
+export class FramDepth extends FramHarnessObject {}
+export class FramMultichunk extends FramHarnessObject {}
+export class FramRace extends FramHarnessObject {}
 export class FramClient extends DurableObject {
   #fram;
 
@@ -220,6 +291,7 @@ export class FramClient extends DurableObject {
 const NAMESPACE = Object.freeze({
   warm: "FRAM_WARM",
   matrix: "FRAM_MATRIX",
+  "matrix-restored": "FRAM_RESTORED",
   depth: "FRAM_DEPTH",
   multichunk: "FRAM_MULTICHUNK",
   race: "FRAM_RACE",
@@ -246,6 +318,36 @@ export default {
       return new Response(response, {
         headers: { "content-type": "application/vnd.framrpc" },
       });
+    }
+    if (url.pathname === "/admin/export") {
+      const source = url.searchParams.get("id") === "matrix-restored"
+        ? env.FRAM_RESTORED
+        : env.FRAM_MATRIX;
+      const admin = framAdminEntrypoint(source, SPACE);
+      const backup = await admin.exportFramlog();
+      return new Response(backup.bytes, {
+        headers: {
+          "content-type": "application/octet-stream",
+          "x-fram-backup-format": backup.format,
+          "x-fram-byte-length": String(backup.byteLength),
+          "x-fram-served-version": backup.servedVersion,
+          "x-fram-sha256": backup.sha256,
+          "x-fram-space-id": backup.spaceId,
+        },
+      });
+    }
+    if (url.pathname === "/admin/restore") {
+      const admin = framAdminEntrypoint(env.FRAM_RESTORED, SPACE);
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      const backup = {
+        format: request.headers.get("x-fram-backup-format"),
+        spaceId: request.headers.get("x-fram-space-id"),
+        servedVersion: request.headers.get("x-fram-served-version"),
+        byteLength: Number(request.headers.get("x-fram-byte-length")),
+        sha256: request.headers.get("x-fram-sha256"),
+        bytes,
+      };
+      return json(await admin.restoreFramlog(backup));
     }
     const scenario = url.searchParams.get("id") ?? "matrix";
     return namespace(env, scenario).getByName(SPACE).fetch(request);

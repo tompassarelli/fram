@@ -12,6 +12,7 @@ import {
   FramInstance,
   MemoryStorage,
   inspectFramRpcRequest,
+  framAdminEntrypoint,
   framDataPlaneEntrypoint,
 } from "../src/adapter.mjs";
 
@@ -19,6 +20,10 @@ const [wasmPath, framesDir] = process.argv.slice(2);
 const SPACE = "fram-wasm-embed";
 const module = new WebAssembly.Module(readFileSync(wasmPath));
 const frame = (name) => new Uint8Array(readFileSync(`${framesDir}/${name}`));
+const objectState = (storage, spaceId = SPACE) => ({
+  storage,
+  id: { name: spaceId },
+});
 
 const failures = [];
 const notes = [];
@@ -50,6 +55,44 @@ const durableLog = (storage) =>
 
 function samePrefix(shorter, longer) {
   return shorter.every((byte, index) => byte === longer[index]);
+}
+
+function sameBytes(left, right) {
+  return left.length === right.length && samePrefix(left, right);
+}
+
+const durableImage = (storage) =>
+  new ChunkedRange(storage, { prefix: "framimage/" }).load();
+
+async function sha256(bytes) {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function backupWithBytes(backup, bytes) {
+  return {
+    ...backup,
+    byteLength: bytes.length,
+    sha256: await sha256(bytes),
+    bytes,
+  };
+}
+
+class FailPostPublishStorage extends MemoryStorage {
+  constructor() {
+    super();
+    this.failNextMarkerClear = false;
+  }
+
+  async transaction(body) {
+    if (this.failNextMarkerClear && this.map.has("framrestore/pending")) {
+      this.failNextMarkerClear = false;
+      throw new Error("restore marker delete said no");
+    }
+    return super.transaction(body);
+  }
 }
 
 // -- 1. a lost isolate leaves a SHORT log, never a torn one ------------------
@@ -349,6 +392,23 @@ function samePrefix(shorter, longer) {
     requestedName === SPACE,
     "the data-plane facade resolves the raw object only by exact SpaceId name",
   );
+
+  let adminName;
+  const admin = framAdminEntrypoint({
+    getByName(name) {
+      adminName = name;
+      return object;
+    },
+  }, SPACE);
+  check(
+    Object.keys(admin).join(",") === "exportFramlog,restoreFramlog",
+    "the separate admin capability exposes only FRAMLOG export and restore",
+  );
+  const adminBackup = await admin.exportFramlog();
+  check(
+    adminName === SPACE && adminBackup.spaceId === SPACE,
+    "the admin facade resolves the same raw object by exact SpaceId name",
+  );
 }
 
 // -- 6. the stale-chunk delete path -----------------------------------------
@@ -389,6 +449,422 @@ function samePrefix(shorter, longer) {
     both.commits === 1 && both.stats().log.chunks === 2,
     `one transaction published both ranges (${both.stats().log.chunks} log ` +
       `chunks, ${both.stats().image.chunks} image chunk)`,
+  );
+}
+
+// -- 6. portable FRAMLOG export -> empty restore -> semantic equivalence -----
+{
+  const sourceStorage = new MemoryStorage();
+  const source = new FramDurableObjectBase(objectState(sourceStorage), {}, module, {
+    spaceId: SPACE,
+    instance: { nowMs: () => 1700000000000, arena: { initialPages: 8 } },
+  });
+  await source.transact(frame("03-assert-unicode.bin"));
+  await source.transact(frame("04-batch-mixed.bin"));
+  const checkpointed = await source.checkpoint(frame("27-checkpoint.bin"));
+  check(checkpointed.status === 0, "the backup source wrote a checkpoint image");
+
+  const backup = await source.exportFramlog();
+  const sourceLog = await durableLog(sourceStorage);
+  const sourceImage = await durableImage(sourceStorage);
+  check(
+    backup.format === "fram-cloudflare-backup/v1" &&
+      backup.spaceId === SPACE &&
+      /^(?:0|[1-9][0-9]*)$/.test(backup.servedVersion) &&
+      backup.byteLength === sourceLog.length &&
+      /^[0-9a-f]{64}$/.test(backup.sha256),
+    `export described ${backup.byteLength} bytes as ${backup.sha256}`,
+  );
+  check(sameBytes(backup.bytes, sourceLog), "export bytes equal the durable FRAMLOG");
+  check(sourceImage.length > 0, `source image has ${sourceImage.length} bytes`);
+
+  const restoredStorage = new MemoryStorage();
+  const restored = new FramDurableObjectBase(
+    objectState(restoredStorage),
+    {},
+    module,
+    {
+      spaceId: SPACE,
+      instance: { nowMs: () => 1700000000000, arena: { initialPages: 8 } },
+    },
+  );
+  const receipt = await restored.restoreFramlog(backup);
+  const restoredLog = await durableLog(restoredStorage);
+  const restoredImage = await durableImage(restoredStorage);
+  check(
+    receipt.sha256 === backup.sha256 &&
+      receipt.servedVersion === backup.servedVersion &&
+      receipt.replaced === false,
+    "empty-target restore returned the exported checksum and served version",
+  );
+  check(
+    sameBytes(restoredLog, sourceLog),
+    "empty-target restore landed the FRAMLOG byte for byte",
+  );
+  check(restoredImage.length === 0, "restore omitted the derived snapshot image");
+
+  const sourceAnswer = await source.query(frame("20-query-all-final.bin"));
+  const restoredAnswer = await restored.query(frame("20-query-all-final.bin"));
+  check(
+    sourceAnswer.status === restoredAnswer.status &&
+      sameBytes(sourceAnswer.response, restoredAnswer.response),
+    "restored object answers byte-identically to the source",
+  );
+
+  const beforeRefusal = await durableLog(restoredStorage);
+  const healthy = await restored.fram();
+  let nonempty = null;
+  try {
+    await restored.restoreFramlog(backup);
+  } catch (error) {
+    nonempty = error;
+  }
+  check(
+    nonempty?.name === "FramBackupError" &&
+      nonempty.code === "target-not-empty",
+    "replace defaults false and refuses a nonempty target",
+  );
+  check(
+    sameBytes(await durableLog(restoredStorage), beforeRefusal),
+    "the nonempty-target refusal leaves durable bytes unchanged",
+  );
+  check(
+    (await healthy.query(frame("02-status.bin"))).status === 0,
+    "the expected nonempty-target refusal does not fence the live guest",
+  );
+
+  const mismatched = new FramDurableObjectBase(
+    objectState(new MemoryStorage(), "another-space"),
+    {},
+    module,
+    { spaceId: "another-space" },
+  );
+  let wrongSpace = null;
+  try {
+    await mismatched.restoreFramlog(backup);
+  } catch (error) {
+    wrongSpace = error;
+  }
+  check(
+    wrongSpace?.code === "space-mismatch",
+    "restore requires the configured SpaceId to equal the backup",
+  );
+
+  const damagedBytes = backup.bytes.slice();
+  damagedBytes[damagedBytes.length - 1] ^= 1;
+  const damagedStorage = new MemoryStorage();
+  const damagedTarget = new FramDurableObjectBase(
+    objectState(damagedStorage),
+    {},
+    module,
+    { spaceId: SPACE },
+  );
+  let damaged = null;
+  try {
+    await damagedTarget.restoreFramlog({ ...backup, bytes: damagedBytes });
+  } catch (error) {
+    damaged = error;
+  }
+  check(damaged?.code === "verification", "restore rejects a checksum mismatch");
+  check(damagedStorage.map.size === 0, "checksum refusal does not touch storage");
+
+  // FRAM accepts an incomplete final record by repairing back to the complete
+  // prefix during open. A portable restore requires the supplied bytes
+  // themselves to be canonical, so a correctly hashed torn suffix still fails.
+  const tornBytes = new Uint8Array(backup.bytes.length + 1);
+  tornBytes.set(backup.bytes);
+  tornBytes[tornBytes.length - 1] = 0xff;
+  const tornBackup = await backupWithBytes(backup, tornBytes);
+  const tornStorage = new MemoryStorage();
+  const tornTarget = new FramDurableObjectBase(
+    objectState(tornStorage),
+    {},
+    module,
+    { spaceId: SPACE },
+  );
+  let torn = null;
+  try {
+    await tornTarget.restoreFramlog(tornBackup);
+  } catch (error) {
+    torn = error;
+  }
+  check(
+    torn?.code === "invalid-framlog",
+    "restore replays and rejects a correctly hashed torn FRAMLOG suffix",
+  );
+  check(tornStorage.map.size === 0, "replay refusal does not touch storage");
+
+  const wrongVersionStorage = new MemoryStorage();
+  const wrongVersionTarget = new FramDurableObjectBase(
+    objectState(wrongVersionStorage),
+    {},
+    module,
+    { spaceId: SPACE },
+  );
+  let wrongVersion = null;
+  try {
+    await wrongVersionTarget.restoreFramlog({
+      ...backup,
+      servedVersion: (BigInt(backup.servedVersion) + 1n).toString(),
+    });
+  } catch (error) {
+    wrongVersion = error;
+  }
+  check(
+    wrongVersion?.code === "verification",
+    "full replay binds servedVersion to the supplied FRAMLOG",
+  );
+  check(
+    wrongVersionStorage.map.size === 0,
+    "served-version refusal does not touch storage",
+  );
+}
+
+// -- 7. replacement uses a byte CAS and publishes both ranges atomically ------
+{
+  const sourceStorage = new MemoryStorage();
+  const source = new FramDurableObjectBase(objectState(sourceStorage), {}, module, {
+    spaceId: SPACE,
+    instance: { nowMs: () => 1700000000000, arena: { initialPages: 8 } },
+  });
+  await source.transact(frame("03-assert-unicode.bin"));
+  const backup = await source.exportFramlog();
+
+  const targetStorage = new MemoryStorage();
+  const target = new FramDurableObjectBase(objectState(targetStorage), {}, module, {
+    spaceId: SPACE,
+    instance: { nowMs: () => 1700000000000, arena: { initialPages: 8 } },
+  });
+  await target.transact(frame("04-batch-mixed.bin"));
+  await target.checkpoint(frame("27-checkpoint.bin"));
+  const current = await target.exportFramlog();
+  const expectedCurrent = {
+    byteLength: current.byteLength,
+    sha256: current.sha256,
+  };
+  const retained = await target.fram();
+  const oldLog = await durableLog(targetStorage);
+  const oldImage = await durableImage(targetStorage);
+
+  const transaction = targetStorage.transaction.bind(targetStorage);
+  let reject = true;
+  targetStorage.transaction = async (body) => {
+    if (reject) throw new Error("restore storage said no");
+    return transaction(body);
+  };
+  let rejected = null;
+  try {
+    await target.restoreFramlog(backup, { replace: true, expectedCurrent });
+  } catch (error) {
+    rejected = error;
+  }
+  check(rejected?.code === "storage", "a rejected restore transaction is surfaced");
+  check(
+    sameBytes(await durableLog(targetStorage), oldLog) &&
+      sameBytes(await durableImage(targetStorage), oldImage),
+    "a rejected restore leaves the old log and image byte-identical",
+  );
+  let fenced = null;
+  try {
+    await retained.query(frame("02-status.bin"));
+  } catch (error) {
+    fenced = error;
+  }
+  check(
+    fenced?.code === "administrative-fence",
+    "the guest retained across a restore attempt is fenced",
+  );
+
+  check(
+    (await target.query(frame("02-status.bin"))).status === 0,
+    "a rejected publication reopens the old durable state",
+  );
+
+  reject = false;
+  const receipt = await target.restoreFramlog(backup, {
+    replace: true,
+    expectedCurrent,
+  });
+  check(receipt.replaced === true, "explicit replacement reports occupied storage");
+  check(
+    sameBytes(await durableLog(targetStorage), backup.bytes),
+    "explicit replacement landed the exported FRAMLOG exactly",
+  );
+  check(
+    (await durableImage(targetStorage)).length === 0,
+    "explicit replacement atomically cleared the old derived image",
+  );
+  const sourceAnswer = await source.query(frame("20-query-all-final.bin"));
+  const targetAnswer = await target.query(frame("20-query-all-final.bin"));
+  check(
+    sourceAnswer.status === targetAnswer.status &&
+      sameBytes(sourceAnswer.response, targetAnswer.response),
+    "replacement reopens with the source semantics",
+  );
+}
+
+// -- 8. a stale replacement cannot overwrite an intervening write ------------
+{
+  const sourceStorage = new MemoryStorage();
+  const source = new FramDurableObjectBase(objectState(sourceStorage), {}, module, {
+    spaceId: SPACE,
+    instance: { nowMs: () => 1700000000000, arena: { initialPages: 8 } },
+  });
+  await source.transact(frame("04-batch-mixed.bin"));
+  const backup = await source.exportFramlog();
+
+  const targetStorage = new MemoryStorage();
+  const target = new FramDurableObjectBase(objectState(targetStorage), {}, module, {
+    spaceId: SPACE,
+    instance: { nowMs: () => 1700000000000, arena: { initialPages: 8 } },
+  });
+  await target.transact(frame("03-assert-unicode.bin"));
+  const observed = await target.exportFramlog();
+  await target.transact(frame("04-batch-mixed.bin"));
+  const intervened = await durableLog(targetStorage);
+
+  let conflict = null;
+  try {
+    await target.restoreFramlog(backup, {
+      replace: true,
+      expectedCurrent: {
+        byteLength: observed.byteLength,
+        sha256: observed.sha256,
+      },
+    });
+  } catch (error) {
+    conflict = error;
+  }
+  check(conflict?.code === "conflict", "a stale replacement CAS is rejected");
+  check(
+    sameBytes(await durableLog(targetStorage), intervened),
+    "the CAS conflict preserves the intervening durable write byte for byte",
+  );
+  check(
+    (await target.query(frame("02-status.bin"))).status === 0,
+    "a pre-publication CAS conflict clears the administrative fence",
+  );
+}
+
+// -- 9. post-publication completion failure is durable and recoverable --------
+{
+  const sourceStorage = new MemoryStorage();
+  const source = new FramDurableObjectBase(objectState(sourceStorage), {}, module, {
+    spaceId: SPACE,
+    instance: { nowMs: () => 1700000000000, arena: { initialPages: 8 } },
+  });
+  await source.transact(frame("04-batch-mixed.bin"));
+  const incoming = await source.exportFramlog();
+
+  const targetStorage = new FailPostPublishStorage();
+  const target = new FramDurableObjectBase(objectState(targetStorage), {}, module, {
+    spaceId: SPACE,
+    instance: { nowMs: () => 1700000000000, arena: { initialPages: 8 } },
+  });
+  await target.transact(frame("03-assert-unicode.bin"));
+  await target.checkpoint(frame("27-checkpoint.bin"));
+  const previous = await target.exportFramlog();
+  const previousAnswer = await target.query(frame("20-query-all-final.bin"));
+
+  targetStorage.failNextMarkerClear = true;
+  let failed = null;
+  try {
+    await target.restoreFramlog(incoming, {
+      replace: true,
+      expectedCurrent: {
+        byteLength: previous.byteLength,
+        sha256: previous.sha256,
+      },
+    });
+  } catch (error) {
+    failed = error;
+  }
+  check(
+    failed?.code === "restore-fenced" &&
+      failed.expectedCurrent?.byteLength === incoming.byteLength &&
+      failed.expectedCurrent?.sha256 === incoming.sha256,
+    "post-publication completion failure returns the exact recovery CAS",
+  );
+  check(
+    sameBytes(await durableLog(targetStorage), incoming.bytes) &&
+      (await durableImage(targetStorage)).length === 0,
+    "failed restore completion leaves the imported log durably published",
+  );
+  let dataFence = null;
+  try {
+    await target.query(frame("02-status.bin"));
+  } catch (error) {
+    dataFence = error;
+  }
+  check(
+    dataFence?.code === "restore-fenced",
+    "data access stays fenced after a failed restore completion",
+  );
+
+  const freshTarget = new FramDurableObjectBase(
+    objectState(targetStorage),
+    {},
+    module,
+    {
+      spaceId: SPACE,
+      instance: { nowMs: () => 1700000000000, arena: { initialPages: 8 } },
+    },
+  );
+  let freshFence = null;
+  try {
+    await freshTarget.query(frame("02-status.bin"));
+  } catch (error) {
+    freshFence = error;
+  }
+  check(
+    freshFence?.code === "restore-fenced",
+    "the durable pending marker fences a fresh object isolate",
+  );
+
+  let recoveryConflict = null;
+  try {
+    await target.restoreFramlog(previous, {
+      replace: true,
+      expectedCurrent: {
+        byteLength: previous.byteLength,
+        sha256: previous.sha256,
+      },
+    });
+  } catch (error) {
+    recoveryConflict = error;
+  }
+  check(
+    recoveryConflict?.code === "conflict",
+    "a recovery attempt with the wrong current checksum is rejected",
+  );
+  let stillFenced = null;
+  try {
+    await target.query(frame("02-status.bin"));
+  } catch (error) {
+    stillFenced = error;
+  }
+  check(
+    stillFenced?.code === "restore-fenced",
+    "a failed recovery attempt preserves the durable fence",
+  );
+
+  const recovered = await target.restoreFramlog(previous, {
+    replace: true,
+    expectedCurrent: {
+      byteLength: incoming.byteLength,
+      sha256: incoming.sha256,
+    },
+  });
+  const recoveredAnswer = await target.query(frame("20-query-all-final.bin"));
+  check(
+    recovered.sha256 === previous.sha256 &&
+      sameBytes(await durableLog(targetStorage), previous.bytes),
+    "an explicit verified restore recovers the durable-but-fenced object",
+  );
+  check(
+    recoveredAnswer.status === previousAnswer.status &&
+      sameBytes(recoveredAnswer.response, previousAnswer.response),
+    "recovery restores the previous semantic state",
   );
 }
 

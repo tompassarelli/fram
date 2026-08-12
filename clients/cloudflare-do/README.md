@@ -55,6 +55,14 @@ export class FramLog extends DurableObject {
   exchange(frame, options) {
     return this.#fram.exchange(frame, options);
   }
+
+  exportFramlog() {
+    return this.#fram.exportFramlog();
+  }
+
+  restoreFramlog(backup, options) {
+    return this.#fram.restoreFramlog(backup, options);
+  }
 }
 
 // The backend Worker's public service entrypoint delegates only exchange.
@@ -98,6 +106,43 @@ though FRAMRPC itself allows 4,096.
 `exchange` refuses `rpc/checkpoint`. Checkpoint, export, and restore are
 operator capabilities and must be hosted behind a separately authorized
 WorkerEntrypoint; they never appear on the wiki's data-plane service binding.
+
+## Portable FRAMLOG backup and restore
+
+The raw storage owner also implements `exportFramlog()` and
+`restoreFramlog(backup, options)`. Expose them only through a separately
+authorized admin WorkerEntrypoint using `framAdminEntrypoint(namespace,
+spaceId)`; the data-plane facade remains exchange-only. A portable export is
+the exact authoritative FRAMLOG plus its SpaceId, served version, byte length,
+and lowercase SHA-256. The derived snapshot image is deliberately excluded.
+
+Restore verifies the closed backup envelope, checksum, embedded SpaceId, and
+served version, then replays the complete byte string through the real Wasm
+engine before writing storage. A replay that repairs or truncates a suffix is
+not an acceptable backup. The default restore accepts only an object whose
+log, image, and pending-restore marker are all empty. Replacing an existing
+object requires the exact observed log identity:
+
+```js
+await admin.restoreFramlog(backup, {
+  replace: true,
+  expectedCurrent: { byteLength, sha256 },
+});
+```
+
+The replacement transaction publishes the candidate FRAMLOG, clears the
+derived image, and writes a durable pending marker atomically. Data exchange
+and export fail closed while that marker exists, including after isolate loss.
+The adapter then reopens the durable bytes without permitting repair, verifies
+byte and served-version identity, and transactionally clears the exact marker
+before acknowledging or serving the new state.
+
+If publication is rejected, neither range changes and the next request reopens
+the prior durable state. If durable reopen or marker removal fails after
+publication, restore throws `FramBackupError` with code `restore-fenced` and an
+`expectedCurrent` recovery identity. The candidate remains durable but fenced;
+there is no automatic rollback and no success acknowledgement. Recover by
+restoring a verified backup explicitly with that `{ byteLength, sha256 }` CAS.
 
 ## What it does with storage
 

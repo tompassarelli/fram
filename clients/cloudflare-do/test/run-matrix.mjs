@@ -45,6 +45,7 @@ const mf = new Miniflare({
   durableObjects: {
     FRAM_WARM: { className: "FramWarm", useSQLite: true },
     FRAM_MATRIX: { className: "FramMatrix", useSQLite: true },
+    FRAM_RESTORED: { className: "FramRestored", useSQLite: true },
     FRAM_DEPTH: { className: "FramDepth", useSQLite: true },
     FRAM_MULTICHUNK: { className: "FramMultichunk", useSQLite: true },
     FRAM_RACE: { className: "FramRace", useSQLite: true },
@@ -64,6 +65,11 @@ function check(condition, detail) {
   }
 }
 
+function sameBytes(left, right) {
+  if (left.length !== right.length) return false;
+  return left.every((byte, index) => byte === right[index]);
+}
+
 async function call(path, id, extra = "") {
   const response = await mf.dispatchFetch(
     `http://localhost${path}?id=${id}${extra}`,
@@ -71,6 +77,47 @@ async function call(path, id, extra = "") {
   const body = await response.json();
   if (body.fatal) throw new Error(`${path}[${id}]: ${body.fatal}`);
   return body;
+}
+
+async function exportFramlog(id) {
+  const response = await mf.dispatchFetch(
+    `http://localhost/admin/export?id=${id}`,
+  );
+  if (!response.ok) {
+    throw new Error(`/export-framlog[${id}]: ${await response.text()}`);
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  return {
+    format: response.headers.get("x-fram-backup-format"),
+    spaceId: response.headers.get("x-fram-space-id"),
+    servedVersion: response.headers.get("x-fram-served-version"),
+    byteLength: Number(response.headers.get("x-fram-byte-length")),
+    sha256: response.headers.get("x-fram-sha256"),
+    bytes,
+  };
+}
+
+async function restoreFramlog(id, backup) {
+  const response = await mf.dispatchFetch(
+    `http://localhost/admin/restore?id=${id}`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-fram-backup-format": backup.format,
+        "x-fram-byte-length": String(backup.byteLength),
+        "x-fram-served-version": backup.servedVersion,
+        "x-fram-sha256": backup.sha256,
+        "x-fram-space-id": backup.spaceId,
+      },
+      body: backup.bytes,
+    },
+  );
+  const receipt = await response.json();
+  if (!response.ok || receipt.fatal) {
+    throw new Error(`/restore-framlog[${id}]: ${receipt.fatal}`);
+  }
+  return receipt;
 }
 
 // A frame's status is the oracle's business, so a nonzero one is only checked
@@ -146,7 +193,72 @@ try {
     `the checkpoint wrote ${matrix.image.length} bytes to the image range`,
   );
 
-  // 2. The unpaged-bound matrix, same three-pass shape.
+  // 2. A portable export crosses object identity without changing bytes or
+  // semantics. The snapshot image is derived and intentionally rebuilt later.
+  const backup = await exportFramlog("matrix");
+  check(
+    backup.byteLength === matrix.log.length &&
+      sameBytes(backup.bytes, matrix.log) &&
+      /^(?:0|[1-9][0-9]*)$/.test(backup.servedVersion) &&
+      /^[0-9a-f]{64}$/.test(backup.sha256),
+    `portable export bound ${backup.byteLength} bytes at version ` +
+      backup.servedVersion,
+  );
+  check(
+    !sameBytes(backup.bytes, new Uint8Array(0)),
+    "the source admin namespace contains the matrix FRAMLOG",
+  );
+  const restoreReceipt = await restoreFramlog("matrix-restored", backup);
+  const restoredLog = new Uint8Array(
+    await (
+      await mf.dispatchFetch(
+        "http://localhost/dump?id=matrix-restored&range=log",
+      )
+    ).arrayBuffer(),
+  );
+  const restoredImage = new Uint8Array(
+    await (
+      await mf.dispatchFetch(
+        "http://localhost/dump?id=matrix-restored&range=image",
+      )
+    ).arrayBuffer(),
+  );
+  check(
+    restoreReceipt.sha256 === backup.sha256 &&
+      restoreReceipt.servedVersion === backup.servedVersion &&
+      restoreReceipt.replaced === false,
+    "fresh-object restore returned the portable export identity",
+  );
+  check(
+    sameBytes(restoredLog, matrix.log),
+    "fresh-object restore reproduced the source FRAMLOG byte for byte",
+  );
+  check(
+    restoredImage.length === 0,
+    "fresh-object restore did not copy the derived snapshot image",
+  );
+  check(
+    sameBytes(await exportFramlog("matrix-restored").then((one) => one.bytes), backup.bytes),
+    "distinct source and restored admin namespaces export identical FRAMLOG bytes",
+  );
+  const sourceSemantics = await call(
+    "/pass",
+    "matrix",
+    "&label=backup&manifest=manifest-image.txt",
+  );
+  const restoredSemantics = await call(
+    "/pass",
+    "matrix-restored",
+    "&label=backup&manifest=manifest-image.txt",
+  );
+  check(
+    sourceSemantics.failures === 0 &&
+      restoredSemantics.failures === 0 &&
+      JSON.stringify(sourceSemantics.out) === JSON.stringify(restoredSemantics.out),
+    "source and restored objects answer the same workerd frame matrix",
+  );
+
+  // 3. The unpaged-bound matrix, same three-pass shape.
   const depth = await transcript(
     "depth",
     [
@@ -160,7 +272,7 @@ try {
   writeFileSync(`${outDir}/workerd-depth.framlog`, depth.log);
   compare("depth transcript", depth.text, depthOraclePath);
 
-  // 3. Multi-chunk coverage: a log past one 64 KiB chunk, read back whole.
+  // 4. Multi-chunk coverage: a log past one 64 KiB chunk, read back whole.
   const target = 96 * 1024;
   const grown = await call("/grow", "multichunk", `&bytes=${target}`);
   check(
@@ -201,7 +313,7 @@ try {
     `the reopened multi-chunk log is unchanged by a read-only pass`,
   );
 
-  // 4. Concurrent boot: many demands in one turn, one instance.
+  // 5. Concurrent boot: many demands in one turn, one instance.
   const raced = await call("/concurrent-boot", "race", "&width=8");
   check(
     raced.identical && raced.distinct === 1,

@@ -10,6 +10,15 @@ import { assertSeams } from "./seams.mjs";
 
 const PAGE_BYTES = 65536;
 const FRAM_ABI_VERSION = 1;
+const FRAMLOG_BACKUP_FORMAT = "fram-cloudflare-backup/v1";
+const FRAMLOG_RESTORE_FORMAT = "fram-cloudflare-restore/v1";
+const FRAMLOG_RESTORE_KEY = "framrestore/pending";
+const FRAMLOG_FIXED_HEADER_BYTES = 16;
+const FRAMLOG_MAX_SPACE_BYTES = 4096;
+const FRAMLOG_MAGIC = Uint8Array.of(
+  0x46, 0x52, 0x41, 0x4d, 0x4c, 0x4f, 0x47, 0x00,
+);
+const SHA256 = /^[0-9a-f]{64}$/;
 const FRAMRPC_MAGIC = Uint8Array.of(
   0x46, 0x52, 0x41, 0x4d, 0x52, 0x50, 0x43, 0x00,
 );
@@ -202,6 +211,344 @@ export const IMAGE_CONTEXT = 1;
 
 const WASI_ENOSYS = 52;
 
+function backupFailure(code, message, options) {
+  throw new FramBackupError(code, message, options);
+}
+
+function exactObject(value, keys, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    backupFailure("invalid-backup", `${label} must be an object`);
+  }
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  if (
+    actual.length !== expected.length ||
+    actual.some((key, index) => key !== expected[index])
+  ) {
+    backupFailure(
+      "invalid-backup",
+      `${label} fields must be exactly ${expected.join(", ")}`,
+    );
+  }
+  return value;
+}
+
+function parseFramlogHeader(bytes) {
+  if (!(bytes instanceof Uint8Array)) {
+    backupFailure("invalid-backup", "backup.bytes must be a Uint8Array");
+  }
+  if (bytes.length < FRAMLOG_FIXED_HEADER_BYTES) {
+    backupFailure("invalid-framlog", "FRAMLOG header is truncated");
+  }
+  if (FRAMLOG_MAGIC.some((byte, index) => bytes[index] !== byte)) {
+    backupFailure("invalid-framlog", "FRAMLOG magic does not match");
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const version = view.getUint16(8, true);
+  const flags = view.getUint16(10, true);
+  if (version !== 1 || flags !== 0) {
+    backupFailure(
+      "invalid-framlog",
+      `FRAMLOG version or flags are unsupported (${version}, ${flags})`,
+    );
+  }
+  const spaceBytes = view.getUint32(12, true);
+  if (spaceBytes === 0 || spaceBytes > FRAMLOG_MAX_SPACE_BYTES) {
+    backupFailure("invalid-framlog", "FRAMLOG SpaceId length is invalid");
+  }
+  if (bytes.length < FRAMLOG_FIXED_HEADER_BYTES + spaceBytes) {
+    backupFailure("invalid-framlog", "FRAMLOG header is truncated inside SpaceId");
+  }
+  let spaceId;
+  try {
+    spaceId = new TextDecoder("utf-8", { fatal: true }).decode(
+      bytes.subarray(
+        FRAMLOG_FIXED_HEADER_BYTES,
+        FRAMLOG_FIXED_HEADER_BYTES + spaceBytes,
+      ),
+    );
+  } catch (error) {
+    backupFailure("invalid-framlog", "FRAMLOG SpaceId is not valid UTF-8", {
+      cause: error,
+    });
+  }
+  if (!spaceId) {
+    backupFailure("invalid-framlog", "FRAMLOG SpaceId is empty");
+  }
+  return spaceId;
+}
+
+async function sha256Hex(bytes) {
+  if (!globalThis.crypto?.subtle) {
+    backupFailure("crypto-unavailable", "Web Crypto SHA-256 is unavailable");
+  }
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function textBytes(value, label) {
+  if (typeof value !== "string" || value.length === 0) {
+    backupFailure("engine", `${label} must be a nonempty string`);
+  }
+  const bytes = new TextEncoder().encode(value);
+  let decoded;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    backupFailure("engine", `${label} is not valid UTF-8`, { cause: error });
+  }
+  if (decoded !== value) {
+    backupFailure("engine", `${label} contains an unpaired UTF-16 surrogate`);
+  }
+  return bytes;
+}
+
+function statusFrame(spaceId) {
+  const space = textBytes(spaceId, "SpaceId");
+  const operation = textBytes("rpc/status", "status operation");
+  const unit = textBytes("rpc/unit", "status payload");
+  const bodyLength =
+    1 + 4 + space.length +
+    1 + 4 + operation.length +
+    3 +
+    1 + 4 + unit.length;
+  const frame = new Uint8Array(FRAMRPC_HEADER_BYTES + bodyLength);
+  frame.set(FRAMRPC_MAGIC, 0);
+  const view = new DataView(frame.buffer);
+  view.setUint16(8, 1, true);
+  view.setUint16(10, 0, true);
+  view.setUint8(12, 1); // request
+  view.setUint8(13, 0);
+  view.setUint32(14, bodyLength, true);
+  view.setBigInt64(18, 0n, true);
+  let offset = FRAMRPC_HEADER_BYTES;
+  const term = (tag, bytes) => {
+    view.setUint8(offset, tag);
+    offset += 1;
+    view.setUint32(offset, bytes.length, true);
+    offset += 4;
+    frame.set(bytes, offset);
+    offset += bytes.length;
+  };
+  term(1, space);
+  term(6, operation);
+  view.setUint8(offset++, 0); // expected version
+  view.setUint8(offset++, 0); // page
+  view.setUint8(offset++, 0); // timeout
+  term(6, unit);
+  return frame;
+}
+
+function decodeStatusServedVersion(frame, expectedSpaceId) {
+  if (!(frame instanceof Uint8Array) || frame.length < FRAMRPC_HEADER_BYTES) {
+    backupFailure("engine", "status response ended inside its header");
+  }
+  if (FRAMRPC_MAGIC.some((byte, index) => frame[index] !== byte)) {
+    backupFailure("engine", "status response magic does not match");
+  }
+  const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+  if (
+    view.getUint16(8, true) !== 1 ||
+    view.getUint16(10, true) !== 0 ||
+    view.getUint8(12) !== 2 ||
+    view.getUint8(13) !== 0 ||
+    view.getBigInt64(18, true) !== 0n
+  ) {
+    backupFailure("engine", "status response header is not canonical");
+  }
+  const bodyLength = view.getUint32(14, true);
+  if (frame.length !== FRAMRPC_HEADER_BYTES + bodyLength) {
+    backupFailure("engine", "status response body length is inconsistent");
+  }
+  let offset = FRAMRPC_HEADER_BYTES;
+  const textTerm = (tag, label) => {
+    if (offset + 5 > frame.length || view.getUint8(offset) !== tag) {
+      backupFailure("engine", `status response ${label} has the wrong Term tag`);
+    }
+    offset += 1;
+    const length = view.getUint32(offset, true);
+    offset += 4;
+    if (offset + length > frame.length) {
+      backupFailure("engine", `status response ended inside ${label}`);
+    }
+    let value;
+    try {
+      value = new TextDecoder("utf-8", { fatal: true }).decode(
+        frame.subarray(offset, offset + length),
+      );
+    } catch (error) {
+      backupFailure("engine", `status response ${label} is not valid UTF-8`, {
+        cause: error,
+      });
+    }
+    offset += length;
+    return value;
+  };
+  const spaceId = textTerm(1, "SpaceId");
+  const operation = textTerm(6, "operation");
+  if (spaceId !== expectedSpaceId || operation !== "rpc/status") {
+    backupFailure("engine", "status response identity does not match its request");
+  }
+  if (offset + 11 > frame.length) {
+    backupFailure("engine", "status response ended before its controls");
+  }
+  const servedVersion = view.getBigInt64(offset, true);
+  offset += 8;
+  const pagePresent = view.getUint8(offset++);
+  const errorPresent = view.getUint8(offset++);
+  const payloadPresent = view.getUint8(offset++);
+  if (
+    servedVersion < 0n ||
+    pagePresent !== 0 ||
+    errorPresent !== 0 ||
+    payloadPresent !== 1 ||
+    offset >= frame.length
+  ) {
+    backupFailure("engine", "status response reports an error or invalid controls");
+  }
+  return servedVersion.toString();
+}
+
+function captureBackup(backup) {
+  exactObject(
+    backup,
+    ["byteLength", "bytes", "format", "servedVersion", "sha256", "spaceId"],
+    "backup",
+  );
+  const suppliedBytes = backup.bytes;
+  return Object.freeze({
+    byteLength: backup.byteLength,
+    bytes:
+      suppliedBytes instanceof Uint8Array ? suppliedBytes.slice() : suppliedBytes,
+    format: backup.format,
+    servedVersion: backup.servedVersion,
+    sha256: backup.sha256,
+    spaceId: backup.spaceId,
+  });
+}
+
+async function verifiedBackup(backup, configuredSpaceId) {
+  const format = backup.format;
+  const spaceId = backup.spaceId;
+  const byteLength = backup.byteLength;
+  const servedVersion = backup.servedVersion;
+  const expectedSha256 = backup.sha256;
+  const suppliedBytes = backup.bytes;
+  if (format !== FRAMLOG_BACKUP_FORMAT) {
+    backupFailure(
+      "invalid-backup",
+      `backup.format must be ${FRAMLOG_BACKUP_FORMAT}`,
+    );
+  }
+  if (typeof spaceId !== "string" || spaceId.length === 0) {
+    backupFailure("invalid-backup", "backup.spaceId must be a nonempty string");
+  }
+  if (spaceId !== configuredSpaceId) {
+    backupFailure(
+      "space-mismatch",
+      `backup belongs to SpaceId ${JSON.stringify(spaceId)}, not ` +
+        JSON.stringify(configuredSpaceId),
+    );
+  }
+  if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
+    backupFailure(
+      "invalid-backup",
+      "backup.byteLength must be a nonnegative safe integer",
+    );
+  }
+  if (
+    typeof servedVersion !== "string" ||
+    !/^(?:0|[1-9][0-9]*)$/.test(servedVersion) ||
+    BigInt(servedVersion) > (1n << 63n) - 1n
+  ) {
+    backupFailure(
+      "invalid-backup",
+      "backup.servedVersion must be a canonical nonnegative i64 decimal string",
+    );
+  }
+  if (typeof expectedSha256 !== "string" || !SHA256.test(expectedSha256)) {
+    backupFailure("invalid-backup", "backup.sha256 must be lowercase SHA-256");
+  }
+  if (!(suppliedBytes instanceof Uint8Array)) {
+    backupFailure("invalid-backup", "backup.bytes must be a Uint8Array");
+  }
+  if (suppliedBytes.length !== byteLength) {
+    backupFailure(
+      "verification",
+      `backup has ${suppliedBytes.length} bytes, not ${byteLength}`,
+    );
+  }
+
+  // captureBackup owned this copy before the restore entered its asynchronous
+  // operation queue, so hashing and landing observe the same byte string.
+  const bytes = suppliedBytes;
+  const headerSpaceId = parseFramlogHeader(bytes);
+  if (headerSpaceId !== spaceId) {
+    backupFailure(
+      "space-mismatch",
+      `FRAMLOG belongs to SpaceId ${JSON.stringify(headerSpaceId)}, not ` +
+        JSON.stringify(spaceId),
+    );
+  }
+  const digest = await sha256Hex(bytes);
+  if (digest !== expectedSha256) {
+    backupFailure(
+      "verification",
+      `backup FRAMLOG SHA-256 is ${digest}, not ${expectedSha256}`,
+    );
+  }
+  return Object.freeze({ bytes, digest, servedVersion });
+}
+
+function validateExpectedCurrent(expected) {
+  exactObject(expected, ["byteLength", "sha256"], "expectedCurrent");
+  if (!Number.isSafeInteger(expected.byteLength) || expected.byteLength < 0) {
+    backupFailure(
+      "invalid-backup",
+      "expectedCurrent.byteLength must be a nonnegative safe integer",
+    );
+  }
+  if (typeof expected.sha256 !== "string" || !SHA256.test(expected.sha256)) {
+    backupFailure(
+      "invalid-backup",
+      "expectedCurrent.sha256 must be lowercase SHA-256",
+    );
+  }
+  return Object.freeze({
+    byteLength: expected.byteLength,
+    sha256: expected.sha256,
+  });
+}
+
+function restoreFence(marker, cause) {
+  const expectedCurrent =
+    marker &&
+    typeof marker === "object" &&
+    Number.isSafeInteger(marker.byteLength) &&
+    marker.byteLength >= 0 &&
+    typeof marker.sha256 === "string" &&
+    SHA256.test(marker.sha256)
+      ? Object.freeze({
+          byteLength: marker.byteLength,
+          sha256: marker.sha256,
+        })
+      : null;
+  const recovery = expectedCurrent
+    ? " Recover with another verified restore using { replace: true, " +
+      `expectedCurrent: ${JSON.stringify(expectedCurrent)} }.`
+    : " Recover with an explicit verified replacement after inspecting the " +
+      "current FRAMLOG identity.";
+  const error = new FramBackupError(
+    "restore-fenced",
+    "a FRAMLOG restore is durably pending; data access remains fenced." + recovery,
+    cause ? { cause } : undefined,
+  );
+  error.expectedCurrent = expectedCurrent;
+  return error;
+}
+
 // ---------------------------------------------------------------------------
 // The async store
 // ---------------------------------------------------------------------------
@@ -372,6 +719,33 @@ export class DurableFramStore {
       () => undefined,
     );
     return result;
+  }
+
+  /** Publish replacement bytes and their fail-closed marker atomically. */
+  replace(parts, marker) {
+    const staged = parts.map(({ which, bytes, length, lowWater }) => {
+      const range = this.ranges[which];
+      return { range, plan: range.plan(bytes, length, lowWater) };
+    });
+    const run = async () => {
+      await this.storage.transaction(async (txn) => {
+        for (const { range, plan } of staged) await range.applyTo(txn, plan);
+        await txn.put(FRAMLOG_RESTORE_KEY, marker);
+      });
+      for (const { range, plan } of staged) range.settle(plan);
+      this.commits += 1;
+    };
+    const result = this.queue.then(run, run);
+    this.queue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  useStorage(storage) {
+    this.storage = storage;
+    for (const range of Object.values(this.ranges)) range.storage = storage;
   }
 
   stats() {
@@ -612,6 +986,15 @@ class GuestArena {
 // The instance
 // ---------------------------------------------------------------------------
 
+/** A malformed, mismatched, unsafe, or uncommitted portable backup. */
+export class FramBackupError extends Error {
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "FramBackupError";
+    this.code = code;
+  }
+}
+
 /** A rejected storage commit fences the instance that raised it. */
 export class FramStorageError extends Error {
   constructor(cause) {
@@ -658,6 +1041,7 @@ export class FramInstance {
     this.opened = false;
     this.closed = false;
     this.poisoned = null;
+    this.spaceId = null;
     this.gate = Promise.resolve();
   }
 
@@ -860,6 +1244,7 @@ export class FramInstance {
       await this.#commit();
       if (status === 0) {
         this.database = this.#view().getUint32(databaseOut, true);
+        this.spaceId = spaceId;
         this.opened = true;
       }
       return { status, message };
@@ -909,6 +1294,41 @@ export class FramInstance {
       this.opened = false;
       return { status, message };
     });
+  }
+
+  /** Bind one stable FRAMLOG copy to the logical version it contains. */
+  portableFramlog() {
+    return this.#serialise(async () => {
+      const response = await this.#callNow("q", statusFrame(this.spaceId));
+      if (response.status !== 0) {
+        backupFailure(
+          "engine",
+          `cannot read served version: ${response.status} ${response.message}`,
+        );
+      }
+      return Object.freeze({
+        bytes: this.logBytes(),
+        servedVersion: decodeStatusServedVersion(response.response, this.spaceId),
+      });
+    });
+  }
+
+  /**
+   * Put an administrative fence behind every call already admitted. A caller
+   * retaining this instance cannot write through it after its storage is
+   * replaced, even though FramDurableObjectBase has dropped its own reference.
+   */
+  fence(error) {
+    const run = async () => {
+      if (!this.poisoned) this.poisoned = error;
+      return this.poisoned;
+    };
+    const result = this.gate.then(run, run);
+    this.gate = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   async #callNow(entry, frame) {
@@ -1073,15 +1493,20 @@ export class FramDurableObjectBase {
     this.instance = null;
     this.store = null;
     this.booting = null;
+    this.administrativeFence = null;
+    this.operations = Promise.resolve();
   }
 
   /** The open instance, booting it at most once however many requests race. */
   fram() {
+    if (this.administrativeFence) {
+      return Promise.reject(this.administrativeFence);
+    }
     if (this.instance) return Promise.resolve(this.instance);
     // Assigned before the first await: a second caller in the same turn joins
     // this boot instead of building a second image over the same storage.
     if (!this.booting) {
-      this.booting = this.#boot().then(
+      this.booting = this.#bootData().then(
         (instance) => {
           this.instance = instance;
           this.booting = null;
@@ -1096,6 +1521,16 @@ export class FramDurableObjectBase {
     return this.booting;
   }
 
+  async #bootData() {
+    const pending = await this.state.storage.get(FRAMLOG_RESTORE_KEY);
+    if (pending !== undefined) {
+      const fenced = restoreFence(pending);
+      this.administrativeFence = fenced;
+      throw fenced;
+    }
+    return this.#boot();
+  }
+
   async #boot() {
     const store = new DurableFramStore(this.state.storage, this.storeOptions);
     const instance = await FramInstance.instantiate(this.module, {
@@ -1108,6 +1543,37 @@ export class FramDurableObjectBase {
       throw new Error(`fram_open failed: ${opened.status} ${opened.message}`);
     }
     this.store = store;
+    return instance;
+  }
+
+  async #bootForRestore() {
+    const durableStore = new DurableFramStore(
+      this.state.storage,
+      this.storeOptions,
+    );
+    const readOnlyStore = {
+      load: (which) => durableStore.load(which),
+      async commit(parts) {
+        if (parts.length !== 0) {
+          backupFailure(
+            "verification",
+            "post-publication replay tried to repair durable FRAM bytes",
+          );
+        }
+      },
+    };
+    const instance = await FramInstance.instantiate(this.module, {
+      ...this.instanceOptions,
+      store: readOnlyStore,
+    });
+    const opened = await instance.open(this.spaceId, this.logLabel);
+    this.openResult = opened;
+    if (opened.status !== 0) {
+      throw new Error(`fram_open failed: ${opened.status} ${opened.message}`);
+    }
+    durableStore.useStorage(this.state.storage);
+    instance.store = durableStore;
+    this.store = durableStore;
     return instance;
   }
 
@@ -1189,16 +1655,340 @@ export class FramDurableObjectBase {
     return result.response;
   }
 
-  async #use(body) {
-    const instance = await this.fram();
-    try {
-      return await body(instance);
-    } catch (error) {
-      // A fenced instance holds bytes no one can place against storage; drop it
-      // so the next request reopens from what is actually durable.
-      if (instance.poisoned) this.#drop();
-      throw error;
+  /** Export the exact authoritative FRAMLOG after all earlier writes landed. */
+  exportFramlog() {
+    return this.#serialiseOperation(async () => {
+      const instance = await this.fram();
+      const point = await instance.portableFramlog();
+      const { bytes } = point;
+      const spaceId = parseFramlogHeader(bytes);
+      if (spaceId !== this.spaceId) {
+        backupFailure(
+          "space-mismatch",
+          `FRAMLOG belongs to SpaceId ${JSON.stringify(spaceId)}, not ` +
+            JSON.stringify(this.spaceId),
+        );
+      }
+      const sha256 = await sha256Hex(bytes);
+      return Object.freeze({
+        format: FRAMLOG_BACKUP_FORMAT,
+        spaceId,
+        servedVersion: point.servedVersion,
+        byteLength: bytes.length,
+        sha256,
+        bytes,
+      });
+    });
+  }
+
+  /**
+   * Atomically install one verified canonical FRAMLOG and discard the derived
+   * image. The default accepts only storage with neither log nor image bytes;
+   * replacing an existing database must be explicit.
+   */
+  restoreFramlog(backup, options = {}) {
+    const captured = captureBackup(backup);
+    const restore = this.#restoreOptions(options);
+    return this.#serialiseOperation(async () => {
+      const verified = await verifiedBackup(captured, this.spaceId);
+      await this.#preflightFramlog(verified.bytes, verified.servedVersion);
+
+      // A normal restore must be observationally harmless when the target is
+      // already occupied. This first read avoids fencing a healthy live guest
+      // merely to return the expected refusal. The final check after fencing
+      // remains authoritative against a retained-instance race.
+      if (!restore.replace) {
+        const peek = await this.#loadTarget("inspect the restore target");
+        if (
+          peek.log.length !== 0 ||
+          peek.image.length !== 0 ||
+          peek.pending !== undefined
+        ) {
+          backupFailure(
+            "target-not-empty",
+            "restore target is not empty; replacement must be explicit",
+          );
+        }
+      }
+
+      await this.#fenceLiveForRestore();
+      const previousFence = this.administrativeFence;
+      let target;
+      try {
+        target = await this.#loadTarget("load the restore target");
+        const occupied =
+          target.log.length !== 0 ||
+          target.image.length !== 0 ||
+          target.pending !== undefined;
+        if (occupied && !restore.replace) {
+          backupFailure(
+            "target-not-empty",
+            "restore target became nonempty before publication",
+          );
+        }
+        if (restore.replace) {
+          const currentSha256 = await sha256Hex(target.log);
+          if (
+            target.log.length !== restore.expectedCurrent.byteLength ||
+            currentSha256 !== restore.expectedCurrent.sha256
+          ) {
+            backupFailure(
+              "conflict",
+              "restore target changed after its replacement precondition was read",
+            );
+          }
+        }
+      } catch (error) {
+        this.administrativeFence = previousFence?.code === "restore-fenced"
+          ? previousFence
+          : null;
+        this.#drop();
+        throw error;
+      }
+
+      try {
+        await target.store.replace([
+          {
+            which: "log",
+            bytes: verified.bytes,
+            length: verified.bytes.length,
+            lowWater: 0,
+          },
+          {
+            which: "image",
+            bytes: new Uint8Array(0),
+            length: 0,
+            lowWater: 0,
+          },
+        ], {
+          format: FRAMLOG_RESTORE_FORMAT,
+          spaceId: this.spaceId,
+          servedVersion: verified.servedVersion,
+          byteLength: verified.bytes.length,
+          sha256: verified.digest,
+        });
+      } catch (error) {
+        this.administrativeFence = previousFence?.code === "restore-fenced"
+          ? previousFence
+          : null;
+        this.#drop();
+        backupFailure(
+          "storage",
+          `the restore transaction was rejected: ${error.message}`,
+          { cause: error },
+        );
+      }
+
+      // Publication is now durable and cannot be rolled back safely. Keep the
+      // object fenced until the exact bytes replay from DurableObjectStorage
+      // and report the version declared by the backup.
+      const marker = Object.freeze({
+        format: FRAMLOG_RESTORE_FORMAT,
+        spaceId: this.spaceId,
+        servedVersion: verified.servedVersion,
+        byteLength: verified.bytes.length,
+        sha256: verified.digest,
+      });
+      const expectedCurrent = Object.freeze({
+        byteLength: marker.byteLength,
+        sha256: marker.sha256,
+      });
+      let reopened = null;
+      try {
+        reopened = await this.#bootForRestore();
+        const point = await reopened.portableFramlog();
+        if (!sameBytes(point.bytes, verified.bytes)) {
+          backupFailure(
+            "verification",
+            "the published FRAMLOG did not reopen byte for byte",
+          );
+        }
+        if (point.servedVersion !== verified.servedVersion) {
+          backupFailure(
+            "verification",
+            "the published FRAMLOG reopened at an unexpected served version",
+          );
+        }
+        await this.state.storage.transaction(async (txn) => {
+          const pending = await txn.get(FRAMLOG_RESTORE_KEY);
+          if (pending === undefined) return;
+          if (!this.#sameRestoreMarker(pending, marker)) {
+            backupFailure(
+              "verification",
+              "the pending restore marker changed before it could be cleared",
+            );
+          }
+          await txn.delete(FRAMLOG_RESTORE_KEY);
+        });
+      } catch (error) {
+        const fenced = restoreFence(marker, error);
+        this.administrativeFence = fenced;
+        if (reopened) await reopened.fence(fenced);
+        this.#drop();
+        throw fenced;
+      }
+
+      this.instance = reopened;
+      this.administrativeFence = null;
+
+      return Object.freeze({
+        format: FRAMLOG_BACKUP_FORMAT,
+        spaceId: this.spaceId,
+        servedVersion: verified.servedVersion,
+        byteLength: verified.bytes.length,
+        sha256: verified.digest,
+        replaced:
+          target.log.length !== 0 ||
+          target.image.length !== 0 ||
+          target.pending !== undefined,
+      });
+    });
+  }
+
+  #restoreOptions(options) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      backupFailure("invalid-backup", "restore options must be an object");
     }
+    const replace = options.replace ?? false;
+    if (typeof replace !== "boolean") {
+      backupFailure("invalid-backup", "restore options.replace must be boolean");
+    }
+    if (!replace) {
+      exactObject(
+        options,
+        Object.hasOwn(options, "replace") ? ["replace"] : [],
+        "restore options",
+      );
+      return { replace: false, expectedCurrent: null };
+    }
+    exactObject(options, ["expectedCurrent", "replace"], "restore options");
+    return {
+      replace: true,
+      expectedCurrent: validateExpectedCurrent(options.expectedCurrent),
+    };
+  }
+
+  async #preflightFramlog(bytes, expectedServedVersion) {
+    const preflightStore = {
+      async load(which) {
+        return which === "log" ? bytes : new Uint8Array(0);
+      },
+      async commit(_parts) {},
+    };
+    let instance = null;
+    try {
+      instance = await FramInstance.instantiate(this.module, {
+        ...this.instanceOptions,
+        store: preflightStore,
+      });
+      const opened = await instance.open(this.spaceId, "restore-preflight");
+      if (opened.status !== 0) {
+        backupFailure(
+          "invalid-framlog",
+          `FRAMLOG replay failed: ${opened.status} ${opened.message}`,
+        );
+      }
+      const point = await instance.portableFramlog();
+      if (!sameBytes(point.bytes, bytes)) {
+        backupFailure(
+          "invalid-framlog",
+          "FRAMLOG replay repaired or truncated the supplied byte string",
+        );
+      }
+      if (point.servedVersion !== expectedServedVersion) {
+        backupFailure(
+          "verification",
+          `backup servedVersion is ${expectedServedVersion}, but replay reports ` +
+            point.servedVersion,
+        );
+      }
+    } catch (error) {
+      if (error instanceof FramBackupError) throw error;
+      backupFailure(
+        "engine",
+        `cannot replay the backup through fram: ${error.message}`,
+        { cause: error },
+      );
+    } finally {
+      if (instance) {
+        await instance.fence(
+          new FramBackupError(
+            "administrative-fence",
+            "this Fram instance belonged to restore preflight",
+          ),
+        );
+      }
+    }
+  }
+
+  async #loadTarget(action) {
+    const store = new DurableFramStore(this.state.storage, this.storeOptions);
+    try {
+      const log = await store.load("log");
+      const image = await store.load("image");
+      const pending = await this.state.storage.get(FRAMLOG_RESTORE_KEY);
+      return { store, log, image, pending };
+    } catch (error) {
+      backupFailure("storage", `cannot ${action}: ${error.message}`, {
+        cause: error,
+      });
+    }
+  }
+
+  #sameRestoreMarker(left, right) {
+    return (
+      left &&
+      typeof left === "object" &&
+      left.format === right.format &&
+      left.spaceId === right.spaceId &&
+      left.servedVersion === right.servedVersion &&
+      left.byteLength === right.byteLength &&
+      left.sha256 === right.sha256 &&
+      Object.keys(left).length === 5
+    );
+  }
+
+  async #fenceLiveForRestore() {
+    const fenced = new FramBackupError(
+      "administrative-fence",
+      "this Fram instance was fenced for a FRAMLOG restore",
+    );
+    const existingFence = this.administrativeFence;
+    this.administrativeFence = existingFence ?? fenced;
+    let live = this.instance;
+    if (!live && this.booting) {
+      try {
+        live = await this.booting;
+      } catch (_error) {
+        // A failed boot has no live guest to retain. Restore is the recovery
+        // path for storage whose current bytes cannot open.
+      }
+    }
+    if (live) await live.fence(this.administrativeFence);
+    this.#drop();
+  }
+
+  #serialiseOperation(body) {
+    const result = this.operations.then(body, body);
+    this.operations = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  #use(body) {
+    return this.#serialiseOperation(async () => {
+      const instance = await this.fram();
+      try {
+        return await body(instance);
+      } catch (error) {
+        // A fenced instance holds bytes no one can place against storage; drop it
+        // so the next request reopens from what is actually durable.
+        if (instance.poisoned) this.#drop();
+        throw error;
+      }
+    });
   }
 
   #drop() {
@@ -1208,13 +1998,15 @@ export class FramDurableObjectBase {
   }
 
   /** Drop the guest without touching storage; the next call reopens from it. */
-  async recycle() {
-    const instance = this.instance;
-    this.#drop();
-    if (instance && !instance.closed && !instance.poisoned) {
-      return instance.close();
-    }
-    return null;
+  recycle() {
+    return this.#serialiseOperation(async () => {
+      const instance = this.instance;
+      this.#drop();
+      if (instance && !instance.closed && !instance.poisoned) {
+        return instance.close();
+      }
+      return null;
+    });
   }
 }
 
@@ -1238,6 +2030,33 @@ export function framDataPlaneEntrypoint(namespace, spaceId) {
   return Object.freeze({
     exchange(frame, options) {
       return object().exchange(frame, options);
+    },
+  });
+}
+
+/**
+ * Administrative service-binding facade for the same storage-owning object.
+ * Bind this separately from the exchange-only data plane and enforce the
+ * application's administrator policy before invoking either method.
+ */
+export function framAdminEntrypoint(namespace, spaceId) {
+  if (!namespace || (typeof namespace !== "object"
+      && typeof namespace !== "function")) {
+    throw new TypeError("Fram administration requires a Durable Object namespace");
+  }
+  if (typeof spaceId !== "string" || !spaceId) {
+    throw new TypeError("Fram administration spaceId must be a nonempty string");
+  }
+  if (textEncoder.encode(spaceId).length > FRAM_DO_MAX_NAMED_SPACE_BYTES) {
+    throw new TypeError("Fram administration spaceId exceeds 1024 UTF-8 bytes");
+  }
+  const object = () => namespace.getByName(spaceId);
+  return Object.freeze({
+    exportFramlog() {
+      return object().exportFramlog();
+    },
+    restoreFramlog(backup, options) {
+      return object().restoreFramlog(backup, options);
     },
   });
 }
