@@ -52,17 +52,17 @@ touch -t 203801020304.05 \
   "$scratch/different/depth/work-b/native/wasm-embed.seams"
 
 make_artifact() {
-  local root="$1" local_path="$2" input_manifest="$1/input.manifest"
+  local root="$1" input_manifest="$1/input.manifest"
   mkdir -p "$root"
   printf '%s\n' \
-    'fram-native-build-input/v2' \
+    'fram-native-build-input/v3' \
     "$(sha256sum "$source_seed/bin/fram-native-build" | awk '{print $1}')" \
     'host=wasm-embed' \
     'program=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' \
     'native-program=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789' \
     'synthetic-toolchain-identity' \
     'link=dynamic' \
-    "host-source $local_path/native/fram_embed.c $(sha256sum "$source_seed/native/fram_embed.c" | awk '{print $1}')" \
+    "host-source repo:native/fram_embed.c $(sha256sum "$source_seed/native/fram_embed.c" | awk '{print $1}')" \
     >"$input_manifest"
   local artifact_identity artifact
   artifact_identity="$(sha256sum "$input_manifest" | awk '{print $1}')"
@@ -112,10 +112,10 @@ make_artifact() {
   } >"$artifact/provenance.manifest"
   printf '%s\n' "$artifact"
 }
-artifact_a="$(make_artifact "$scratch/artifacts-a" /checkout/a)"
-artifact_b="$(make_artifact "$scratch/different/artifacts-b" /different/checkout/b)"
-[[ "${artifact_a##*/}" != "${artifact_b##*/}" ]] ||
-  fail "path-distinct input manifests did not produce distinct artifact addresses"
+artifact_a="$(make_artifact "$scratch/artifacts-a")"
+artifact_b="$(make_artifact "$scratch/different/artifacts-b")"
+[[ "${artifact_a##*/}" == "${artifact_b##*/}" ]] ||
+  fail "logical input manifests produced different artifact addresses across checkouts"
 
 mapfile -t files_a < <(
   "$packager" --source-root "$scratch/work-a" --artifact "$artifact_a" \

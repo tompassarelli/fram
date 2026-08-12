@@ -1002,4 +1002,73 @@ grep -Fqx "$(sha256sum "$scratch/tool/beagle-lib/module_01.txt" |
   "$swept_program/compiler-inputs.txt" ||
   fail "the entry did not record the compiler input listing behind its digest"
 
+# Two checkout roots with identical source and host inputs must address one
+# program and one host artifact. The builder copy derives each checkout root
+# from itself, so this exercises the production re-anchoring boundary rather
+# than substituting paths in a fixture manifest.
+portable_a="$scratch/checkout-a"
+portable_b="$scratch/different/depth/checkout-b"
+for portable in "$portable_a" "$portable_b"; do
+  mkdir -p "$portable/bin" "$portable/native" "$portable/src"
+  cp "$builder" "$portable/bin/fram-native-build"
+  cp "$repo/native/server_host.c" "$portable/native/server_host.c"
+  cp "$repo/native/server_host.h" "$portable/native/server_host.h"
+  cp "$adapter" "$portable/native/server_generated.c"
+  printf '%s\n' '#lang beagle' '(ns demo.portable)' \
+    '(defn start [] -> Nil nil)' >"$portable/src/portable.bgl"
+done
+portable_env=(
+  env
+  FRAM_BEAGLE="$scratch/tool/bin/beagle"
+  FRAM_NATIVE_CACHE="$scratch/cache-portable"
+  FRAM_NATIVE_CC="${CC:-cc}"
+  FRAM_QBE_FRONTIER_LEDGER="$ledger"
+  FAKE_NATIVE_CALLS="$calls"
+)
+calls_before_portable="$(wc -l <"$calls")"
+portable_artifact_a="$("${portable_env[@]}" \
+  "$portable_a/bin/fram-native-build" --host server \
+  "$portable_a/src/portable.bgl")" ||
+  fail "checkout A portability build failed"
+calls_after_portable_a="$(wc -l <"$calls")"
+[[ "$calls_after_portable_a" -gt "$calls_before_portable" ]] ||
+  fail "checkout A portability build did not run the materializer"
+portable_program="$scratch/cache-portable/.programs/$(sed -n 's/^program=//p' \
+  "$portable_artifact_a/input.manifest")"
+grep -Fqx 'fram-native-program-input/v3' "$portable_program/input.manifest" ||
+  fail "portable program entry did not use the v3 logical-name vocabulary"
+grep -Eq '^000000 portable\.bgl [0-9a-f]{64}$' \
+  "$portable_program/input.manifest" ||
+  fail "portable program manifest did not name its source logically"
+grep -Fqx 'fram-native-build-input/v3' "$portable_artifact_a/input.manifest" ||
+  fail "portable host entry did not use the v3 logical-name vocabulary"
+grep -Eq '^host-source repo:native/server_host\.c [0-9a-f]{64}$' \
+  "$portable_artifact_a/input.manifest" ||
+  fail "portable host manifest did not name its checkout input logically"
+! grep -Fq "$portable_a" "$portable_program/input.manifest" ||
+  fail "portable program manifest leaked checkout A"
+! grep -Fq "$portable_a" "$portable_artifact_a/input.manifest" ||
+  fail "portable host manifest leaked checkout A"
+
+portable_artifact_b="$("${portable_env[@]}" \
+  "$portable_b/bin/fram-native-build" --host server \
+  "$portable_b/src/portable.bgl")" ||
+  fail "checkout B portability build failed"
+[[ "$portable_artifact_b" == "$portable_artifact_a" ]] ||
+  fail "byte-identical checkout B did not share checkout A's host artifact"
+[[ "$(wc -l <"$calls")" == "$calls_after_portable_a" ]] ||
+  fail "byte-identical checkout B rebuilt the shared native program"
+
+printf '%s\n' '#lang beagle' '(ns demo.portable)' \
+  '(defn start [] -> Nil nil)' ';; genuine source change' \
+  >"$portable_b/src/portable.bgl"
+portable_changed="$("${portable_env[@]}" \
+  "$portable_b/bin/fram-native-build" --host server \
+  "$portable_b/src/portable.bgl")" ||
+  fail "changed checkout B portability build failed"
+[[ "$portable_changed" != "$portable_artifact_a" ]] ||
+  fail "a genuine source change hit the prior checkout's cache entry"
+[[ "$(wc -l <"$calls")" -gt "$calls_after_portable_a" ]] ||
+  fail "a genuine source change did not rerun the materializer"
+
 echo "fram native build cache smoke: PASS"

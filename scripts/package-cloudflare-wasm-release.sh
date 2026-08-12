@@ -143,8 +143,8 @@ done
 input_sha256="$(sha256sum "$artifact/input.manifest" | awk '{print $1}')"
 [[ "$input_sha256" == "$artifact_identity" ]] ||
   die "artifact directory does not equal sha256(input.manifest)"
-[[ "$(sed -n '1p' "$artifact/input.manifest")" == "fram-native-build-input/v2" ]] ||
-  die "artifact input manifest is not fram-native-build-input/v2"
+[[ "$(sed -n '1p' "$artifact/input.manifest")" == "fram-native-build-input/v3" ]] ||
+  die "artifact input manifest is not fram-native-build-input/v3"
 [[ "$(grep -Fxc 'host=wasm-embed' "$artifact/input.manifest" || true)" == 1 ]] ||
   die "artifact input manifest is not uniquely bound to host=wasm-embed"
 
