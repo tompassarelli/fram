@@ -226,19 +226,46 @@ for source in "${sources[@]}"; do
   normalized_sources+=("$(realpath "$source")")
 done
 
-beagle_root="$(git -C "$(dirname "$beagle")" rev-parse --show-toplevel 2>/dev/null || true)"
+beagle_home="$(cd "$(dirname "$beagle")/.." && pwd -P)"
+beagle_root="$(git -C "$beagle_home" rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -n "$beagle_root" ]]; then
   git -C "$beagle_root" diff --quiet --ignore-submodules -- ||
     die "Beagle has tracked changes: $beagle_root"
   git -C "$beagle_root" diff --cached --quiet --ignore-submodules -- ||
     die "Beagle has staged changes: $beagle_root"
-  beagle_identity="git:$(git -C "$beagle_root" rev-parse 'HEAD^{commit}')"
-else
-  beagle_identity="file:$(sha256sum "$beagle" | sed 's/ .*//')"
 fi
-if [[ -x "$(dirname "$beagle")/beagle-build-core" ]]; then
-  beagle_identity+=":build-core-$(sha256sum "$(dirname "$beagle")/beagle-build-core" | sed 's/ .*//')"
-fi
+
+# Every file a `beagle build --materializer` run reads out of the Beagle tree,
+# listed as `sha256  repo-relative-path`. Verified against an strace of a
+# materializer build: bin/* drives it, share/targets.sh is the generated target
+# table, beagle-lib holds the reader/checker/emitter Racket sources, and
+# native-core contributes the source-fact projector, the C shim copied verbatim
+# into every artifact, and the ten Core compiler modules.
+#
+# Keyed on CONTENT, never on a Beagle commit: a commit hash makes docs, tests,
+# and validation-fixture edits invalidate a compiler whose output is identical.
+# Pruned only where irrelevance is provable -- `compiled/` is Racket bytecode
+# derived from the .rkt beside it, bin/test holds fixtures, and *_corpus.bclj
+# are validation corpora that beagle-build-core never compiles. Everything else
+# under these roots is hashed even if today's chain does not read it: a spurious
+# rebuild costs time once, a missing input serves a stale compiler forever.
+beagle_compiler_inputs() {
+  find "$beagle_home/bin" "$beagle_home/share" "$beagle_home/beagle-lib" \
+       "$beagle_home/native-core/bin" "$beagle_home/native-core/shim" \
+       "$beagle_home/native-core/src" \
+       \( -name compiled -o -name __pycache__ -o -path "$beagle_home/bin/test" \) \
+       -prune -o -type f ! -name '*_corpus.bclj' -print0 |
+    LC_ALL=C sort -z |
+    xargs -0 -r sha256sum |
+    sed "s|  $beagle_home/|  |"
+}
+beagle_compiler_input_list="$(beagle_compiler_inputs)"
+# An empty sweep still hashes -- to the digest of nothing. Refuse it by name
+# rather than key every build in the world to e3b0c442.
+[[ "$(printf '%s\n' "$beagle_compiler_input_list" | wc -l)" -ge 100 ]] ||
+  die "Beagle compiler input sweep found too few files; is $beagle_home a Beagle tree?"
+beagle_identity="content:$(printf '%s\n' "$beagle_compiler_input_list" |
+  sha256sum | sed 's/ .*//')"
 cc_identity="$cc:$($cc --version 2>&1 | sed -n '1p')"
 [[ -z "$ar" ]] || cc_identity+=":ar=$ar:$($ar --version 2>&1 | sed -n '1p')"
 [[ -z "$wasm_tools" ]] ||
@@ -308,7 +335,10 @@ wasm_exports=(
 write_program_input_manifest() {
   local destination="$1" index source
   {
-    printf 'fram-native-program-input/v1\n%s\n%s\nconfiguration=profile=3\n' \
+    # v2 is the content-keyed Beagle identity. The version rides in the hashed
+    # bytes, so every /v1 entry -- keyed on a Beagle commit hash -- lives under a
+    # hash this scheme never computes and can never be read back as valid.
+    printf 'fram-native-program-input/v2\n%s\n%s\nconfiguration=profile=3\n' \
       "$builder_identity" "$beagle_identity"
     # Mirrors the ABI profile Beagle freezes into the program configuration; without
     # it two profiles over one closure would collide on a single cache entry.
@@ -327,7 +357,7 @@ write_program_input_manifest() {
 write_input_manifest() {
   local destination="$1"
   {
-    printf 'fram-native-build-input/v1\n%s\nhost=%s\nprogram=%s\nnative-program=%s\n%s\n' \
+    printf 'fram-native-build-input/v2\n%s\nhost=%s\nprogram=%s\nnative-program=%s\n%s\n' \
       "$builder_identity" "$host" "$program_closure_hash" \
       "$native_program_digest" "$cc_identity"
     printf 'link=%s\n' "$link_mode"
@@ -759,6 +789,9 @@ flock "$program_lock_fd"
 if [[ ! -e "$program_dir" ]]; then
   program_stage="$(mktemp -d "$program_cache/.tmp/$program_closure_hash.XXXXXX")"
   cp "$program_input_manifest" "$program_stage/input.manifest"
+  # The manifest carries only the rolled-up digest; this is the per-file listing
+  # behind it, so a cache miss can be explained by diffing two entries.
+  printf '%s\n' "$beagle_compiler_input_list" >"$program_stage/compiler-inputs.txt"
   combined_status=0
   "$beagle" build --materializer c17 --materializer qbe \
       --out "$program_stage" --abi "$abi" \
