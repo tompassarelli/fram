@@ -124,6 +124,8 @@
      (literal-text-attribute-scope literal current))
    scope (d/rule-body rule)))
 
+(defn- empty-any-set [] -> (Set Any) #{})
+
 (defn plan-text-attribute-scope [plan: QueryPlan] -> TextAttributeScope
   (reduce
    (fn [scope: TextAttributeScope stratum: (Vec d/Rule)] -> TextAttributeScope
@@ -131,7 +133,7 @@
       (fn [current: TextAttributeScope rule: d/Rule] -> TextAttributeScope
         (rule-text-attribute-scope rule current))
       scope stratum))
-   #{} (queryplan-strata plan)))
+   (empty-any-set) (queryplan-strata plan)))
 
 (defn query-plan? [value: Any] -> Bool (instance? QueryPlan value))
 (defn projection? [value: Any] -> Bool (instance? Projection value))
@@ -1010,33 +1012,62 @@
     [(t/triple? value) 5]
     [:else 6]))
 
+(defn- int-compare [left: Int right: Int] -> Int
+  (cond
+    [(< left right) -1]
+    [(> left right) 1]
+    [:else 0]))
+
+(defn- bool-compare [left: Bool right: Bool] -> Int
+  (cond
+    [(= left right) 0]
+    [left 1]
+    [:else -1]))
+
+(defn- float-compare [left: Float right: Float] -> Int
+  (cond
+    [(< left right) -1]
+    [(> left right) 1]
+    [:else 0]))
+
 (defn term-compare [left: Any right: Any] -> Int
   (let [left-rank (term-rank left)
         right-rank (term-rank right)
-        rank-order (compare left-rank right-rank)]
+        rank-order (int-compare left-rank right-rank)]
     (if (not (zero? rank-order))
       rank-order
       (cond
-        [(boolean? left) (compare left right)]
-        [(number? left)
+        [(and (boolean? left) (boolean? right))
+         (let [left-bool: Bool left
+               right-bool: Bool right]
+           (bool-compare left-bool right-bool))]
+        [(and (number? left) (number? right))
          (if (and (integer? left) (integer? right))
            (let [left-int: Int left
                  right-int: Int right]
-             (compare left-int right-int))
-           (compare (double left) (double right)))]
-        [(string? left) (compare left right)]
-        [(keyword? left) (compare (str left) (str right))]
-        [(t/instant? left)
+             (int-compare left-int right-int))
+           (let [left-float: Float (double left)
+                 right-float: Float (double right)]
+             (float-compare left-float right-float)))]
+        [(and (string? left) (string? right))
+         (let [left-string: String left
+               right-string: String right]
+           (compare left-string right-string))]
+        [(and (keyword? left) (keyword? right))
+         (let [left-keyword: Keyword left
+               right-keyword: Keyword right]
+           (compare (str left-keyword) (str right-keyword)))]
+        [(and (t/instant? left) (t/instant? right))
          (let [left-instant: t/Instant left
                right-instant: t/Instant right
                seconds-order: Int
-               (compare (t/instant-epoch-seconds left-instant)
-                        (t/instant-epoch-seconds right-instant))]
+               (int-compare (t/instant-epoch-seconds left-instant)
+                            (t/instant-epoch-seconds right-instant))]
            (if (zero? seconds-order)
-             (compare (t/instant-nanos left-instant)
-                      (t/instant-nanos right-instant))
+             (int-compare (t/instant-nanos left-instant)
+                          (t/instant-nanos right-instant))
              seconds-order))]
-        [(t/triple? left)
+        [(and (t/triple? left) (t/triple? right))
          (let [left-triple: t/Triple left
                right-triple: t/Triple right
                first-order: Int
@@ -1072,17 +1103,48 @@
           (recur (rest remaining))
           directed-order)))))
 
+(defn- merge-ordered-row-vectors
+  [order: (Vec OrderClause)
+   left: (Vec d/Tuple)
+   right: (Vec d/Tuple)] -> (Vec d/Tuple)
+  (loop [left-index: Int 0
+         right-index: Int 0
+         merged: (Vec d/Tuple) []]
+    (cond
+      [(>= left-index (count left))
+       (into merged (subvec right right-index))]
+      [(>= right-index (count right))
+       (into merged (subvec left left-index))]
+      [(<= (ordered-row-compare order
+                                (nth left left-index)
+                                (nth right right-index))
+           0)
+       (recur (inc left-index)
+              right-index
+              (conj merged (nth left left-index)))]
+      [:else
+       (recur left-index
+              (inc right-index)
+              (conj merged (nth right right-index)))])))
+
+(defn- merge-sort-ordered-rows
+  [order: (Vec OrderClause)
+   rows: (Vec d/Tuple)] -> (Vec d/Tuple)
+  (if (<= (count rows) 1)
+    rows
+    (let [middle: Int (quot (count rows) 2)
+          left: (Vec d/Tuple)
+          (merge-sort-ordered-rows order (subvec rows 0 middle))
+          right: (Vec d/Tuple)
+          (merge-sort-ordered-rows order (subvec rows middle))]
+      (merge-ordered-row-vectors order left right))))
+
 (defn ordered-plan-rows [plan: QueryPlan rows: (Vec d/Tuple)] -> (Vec d/Tuple)
   (let [order (queryplan-order plan)
         ordered
         (if (empty? order)
           (order-row-vector rows)
-          (vec
-           (sort-by
-            (fn [row: d/Tuple] -> d/Tuple row)
-            (fn [left: d/Tuple right: d/Tuple] -> Int
-              (ordered-row-compare order left right))
-            rows)))
+          (merge-sort-ordered-rows order rows))
         limit (queryplan-limit plan)]
     (if (some? limit)
       (vec (take limit ordered))

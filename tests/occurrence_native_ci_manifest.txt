@@ -52,6 +52,7 @@ run-clojure	current-model	tests/store_defcheck_untyped_test.clj	-
 
 run-shell	current-boundary	tests/fram_up_readiness_test.sh	-
 run-shell	current-cache	tests/fram_native_build_cache_smoke.sh	-
+run-shell	current-native-query	tests/fram_query_native_closure_test.sh	-
 run-shell	current-boundary	tests/fram_native_generated_adapter_smoke.sh	-
 run-shell	current-boundary	tests/fram_wasm_embed_smoke.sh	-
 run-shell	current-boundary	tests/fram_do_client_smoke.sh	-

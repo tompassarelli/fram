@@ -154,8 +154,11 @@
 (defn- rule-text-attribute-scope [rule scope]
   (reduce (fn [current literal] (literal-text-attribute-scope literal current)) scope (d/rule-body rule)))
 
+(defn- empty-any-set []
+  #{})
+
 (defn plan-text-attribute-scope [^QueryPlan plan]
-  (reduce (fn [scope stratum] (reduce (fn [current rule] (rule-text-attribute-scope rule current)) scope stratum)) #{} (queryplan-strata plan)))
+  (reduce (fn [scope stratum] (reduce (fn [current rule] (rule-text-attribute-scope rule current)) scope stratum)) (empty-any-set) (queryplan-strata plan)))
 
 (defn ^Boolean query-plan? [value]
   (instance? QueryPlan value))
@@ -595,22 +598,48 @@
   (t/triple? value) 5
   :else 6))
 
+(defn- int-compare [left right]
+  (cond
+  (< left right) -1
+  (> left right) 1
+  :else 0))
+
+(defn- bool-compare [^Boolean left ^Boolean right]
+  (cond
+  (= left right) 0
+  left 1
+  :else -1))
+
+(defn- float-compare [left right]
+  (cond
+  (< left right) -1
+  (> left right) 1
+  :else 0))
+
 (defn term-compare [left right]
   (let [left-rank (term-rank left)
    right-rank (term-rank right)
-   rank-order (compare left-rank right-rank)]
+   rank-order (int-compare left-rank right-rank)]
   (if (not (zero? rank-order)) rank-order (cond
-  (boolean? left) (compare left right)
-  (number? left) (if (and (integer? left) (integer? right)) (let [left-int left
+  (and (boolean? left) (boolean? right)) (let [left-bool left
+   right-bool right]
+  (bool-compare left-bool right-bool))
+  (and (number? left) (number? right)) (if (and (integer? left) (integer? right)) (let [left-int left
    right-int right]
-  (compare left-int right-int)) (compare (double left) (double right)))
-  (string? left) (compare left right)
-  (keyword? left) (compare (str left) (str right))
-  (t/instant? left) (let [left-instant left
+  (int-compare left-int right-int)) (let [left-float (double left)
+   right-float (double right)]
+  (float-compare left-float right-float)))
+  (and (string? left) (string? right)) (let [left-string left
+   right-string right]
+  (compare left-string right-string))
+  (and (keyword? left) (keyword? right)) (let [left-keyword left
+   right-keyword right]
+  (compare (str left-keyword) (str right-keyword)))
+  (and (t/instant? left) (t/instant? right)) (let [left-instant left
    right-instant right
-   seconds-order (compare (t/instant-epoch-seconds left-instant) (t/instant-epoch-seconds right-instant))]
-  (if (zero? seconds-order) (compare (t/instant-nanos left-instant) (t/instant-nanos right-instant)) seconds-order))
-  (t/triple? left) (let [left-triple left
+   seconds-order (int-compare (t/instant-epoch-seconds left-instant) (t/instant-epoch-seconds right-instant))]
+  (if (zero? seconds-order) (int-compare (t/instant-nanos left-instant) (t/instant-nanos right-instant)) seconds-order))
+  (and (t/triple? left) (t/triple? right)) (let [left-triple left
    right-triple right
    first-order (term-compare (t/triple-t1 left-triple) (t/triple-t1 right-triple))
    second-order (if (zero? first-order) (term-compare (t/triple-t2 left-triple) (t/triple-t2 right-triple)) first-order)]
@@ -624,9 +653,25 @@
    directed-order (if (= :desc (orderclause-direction clause)) (- 0 column-order) column-order)]
   (if (zero? directed-order) (recur (rest remaining)) directed-order)))))
 
+(defn- merge-ordered-row-vectors [order left right]
+  (loop [left-index 0
+   right-index 0
+   merged []]
+  (cond
+  (>= left-index (count left)) (into merged (subvec right right-index))
+  (>= right-index (count right)) (into merged (subvec left left-index))
+  (<= (ordered-row-compare order (nth left left-index) (nth right right-index)) 0) (recur (inc left-index) right-index (conj merged (nth left left-index)))
+  :else (recur left-index (inc right-index) (conj merged (nth right right-index))))))
+
+(defn- merge-sort-ordered-rows [order rows]
+  (if (<= (count rows) 1) rows (let [middle (quot (count rows) 2)
+   left (merge-sort-ordered-rows order (subvec rows 0 middle))
+   right (merge-sort-ordered-rows order (subvec rows middle))]
+  (merge-ordered-row-vectors order left right))))
+
 (defn ordered-plan-rows [^QueryPlan plan rows]
   (let [order (queryplan-order plan)
-   ordered (if (empty? order) (order-row-vector rows) (vec (sort-by (fn [row] row) (fn [left right] (ordered-row-compare order left right)) rows)))
+   ordered (if (empty? order) (order-row-vector rows) (merge-sort-ordered-rows order rows))
    limit (queryplan-limit plan)]
   (if (some? limit) (vec (take limit ordered)) ordered)))
 

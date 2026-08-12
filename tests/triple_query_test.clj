@@ -144,6 +144,47 @@
           (= [["lower" lower] ["higher" higher]]
              (q/result-rows result))))
 
+(let [lower Long/MIN_VALUE
+      higher (inc lower)
+      branch-cases
+      [[false true -1]
+       [true false 1]
+       [lower higher -1]
+       [higher lower 1]
+       [1.5 2.5 -1]
+       [-0.0 0.0 0]
+       [##NaN 1.0 0]
+       [1.0 ##NaN 0]
+       ["a" "b" -1]
+       [:a :b -1]
+       [(t/instant 4 999999999) (t/instant 5 0) -1]
+       [(t/instant 5 1) (t/instant 5 2) -1]
+       [(t/triple "a" :edge 1) (t/triple "a" :edge 2) -1]
+       [false 0 -1]
+       [0 "a" -1]
+       ["a" :a -1]]]
+  (check! "natural Term comparison covers every scalar, recursive, and rank branch"
+          (every? (fn [[left right expected]]
+                    (= expected (Long/signum (long (q/term-compare left right)))))
+                  branch-cases)))
+
+(let [size 1024
+      rows (mapv vector (range (dec size) -1 -1))
+      ordered-plan
+      (q/ordered-query-plan
+       (q/relation-find "complexity") [] [(q/order-clause 0 :asc)] nil)
+      comparisons (atom 0)
+      original-compare q/term-compare
+      ordered
+      (with-redefs [q/term-compare
+                    (fn [left right]
+                      (swap! comparisons inc)
+                      (original-compare left right))]
+        (q/ordered-plan-rows ordered-plan rows))]
+  (check! "ordered query uses an n-log-n comparison budget"
+          (and (= (mapv vector (range size)) ordered)
+               (<= @comparisons 10240))))
+
 (loop [after nil collected []]
   (let [page (q/run-page! live all-live-plan 1 after)
         collected2 (vec (concat collected (q/page-rows page)))]
