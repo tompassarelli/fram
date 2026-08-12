@@ -371,9 +371,9 @@ resolve to existing subjects at the attempt's pinned snapshot. A
 `requireUnique` entry may name a planned create: it is satisfied by that exact
 planned subject after the complete create set passes its absence checks, which
 permits mutual and cyclic references in the same batch. Other guards are
-resolved from the live snapshot. A request/idempotency claim is therefore an
-ordinary planned create with a unique identity. After an OCC conflict the whole
-plan is rebuilt, and a claim won by another attempt becomes the typed
+resolved from the live snapshot. A request/idempotency reservation is therefore
+an ordinary planned create with a unique identity. After an OCC conflict the
+whole plan is rebuilt, and a reservation won by another attempt becomes the typed
 `schema/identity-exists` result before a second write is sent. If a resolved
 update and a create target the same subject/predicate cell, the command is
 rejected instead of relying on action order.

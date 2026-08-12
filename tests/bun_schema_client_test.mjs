@@ -1724,7 +1724,7 @@ check('transactUnique rejects duplicate planned identities and subjects before I
   assertNoIo(mismatchedGuard.calls);
 });
 
-check('a planned idempotency claim is re-resolved after conflict before any second write', async () => {
+check('a planned idempotency reservation is re-resolved after conflict before any second write', async () => {
   const requestId = Object.freeze(['string', 'request-1']);
   const requestIdentity = Object.freeze(['keyword', 'request/id']);
   const fram = mockFram({

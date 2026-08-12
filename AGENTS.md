@@ -54,7 +54,6 @@ only to the revision checked; never treat it as evergreen.
   `0c5077e51419868618aeaa5fe8019c62421857d6` is MIT. FRAM uses it only in
   GitHub Actions to install the exact Bun toolchain; it is not a shipped or
   runtime dependency.
-
 - 2026-08-12 — Wrangler npm package `4.121.0` and Miniflare npm package
   `5.20260804.1-alpha`, source revision
   `15fc56824836570ca291aa148be72d2d62f59566` in Cloudflare's workers-sdk,
@@ -70,3 +69,8 @@ only to the revision checked; never treat it as evergreen.
   Miniflare for local capacity evidence only; local workerd plus a Linux cgroup
   is a conservative process-tree proxy, not an observation of Cloudflare's
   production isolate accounting.
+
+- 2026-08-12 — `cachix/install-nix-action` revision
+  `630ae543ea3a38a9a4166f03376c02c50f408342` is Apache-2.0. FRAM uses it only
+  in the GitHub release workflow to resolve the flake-locked Wasm build
+  toolchain; it is not a shipped or runtime dependency.

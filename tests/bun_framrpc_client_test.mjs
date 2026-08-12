@@ -542,8 +542,8 @@ async function exerciseClient(fram) {
     const graphNext = keywordTerm('graph/next');
     const requestId = keywordTerm('request/id');
     const requestRoot = keywordTerm('request/root');
-    const claim = stringTerm('@request-graph-1');
-    const claimValue = stringTerm('graph-request-1');
+    const reservation = stringTerm('@request-graph-1');
+    const reservationValue = stringTerm('graph-request-1');
     const nodeA = stringTerm('@graph-a');
     const nodeB = stringTerm('@graph-b');
     const nodeC = stringTerm('@graph-c');
@@ -555,8 +555,8 @@ async function exerciseClient(fram) {
     const mixed = await schema.transactUnique({
       creates: [
         {
-          subject: claim,
-          identity: { predicate: requestId, value: claimValue },
+          subject: reservation,
+          identity: { predicate: requestId, value: reservationValue },
           fields: [{ predicate: requestRoot, value: nodeA }],
         },
         {
@@ -585,13 +585,13 @@ async function exerciseClient(fram) {
         }],
       }],
       requireUnique: [
-        { subject: claim, predicate: requestId, value: claimValue },
+        { subject: reservation, predicate: requestId, value: reservationValue },
         { subject: nodeA, predicate: graphId, value: idA },
         { subject: nodeB, predicate: graphId, value: idB },
         { subject: nodeC, predicate: graphId, value: idC },
       ],
     });
-    assert.deepEqual(mixed.createdSubjects, [claim, nodeA, nodeB, nodeC]);
+    assert.deepEqual(mixed.createdSubjects, [reservation, nodeA, nodeB, nodeC]);
     assert.deepEqual(mixed.updatedSubjects, [page]);
     assert.equal(mixed.preflight.actionCount, 9);
     assert.equal(mixed.result.length, 9);
@@ -633,12 +633,12 @@ async function exerciseClient(fram) {
     assert.equal((await fram.version()).servedVersion, beforeStale.servedVersion);
     assert.deepEqual((await fram.scan({ t1: staleSubject })).result, []);
 
-    const beforeExistingClaim = await fram.version();
+    const beforeExistingReservation = await fram.version();
     await assert.rejects(
       schema.transactUnique({
         creates: [{
-          subject: claim,
-          identity: { predicate: requestId, value: claimValue },
+          subject: reservation,
+          identity: { predicate: requestId, value: reservationValue },
           fields: [],
         }],
       }),
@@ -646,7 +646,7 @@ async function exerciseClient(fram) {
     );
     assert.equal(
       (await fram.version()).servedVersion,
-      beforeExistingClaim.servedVersion,
+      beforeExistingReservation.servedVersion,
     );
   });
 
