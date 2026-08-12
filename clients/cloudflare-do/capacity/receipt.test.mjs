@@ -51,6 +51,12 @@ function fixture(overrides = {}) {
         observedAtRuntime: true,
       },
       reopenedFromDurableStorage: true,
+      durableStorageReusedAcrossProcesses: true,
+      workerdLifecycle: "process-replacement",
+      runtimeCount: 2,
+      loadRuntimeExitedBeforeReopen: true,
+      reopenRuntimeExited: true,
+      processIdentityVerified: true,
       durableLogBytes: 4,
       durableImageBytes: 0,
       storageCommits: 29,
@@ -79,11 +85,17 @@ function fixture(overrides = {}) {
     },
     cgroup: {
       Scope: "workerd-process-tree-only",
+      Lifecycle: "process-replacement",
+      RuntimeCount: "2",
+      OwnedPidsExited: "1",
+      RuntimeLimitsExact: "1",
       MemoryResult: "not-oom-killed",
       MemoryOomKills: "0",
       ControllerExitStatus: "0",
       ProcessesRemainingAfterController: "0",
       MemoryPeak: `${64 * 1024 * 1024}`,
+      LoadMemoryPeak: `${48 * 1024 * 1024}`,
+      ReopenMemoryPeak: `${64 * 1024 * 1024}`,
       MemoryMax: `${ISOLATE_MEMORY_LIMIT_BYTES}`,
       MemorySwapMax: "0",
     },
@@ -147,6 +159,11 @@ describe("Cloudflare capacity receipt", () => {
     expect(receipt.memory.workerdProcessTreeMemory.scope).toBe(
       "workerd-process-tree-only",
     );
+    expect(receipt.memory.workerdProcessTreeMemory.lifecycle).toBe(
+      "process-replacement",
+    );
+    expect(receipt.memory.workerdProcessTreeMemory.runtimeCount).toBe(2);
+    expect(receipt.checks.workerdProcessReplacementVerified).toBe(true);
     expect(receipt.memory.controllerProcesses).toBe(
       "Bun and Miniflare excluded",
     );
@@ -166,6 +183,24 @@ describe("Cloudflare capacity receipt", () => {
     const receipt = makeReceipt(input);
     expect(receipt.pass).toBe(false);
     expect(receipt.checks.workerdProcessTreePeakWithin128MiB).toBe(false);
+  });
+
+  test("fails if either runtime lacks the exact memory and swap limits", () => {
+    const input = fixture();
+    input.cgroup.RuntimeLimitsExact = "0";
+    const receipt = makeReceipt(input);
+    expect(receipt.pass).toBe(false);
+    expect(receipt.checks.everyRuntimeLimitIsExact).toBe(false);
+    expect(receipt.checks.workerdProcessReplacementVerified).toBe(false);
+  });
+
+  test("fails if either phase process tree exceeds 128 MiB", () => {
+    const input = fixture();
+    input.cgroup.ReopenMemoryPeak = `${ISOLATE_MEMORY_LIMIT_BYTES + 1}`;
+    input.cgroup.MemoryPeak = input.cgroup.ReopenMemoryPeak;
+    const receipt = makeReceipt(input);
+    expect(receipt.pass).toBe(false);
+    expect(receipt.checks.workerdPhaseProcessTreesWithin128MiB).toBe(false);
   });
 
   test("fails if the launch-blocking corpus is shrunk", () => {
@@ -204,6 +239,34 @@ describe("Cloudflare capacity receipt", () => {
     const input = fixture();
     input.functional.workerdProcessTreeCumulativePeakAtLoadedBytes = null;
     input.functional.workerdProcessTreeCumulativePeakAfterReopenBytes = null;
+    const receipt = makeReceipt(input);
+    expect(receipt.pass).toBe(false);
+    expect(receipt.checks.workerdProcessTreePhasePeaksMeasured).toBe(false);
+  });
+
+  test("fails without two distinct workerd runtime lifecycles", () => {
+    const input = fixture();
+    input.functional.runtimeCount = 1;
+    input.functional.loadRuntimeExitedBeforeReopen = false;
+    input.cgroup.RuntimeCount = "1";
+    const receipt = makeReceipt(input);
+    expect(receipt.pass).toBe(false);
+    expect(receipt.checks.workerdProcessReplacementVerified).toBe(false);
+  });
+
+  test("fails without exact process-exit evidence", () => {
+    const input = fixture();
+    input.functional.processIdentityVerified = false;
+    input.cgroup.OwnedPidsExited = "0";
+    const receipt = makeReceipt(input);
+    expect(receipt.pass).toBe(false);
+    expect(receipt.checks.controllerReapedWorkerd).toBe(false);
+    expect(receipt.checks.workerdProcessReplacementVerified).toBe(false);
+  });
+
+  test("fails when a phase cgroup peak does not cover its observation", () => {
+    const input = fixture();
+    input.cgroup.ReopenMemoryPeak = `${32 * 1024 * 1024}`;
     const receipt = makeReceipt(input);
     expect(receipt.pass).toBe(false);
     expect(receipt.checks.workerdProcessTreePhasePeaksMeasured).toBe(false);

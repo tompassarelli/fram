@@ -187,6 +187,11 @@ export function makeReceipt({
   const memoryPeakBytes = integerProperty(cgroup, "MemoryPeak");
   const memoryMaxBytes = integerProperty(cgroup, "MemoryMax");
   const memorySwapMaxBytes = integerProperty(cgroup, "MemorySwapMax");
+  const loadMemoryPeakBytes = integerProperty(cgroup, "LoadMemoryPeak");
+  const reopenMemoryPeakBytes = integerProperty(cgroup, "ReopenMemoryPeak");
+  const runtimeCount = integerProperty(cgroup, "RuntimeCount");
+  const ownedPidsExited = integerProperty(cgroup, "OwnedPidsExited");
+  const runtimeLimitsExact = integerProperty(cgroup, "RuntimeLimitsExact");
   const controllerExitStatus = integerProperty(
     cgroup,
     "ControllerExitStatus",
@@ -233,9 +238,24 @@ export function makeReceipt({
   const processTreePhasePeaksMeasured =
     Number.isSafeInteger(phasePeakAtLoaded) &&
     phasePeakAtLoaded > 0 &&
+    phasePeakAtLoaded <= loadMemoryPeakBytes &&
     Number.isSafeInteger(phasePeakAfterReopen) &&
-    phasePeakAfterReopen >= phasePeakAtLoaded &&
-    memoryPeakBytes >= phasePeakAfterReopen;
+    phasePeakAfterReopen > 0 &&
+    phasePeakAfterReopen <= reopenMemoryPeakBytes &&
+    loadMemoryPeakBytes > 0 &&
+    reopenMemoryPeakBytes > 0 &&
+    memoryPeakBytes === Math.max(loadMemoryPeakBytes, reopenMemoryPeakBytes);
+  const workerdProcessReplacementVerified =
+    cgroup.Lifecycle === "process-replacement" &&
+    runtimeCount === 2 &&
+    ownedPidsExited === 1 &&
+    runtimeLimitsExact === 1 &&
+    functional.workerdLifecycle === "process-replacement" &&
+    functional.runtimeCount === 2 &&
+    functional.loadRuntimeExitedBeforeReopen === true &&
+    functional.reopenRuntimeExited === true &&
+    functional.processIdentityVerified === true &&
+    functional.durableStorageReusedAcrossProcesses === true;
   const currentSourceArtifact =
     wasm.sourceMode === "built-current-tree" &&
     wasm.sourceTreeClean === true &&
@@ -265,6 +285,7 @@ export function makeReceipt({
     functional.responseBytes > 0;
   const durableRecycleReopenVerified =
     functional.reopenedFromDurableStorage === true &&
+    functional.durableStorageReusedAcrossProcesses === true &&
     Number.isSafeInteger(functional.durableLogBytes) &&
     functional.durableLogBytes > 0 &&
     Number.isSafeInteger(functional.storageCommits) &&
@@ -276,10 +297,13 @@ export function makeReceipt({
       .observedSha256 === functional.reopenedTitleResponseSha256;
   const checks = {
     cgroupLimitIs128MiB: memoryMaxBytes === ISOLATE_MEMORY_LIMIT_BYTES,
+    everyRuntimeLimitIsExact: runtimeLimitsExact === 1,
     memoryScopeIsWorkerdProcessTreeOnly:
       cgroup.Scope === "workerd-process-tree-only",
     controllerSucceeded: controllerExitStatus === 0,
-    controllerReapedWorkerd: processesRemainingAfterController === 0,
+    controllerReapedWorkerd:
+      processesRemainingAfterController === 0 && ownedPidsExited === 1,
+    workerdProcessReplacementVerified,
     workerdProcessTreeNotOomKilled:
       cgroup.MemoryResult === "not-oom-killed" && memoryOomKills === 0,
     cgroupSwapDisabled: memorySwapMaxBytes === 0,
@@ -304,6 +328,9 @@ export function makeReceipt({
       conservativeRecycleReopenLinearMeasured &&
       conservativeRecycleReopenLinearBytes <= ISOLATE_MEMORY_LIMIT_BYTES,
     workerdProcessTreePhasePeaksMeasured: processTreePhasePeaksMeasured,
+    workerdPhaseProcessTreesWithin128MiB:
+      loadMemoryPeakBytes <= ISOLATE_MEMORY_LIMIT_BYTES &&
+      reopenMemoryPeakBytes <= ISOLATE_MEMORY_LIMIT_BYTES,
     workerdProcessTreePeakWithin128MiB:
       memoryPeakBytes <= ISOLATE_MEMORY_LIMIT_BYTES,
     wranglerCompressedWithinPlanLimit:
@@ -349,6 +376,14 @@ export function makeReceipt({
       responseBytes: functional.responseBytes,
       deploymentBundle: functional.deploymentBundle ?? null,
       reopenedFromDurableStorage: functional.reopenedFromDurableStorage,
+      durableStorageReusedAcrossProcesses:
+        functional.durableStorageReusedAcrossProcesses ?? false,
+      workerdLifecycle: functional.workerdLifecycle ?? null,
+      runtimeCount: functional.runtimeCount ?? null,
+      loadRuntimeExitedBeforeReopen:
+        functional.loadRuntimeExitedBeforeReopen ?? false,
+      reopenRuntimeExited: functional.reopenRuntimeExited ?? false,
+      processIdentityVerified: functional.processIdentityVerified ?? false,
       durableLogBytes: functional.durableLogBytes,
       durableImageBytes: functional.durableImageBytes,
       storageCommits: functional.storageCommits,
@@ -388,8 +423,14 @@ export function makeReceipt({
         oomKills: memoryOomKills,
         controllerExitStatus,
         processesRemainingAfterController,
+        lifecycle: cgroup.Lifecycle ?? null,
+        runtimeCount,
+        ownedPidsExited: ownedPidsExited === 1,
+        everyRuntimeLimitExact: runtimeLimitsExact === 1,
         limitBytes: memoryMaxBytes,
         peakBytes: memoryPeakBytes,
+        loadRuntimePeakBytes: loadMemoryPeakBytes,
+        reopenRuntimePeakBytes: reopenMemoryPeakBytes,
         swapMaxBytes: memorySwapMaxBytes,
         cumulativePeakAtLoadedBytes:
           phasePeakAtLoaded ?? null,
@@ -400,7 +441,7 @@ export function makeReceipt({
         measuredDirectly: false,
         conservativeGuestLinearBytes: conservativeRecycleReopenLinearBytes,
         reason:
-          "workerd exposes neither per-isolate resident memory nor old-instance collection timing; the gate enforces both the loaded-plus-reopened linear sum and whole-process-tree peak",
+          "load and reopen use non-overlapping workerd processes; the gate retains their loaded-plus-reopened guest-linear sum as an additional conservative ceiling",
       },
       productionIsolatePeakMeasured: false,
       proxyNote:

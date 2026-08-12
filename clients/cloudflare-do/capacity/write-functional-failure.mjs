@@ -26,6 +26,11 @@ const progress = existsSync(progressPath)
       processTreeMemory: null,
       processTreeCumulativePeakAtLoadedBytes: null,
       processTreeCumulativePeakAfterReopenBytes: null,
+      workerdLifecycle: "process-replacement",
+      runtimeCount: 0,
+      loadRuntimeExitedBeforeReopen: false,
+      reopenRuntimeExited: false,
+      processIdentityVerified: false,
     };
 if (!existsSync(progressPath)) {
   writeFileSync(progressPath, canonicalJson(progress));
@@ -57,6 +62,13 @@ writeFileSync(
     durableImageBytes: 0,
     storageCommits: 0,
     reopenedFromDurableStorage: false,
+    durableStorageReusedAcrossProcesses: false,
+    workerdLifecycle: progress.workerdLifecycle ?? "process-replacement",
+    runtimeCount: progress.runtimeCount ?? 0,
+    loadRuntimeExitedBeforeReopen:
+      progress.loadRuntimeExitedBeforeReopen === true,
+    reopenRuntimeExited: progress.reopenRuntimeExited === true,
+    processIdentityVerified: progress.processIdentityVerified === true,
     reopenedTitleResponseSha256: null,
     reopenedVerificationResponses: null,
     failure: {

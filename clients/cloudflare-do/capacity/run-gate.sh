@@ -12,22 +12,49 @@ repo="$(cd "$client/../.." && pwd)"
 plan="${FRAM_CF_CAPACITY_PLAN:-free}"
 output="${1:-$here/out}"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/fram-cloudflare-capacity.XXXXXXXX")"
-workerd_cgroup=""
+uid="$(id -u)"
+cgroup_parent="/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/app.slice"
+limit_bytes=134217728
+
+is_owned_cgroup_path() {
+  local candidate="$1"
+  local suffix
+  [[ "$candidate" == "$cgroup_parent"/fram-cloudflare-workerd-* ]] || return 1
+  suffix="${candidate#"$cgroup_parent"/fram-cloudflare-workerd-}"
+  [[ "$suffix" =~ ^[0-9]+$ ]]
+}
+
+process_start_time() {
+  local pid="$1"
+  local stat tail
+  local -a fields
+  [[ -r "/proc/$pid/stat" ]] || return 0
+  stat="$(<"/proc/$pid/stat")" || return 0
+  tail="${stat##*) }"
+  read -r -a fields <<<"$tail"
+  [[ "${fields[19]:-}" =~ ^[0-9]+$ ]] || return 0
+  printf '%s\n' "${fields[19]}"
+}
 
 cleanup() {
-  if [[ -n "$workerd_cgroup" && -d "$workerd_cgroup" ]]; then
-    if [[ -f "$workerd_cgroup/cgroup.kill" ]]; then
-      printf '1\n' >"$workerd_cgroup/cgroup.kill" 2>/dev/null || true
-    else
-      while read -r process; do
-        [[ -n "$process" ]] && kill -TERM "$process" 2>/dev/null || true
-      done <"$workerd_cgroup/cgroup.procs"
-    fi
-    for _ in $(seq 1 50); do
-      [[ ! -s "$workerd_cgroup/cgroup.procs" ]] && break
-      sleep 0.1
-    done
-    rmdir "$workerd_cgroup" 2>/dev/null || true
+  if [[ -s "$scratch/cgroup.inventory" ]]; then
+    while read -r _owned_pid _owned_start candidate_cgroup extra; do
+      [[ -z "${extra:-}" ]] || continue
+      is_owned_cgroup_path "$candidate_cgroup" || continue
+      [[ -d "$candidate_cgroup" ]] || continue
+      if [[ -f "$candidate_cgroup/cgroup.kill" ]]; then
+        printf '1\n' >"$candidate_cgroup/cgroup.kill" 2>/dev/null || true
+      else
+        while read -r process; do
+          [[ -n "$process" ]] && kill -TERM "$process" 2>/dev/null || true
+        done <"$candidate_cgroup/cgroup.procs"
+      fi
+      for _ in $(seq 1 50); do
+        [[ ! -s "$candidate_cgroup/cgroup.procs" ]] && break
+        sleep 0.1
+      done
+      rmdir "$candidate_cgroup" 2>/dev/null || true
+    done <"$scratch/cgroup.inventory"
   fi
   rm -rf "${scratch:?}"
 }
@@ -56,8 +83,6 @@ esac
 source_commit="$(git -C "$repo" rev-parse 'HEAD^{commit}')"
 [[ -f /sys/fs/cgroup/cgroup.controllers ]] ||
   die "cgroup v2 is required for the enforced memory row"
-uid="$(id -u)"
-cgroup_parent="/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/app.slice"
 [[ -w "$cgroup_parent/cgroup.procs" ]] ||
   die "the user cgroup app.slice must delegate cgroup creation"
 
@@ -113,56 +138,106 @@ set +e
 MINIFLARE_WORKERD_PATH="$here/workerd-cgroup-wrapper.sh" \
 FRAM_CF_REAL_WORKERD="$real_workerd" \
 FRAM_CF_CGROUP_LOCATOR="$scratch/cgroup.locator" \
+FRAM_CF_CGROUP_INVENTORY="$scratch/cgroup.inventory" \
 timeout 600 "$bun_binary" "$here/run-workerd.mjs" \
   "$bundle_directory" "$scratch/corpus" \
   "$scratch/functional.json" "$scratch/progress.json" \
   >"$scratch/workerd.log" 2>&1
 functional_status=$?
 set -e
-[[ -s "$scratch/cgroup.locator" ]] ||
-  die "the workerd cgroup wrapper emitted no cgroup locator"
-candidate_cgroup="$(<"$scratch/cgroup.locator")"
-case "$candidate_cgroup" in
-  "$cgroup_parent"/fram-cloudflare-workerd-[0-9]*) ;;
-  *) die "the workerd cgroup locator escaped its delegated parent" ;;
-esac
-workerd_cgroup="$candidate_cgroup"
-[[ -d "$workerd_cgroup" ]] || die "the workerd cgroup disappeared before measurement"
-peak="$(<"$workerd_cgroup/memory.peak")"
-oom_kills="$(awk '$1 == "oom_kill" { print $2 }' "$workerd_cgroup/memory.events")"
-remaining_processes="$(awk 'NF { count += 1 } END { print count + 0 }' \
-  "$workerd_cgroup/cgroup.procs")"
+[[ -s "$scratch/cgroup.inventory" ]] ||
+  die "the workerd cgroup wrapper emitted no runtime inventory"
+mapfile -t runtime_rows <"$scratch/cgroup.inventory"
+runtime_count="${#runtime_rows[@]}"
+declare -A seen_runtime_identities=()
+declare -A seen_cgroups=()
+peak=0
+load_peak=0
+reopen_peak=0
+oom_kills=0
+remaining_processes=0
+owned_pids_exited=1
+runtime_limits_exact=1
+runtime_index=0
+for runtime_row in "${runtime_rows[@]}"; do
+  read -r owned_pid owned_start candidate_cgroup extra <<<"$runtime_row"
+  [[ -z "${extra:-}" ]] || die "the workerd cgroup inventory row is not closed"
+  [[ "$owned_pid" =~ ^[0-9]+$ && "$owned_start" =~ ^[0-9]+$ ]] ||
+    die "the workerd cgroup inventory has an invalid process identity"
+  is_owned_cgroup_path "$candidate_cgroup" ||
+    die "the workerd cgroup inventory escaped its delegated parent"
+  runtime_identity="$owned_pid:$owned_start"
+  [[ -z "${seen_runtime_identities[$runtime_identity]+present}" ]] ||
+    die "the workerd cgroup inventory repeated a process identity"
+  [[ -z "${seen_cgroups[$candidate_cgroup]+present}" ]] ||
+    die "the workerd cgroup inventory repeated a cgroup"
+  seen_runtime_identities[$runtime_identity]=1
+  seen_cgroups[$candidate_cgroup]=1
+  [[ -d "$candidate_cgroup" ]] ||
+    die "a workerd cgroup disappeared before measurement"
+  runtime_peak="$(<"$candidate_cgroup/memory.peak")"
+  runtime_oom_kills="$(awk '$1 == "oom_kill" { print $2 }' \
+    "$candidate_cgroup/memory.events")"
+  runtime_remaining="$(awk 'NF { count += 1 } END { print count + 0 }' \
+    "$candidate_cgroup/cgroup.procs")"
+  runtime_memory_max="$(<"$candidate_cgroup/memory.max")"
+  runtime_swap_max="$(<"$candidate_cgroup/memory.swap.max")"
+  if (( runtime_peak > peak )); then
+    peak="$runtime_peak"
+  fi
+  oom_kills=$((oom_kills + runtime_oom_kills))
+  remaining_processes=$((remaining_processes + runtime_remaining))
+  if [[ "$runtime_memory_max" != "$limit_bytes" || "$runtime_swap_max" != 0 ]]; then
+    runtime_limits_exact=0
+  fi
+  if [[ "$runtime_index" == 0 ]]; then
+    load_peak="$runtime_peak"
+  elif [[ "$runtime_index" == 1 ]]; then
+    reopen_peak="$runtime_peak"
+  fi
+  current_start="$(process_start_time "$owned_pid")"
+  [[ "$current_start" != "$owned_start" ]] || owned_pids_exited=0
+  runtime_index=$((runtime_index + 1))
+done
 memory_result=not-oom-killed
 if [[ "${oom_kills:-0}" != 0 ]]; then
   memory_result=oom-kill
 fi
 printf '%s\n' \
   "Scope=workerd-process-tree-only" \
+  "Lifecycle=process-replacement" \
+  "RuntimeCount=$runtime_count" \
+  "OwnedPidsExited=$owned_pids_exited" \
+  "RuntimeLimitsExact=$runtime_limits_exact" \
   "MemoryResult=$memory_result" \
   "MemoryOomKills=${oom_kills:-0}" \
   "ControllerExitStatus=$functional_status" \
   "ProcessesRemainingAfterController=$remaining_processes" \
   "MemoryPeak=$peak" \
-  "MemoryMax=$(<"$workerd_cgroup/memory.max")" \
-  "MemorySwapMax=$(<"$workerd_cgroup/memory.swap.max")" \
+  "LoadMemoryPeak=$load_peak" \
+  "ReopenMemoryPeak=$reopen_peak" \
+  "MemoryMax=$limit_bytes" \
+  "MemorySwapMax=0" \
   >"$scratch/cgroup.properties"
-if [[ "$remaining_processes" != 0 ]]; then
-  if [[ -f "$workerd_cgroup/cgroup.kill" ]]; then
-    printf '1\n' >"$workerd_cgroup/cgroup.kill"
-  else
-    while read -r process; do
-      [[ -n "$process" ]] && kill -TERM "$process" 2>/dev/null || true
-    done <"$workerd_cgroup/cgroup.procs"
+for runtime_row in "${runtime_rows[@]}"; do
+  read -r _owned_pid _owned_start candidate_cgroup _extra <<<"$runtime_row"
+  if [[ -s "$candidate_cgroup/cgroup.procs" ]]; then
+    if [[ -f "$candidate_cgroup/cgroup.kill" ]]; then
+      printf '1\n' >"$candidate_cgroup/cgroup.kill"
+    else
+      while read -r process; do
+        [[ -n "$process" ]] && kill -TERM "$process" 2>/dev/null || true
+      done <"$candidate_cgroup/cgroup.procs"
+    fi
+    for _ in $(seq 1 50); do
+      [[ ! -s "$candidate_cgroup/cgroup.procs" ]] && break
+      sleep 0.1
+    done
+    [[ ! -s "$candidate_cgroup/cgroup.procs" ]] ||
+      die "an owned workerd process survived capacity cleanup"
   fi
-  for _ in $(seq 1 50); do
-    [[ ! -s "$workerd_cgroup/cgroup.procs" ]] && break
-    sleep 0.1
-  done
-  [[ ! -s "$workerd_cgroup/cgroup.procs" ]] ||
-    die "workerd processes survived capacity cleanup"
-fi
-rmdir "$workerd_cgroup"
-workerd_cgroup=""
+  rmdir "$candidate_cgroup"
+done
 
 if [[ ! -s "$scratch/functional.json" ]]; then
   "$bun_binary" "$here/write-functional-failure.mjs" \
@@ -189,6 +264,7 @@ set -e
 cp "$scratch/receipt.json" "$output/receipt.json"
 cp "$scratch/functional.json" "$output/functional.json"
 cp "$scratch/cgroup.properties" "$output/cgroup.properties"
+cp "$scratch/cgroup.inventory" "$output/cgroup.inventory"
 cp "$scratch/progress.json" "$output/progress.json"
 cp "$scratch/wrangler.log" "$output/wrangler.log"
 cp "$scratch/workerd.log" "$output/workerd.log"

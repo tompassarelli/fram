@@ -32,6 +32,8 @@ const bundle = resolve(bundleArgument);
 const corpus = resolve(corpusArgument);
 const output = resolve(outputArgument);
 const progressOutput = resolve(progressArgument ?? `${output}.progress.json`);
+const persistence = resolve(dirname(output), "durable-storage");
+mkdirSync(persistence, { recursive: true });
 const profile = JSON.parse(readFileSync(`${corpus}/profile.json`, "utf8"));
 const deploymentBundle = measureBundle(bundle);
 const workerFiles = deploymentBundle.files.filter(
@@ -91,6 +93,95 @@ function processTreeMemory() {
   };
 }
 
+function processStartTime(pid) {
+  const path = `/proc/${pid}/stat`;
+  if (!existsSync(path)) return null;
+  const stat = readFileSync(path, "utf8").trim();
+  const commandEnd = stat.lastIndexOf(")");
+  if (commandEnd < 0) return null;
+  const fieldsAfterCommand = stat.slice(commandEnd + 1).trim().split(/\s+/);
+  const startTime = fieldsAfterCommand[19];
+  return /^\d+$/.test(startTime ?? "") ? startTime : null;
+}
+
+function cgroupProcesses(cgroup) {
+  const path = `${cgroup}/cgroup.procs`;
+  if (!existsSync(path)) return null;
+  return readFileSync(path, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map(Number);
+}
+
+function runtimeInventory() {
+  const inventory = process.env.FRAM_CF_CGROUP_INVENTORY;
+  if (!inventory) return null;
+  if (!existsSync(inventory)) return [];
+  return readFileSync(inventory, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [pid, startTime, cgroup, extra] = line.trim().split(/\s+/);
+      if (
+        extra !== undefined ||
+        !/^\d+$/.test(pid ?? "") ||
+        !/^\d+$/.test(startTime ?? "") ||
+        !cgroup?.startsWith("/")
+      ) {
+        throw new Error(`invalid workerd runtime inventory row: ${line}`);
+      }
+      return { pid: Number(pid), startTime, cgroup };
+    });
+}
+
+async function waitForRuntimeIdentity(index) {
+  if (!process.env.FRAM_CF_CGROUP_INVENTORY) return null;
+  let lastObservation = "inventory row absent";
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    try {
+      const identity = runtimeInventory()?.[index];
+      if (identity) {
+        const currentStartTime = processStartTime(identity.pid);
+        const processes = cgroupProcesses(identity.cgroup);
+        if (
+          currentStartTime === identity.startTime &&
+          processes?.includes(identity.pid)
+        ) {
+          return identity;
+        }
+        lastObservation =
+          `pid=${identity.pid} start=${currentStartTime ?? "absent"} ` +
+          `cgroup-processes=${canonicalJson(processes)}`;
+      }
+    } catch (error) {
+      lastObservation = error.message;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  }
+  throw new Error(
+    `workerd runtime ${index + 1} identity was not observed: ${lastObservation}`,
+  );
+}
+
+async function waitForRuntimeExit(identity, label) {
+  if (!identity) return;
+  let lastObservation = "runtime still present";
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const currentStartTime = processStartTime(identity.pid);
+    const processes = cgroupProcesses(identity.cgroup);
+    if (currentStartTime !== identity.startTime && processes?.length === 0) {
+      return;
+    }
+    lastObservation =
+      `pid=${identity.pid} start=${currentStartTime ?? "absent"} ` +
+      `cgroup-processes=${canonicalJson(processes)}`;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  }
+  throw new Error(`${label} workerd did not exit exactly: ${lastObservation}`);
+}
+
 const load = manifest("manifest-load.txt");
 const verify = manifest("manifest-verify.txt");
 const expectedVerifyResponses = JSON.parse(
@@ -119,6 +210,11 @@ let progress = {
   processTreeMemory: null,
   processTreeCumulativePeakAtLoadedBytes: null,
   processTreeCumulativePeakAfterReopenBytes: null,
+  workerdLifecycle: "process-replacement",
+  runtimeCount: 0,
+  loadRuntimeExitedBeforeReopen: false,
+  reopenRuntimeExited: false,
+  processIdentityVerified: false,
 };
 
 function recordProgress(update) {
@@ -175,19 +271,30 @@ async function exchange(mf, row) {
   return { bytes: body.responseBytes, sha256: sha256(Buffer.from(body.responseHex, "hex")) };
 }
 
-const mf = new Miniflare(convertV4MiniflareOptions({
-  modulesRoot: bundle,
-  modules: [
-    { type: "ESModule", path: workerPath },
-    { type: "CompiledWasm", path: wasmPath },
-  ],
-  scriptPath: workerPath,
-  cf: false,
-  compatibilityDate: "2026-08-01",
-  durableObjects: { FRAM: { className: "CapacityFram", useSQLite: true } },
-}));
+function createRuntime() {
+  return new Miniflare(convertV4MiniflareOptions({
+    modulesRoot: bundle,
+    modules: [
+      { type: "ESModule", path: workerPath },
+      { type: "CompiledWasm", path: wasmPath },
+    ],
+    scriptPath: workerPath,
+    cf: false,
+    compatibilityDate: "2026-08-01",
+    durableObjects: { FRAM: { className: "CapacityFram", useSQLite: true } },
+    resourcePersistencePath: persistence,
+  }));
+}
+
+let mf = null;
+let loadRuntimeIdentity = null;
+let reopenRuntimeIdentity = null;
 
 try {
+  mf = createRuntime();
+  await mf.ready;
+  loadRuntimeIdentity = await waitForRuntimeIdentity(0);
+  recordProgress({ phase: "load-runtime-ready", runtimeCount: 1 });
   let responseBytes = 0;
   for (const [index, row] of load.entries()) {
     recordProgress({ phase: "load-in-flight" });
@@ -219,6 +326,33 @@ try {
     throw new Error(`first recycle failed: ${recycled.closed?.message}`);
   }
   recordProgress({ phase: "recycled", lastCompletedPhase: "recycled" });
+  await mf.dispose();
+  await waitForRuntimeExit(loadRuntimeIdentity, "load");
+  mf = null;
+  recordProgress({
+    phase: "load-runtime-exited",
+    lastCompletedPhase: "load-runtime-exited",
+    loadRuntimeExitedBeforeReopen: true,
+  });
+
+  mf = createRuntime();
+  await mf.ready;
+  reopenRuntimeIdentity = await waitForRuntimeIdentity(1);
+  if (
+    loadRuntimeIdentity &&
+    reopenRuntimeIdentity &&
+    (loadRuntimeIdentity.cgroup === reopenRuntimeIdentity.cgroup ||
+      (loadRuntimeIdentity.pid === reopenRuntimeIdentity.pid &&
+        loadRuntimeIdentity.startTime === reopenRuntimeIdentity.startTime))
+  ) {
+    throw new Error("reopen reused the load workerd process or cgroup");
+  }
+  recordProgress({
+    phase: "reopen-runtime-ready",
+    runtimeCount: 2,
+    processIdentityVerified:
+      loadRuntimeIdentity !== null && reopenRuntimeIdentity !== null,
+  });
   let titleResponseSha256 = null;
   const reopenedVerificationResponses = {};
   for (const [index, row] of verify.entries()) {
@@ -278,6 +412,14 @@ try {
     phase: "final-recycled",
     lastCompletedPhase: "final-recycled",
   });
+  await mf.dispose();
+  await waitForRuntimeExit(reopenRuntimeIdentity, "reopen");
+  mf = null;
+  recordProgress({
+    phase: "reopen-runtime-exited",
+    lastCompletedPhase: "reopen-runtime-exited",
+    reopenRuntimeExited: true,
+  });
 
   const engineSamples = [loaded.engine, recycled.before, reopened.engine,
     finalRecycle.before].filter(Boolean);
@@ -315,6 +457,13 @@ try {
     durableImageBytes: reopened.engine.imageBytes,
     storageCommits: loaded.storage.commits,
     reopenedFromDurableStorage: true,
+    durableStorageReusedAcrossProcesses: true,
+    workerdLifecycle: "process-replacement",
+    runtimeCount: 2,
+    loadRuntimeExitedBeforeReopen: true,
+    reopenRuntimeExited: true,
+    processIdentityVerified:
+      loadRuntimeIdentity !== null && reopenRuntimeIdentity !== null,
     reopenedTitleResponseSha256: titleResponseSha256,
     reopenedVerificationResponses,
   };
@@ -326,5 +475,5 @@ try {
       `linear-memory-high-water=${highWater} bytes\n`,
   );
 } finally {
-  await mf.dispose();
+  if (mf !== null) await mf.dispose();
 }

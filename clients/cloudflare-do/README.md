@@ -226,10 +226,13 @@ the deployment-shaped Worker bundle, and loads that exact emitted bundle with
 the fixed wiki-shaped corpus through workerd. It refuses a supplied
 `FRAM_DO_WASM_ARTIFACT` and a dirty
 source tree, so its receipt binds the exact source commit, native-build input
-manifest, and emitted Wasm digest. The functional process tree runs in a Linux
-cgroup with an exact 128 MiB memory ceiling and swap disabled. The
-Bun/Miniflare controller stays outside that cgroup; the real workerd process
-and all descendants are in it:
+manifest, and emitted Wasm digest. The functional process trees run in two
+Linux cgroups, each with an exact 128 MiB memory ceiling and swap disabled.
+The Bun/Miniflare controller stays outside both cgroups. The load phase runs in
+workerd A, closes FRAM, and persists the Durable Object; the gate then proves
+A's exact PID and process tree have exited before starting workerd B against
+the same persistence directory for all four cold-reopen checks. Each workerd
+and all of its descendants are confined to its own cgroup:
 
 ```sh
 $ bun run capacity
@@ -246,9 +249,10 @@ process tree. The receipt binds the bundle executed by workerd to the bundle
 measured for upload and binds its Wasm bytes to current-source native
 provenance. It keeps Wasm linear-memory capacity separate from
 kernel cgroup-charged process-tree memory; neither is mislabeled as production
-isolate RSS. It records the loaded and reopened Wasm sizes separately and gates
-their conservative sum because workerd does not expose old-instance collection
-timing during recycle/reopen. The Worker also reports the exact FRAM engine
+isolate RSS. It records the loaded and reopened Wasm sizes and independent
+workerd process-tree peaks separately. Although process replacement prevents
+actual overlap in this gate, it retains the loaded-plus-reopened Wasm sum as an
+additional conservative ceiling. The Worker also reports the exact FRAM engine
 memory budget and guest-arena sizing it observed at runtime. The tracked profile
 uses a 64 MiB engine budget and eight-page arena growth so FRAM compacts before
 an allocation spike can consume the isolate ceiling. That budget is an engine
@@ -265,8 +269,8 @@ three revisions per article, 2,048-byte deterministic bodies, four links per
 revision, and 6,912 facts total. Each article contributes three article facts
 plus `3 × (4 revision facts + 4 link facts)`, or 27 facts. The full profile is
 deliberate: if it exceeds 128 MiB, the gate fails instead of silently shrinking
-the workload. After recycling the engine, the gate also compares exact response
-bytes for a durable title scan, ordered top-K query, and bound-attribute text
-query; the text corpus deliberately puts the same token in an unrelated
+the workload. After replacing the load workerd, the gate also compares exact
+response bytes for a durable title scan, ordered top-K query, and bound-attribute
+text query; the text corpus deliberately puts the same token in an unrelated
 attribute. Change `capacity/corpus.json` only with the profile contract test and
 an explicit capacity decision.
