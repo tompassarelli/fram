@@ -249,6 +249,9 @@ jobs:
           echo "FRAM_RACKET=$RACKET" >> "$GITHUB_ENV"
           echo "_BEAGLE_RACKET=$RACKET" >> "$GITHUB_ENV"
 
+      - name: Install babashka
+        run: curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | sudo bash
+
       - name: Install the static musl release compiler
         run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
 
