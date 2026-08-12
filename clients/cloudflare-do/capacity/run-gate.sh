@@ -114,7 +114,8 @@ MINIFLARE_WORKERD_PATH="$here/workerd-cgroup-wrapper.sh" \
 FRAM_CF_REAL_WORKERD="$real_workerd" \
 FRAM_CF_CGROUP_LOCATOR="$scratch/cgroup.locator" \
 timeout 600 "$bun_binary" "$here/run-workerd.mjs" \
-  "$scratch/corpus" "$scratch/functional.json" "$scratch/progress.json" \
+  "$bundle_directory" "$scratch/corpus" \
+  "$scratch/functional.json" "$scratch/progress.json" \
   >"$scratch/workerd.log" 2>&1
 functional_status=$?
 set -e

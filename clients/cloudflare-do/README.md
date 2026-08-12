@@ -222,8 +222,9 @@ It SKIPs cleanly when Bun, Miniflare, or the wasi compiler is absent.
 ## Cloudflare capacity gate
 
 `capacity/run-gate.sh` builds the current `libfram.wasm`, makes Wrangler emit
-the deployment-shaped Worker bundle, and loads the fixed wiki-shaped corpus
-through workerd. It refuses a supplied `FRAM_DO_WASM_ARTIFACT` and a dirty
+the deployment-shaped Worker bundle, and loads that exact emitted bundle with
+the fixed wiki-shaped corpus through workerd. It refuses a supplied
+`FRAM_DO_WASM_ARTIFACT` and a dirty
 source tree, so its receipt binds the exact source commit, native-build input
 manifest, and emitted Wasm digest. The functional process tree runs in a Linux
 cgroup with an exact 128 MiB memory ceiling and swap disabled. The
@@ -241,7 +242,9 @@ also enforce Wrangler's 64 MiB pre-compression limit.
 The deterministic receipt is `capacity/out/receipt.json`. It reports Wrangler's
 displayed upload totals, hashes and exact byte sizes for emitted modules, guest
 linear-memory high-water, and the kernel's peak for the whole workerd runtime
-process tree. The receipt keeps Wasm linear-memory capacity separate from
+process tree. The receipt binds the bundle executed by workerd to the bundle
+measured for upload and binds its Wasm bytes to current-source native
+provenance. It keeps Wasm linear-memory capacity separate from
 kernel cgroup-charged process-tree memory; neither is mislabeled as production
 isolate RSS. It records the loaded and reopened Wasm sizes separately and gates
 their conservative sum because workerd does not expose old-instance collection

@@ -141,6 +141,14 @@ function corpusProfileMatches(corpus) {
   );
 }
 
+function bundleExecutionMatches(measured, executed) {
+  return (
+    executed !== null &&
+    executed !== undefined &&
+    canonicalJson(executed) === canonicalJson(measured)
+  );
+}
+
 export function makeReceipt({
   plan,
   bundle,
@@ -215,6 +223,15 @@ export function makeReceipt({
     wasm.wasmBytes > 0 &&
     /^[0-9a-f]{64}$/.test(wasm.wasmSha256);
   const fixedCorpusProfileObserved = corpusProfileMatches(functional.corpus);
+  const deploymentBundleExecuted = bundleExecutionMatches(
+    bundle,
+    functional.deploymentBundle,
+  );
+  const bundledWasm = bundle.files.filter((file) => file.path.endsWith(".wasm"));
+  const bundleCarriesProvenancedWasm =
+    bundledWasm.length === 1 &&
+    bundledWasm[0].bytes === wasm.wasmBytes &&
+    bundledWasm[0].sha256 === wasm.wasmSha256;
   const fullCorpusExecutionPassed =
     functional.pass === true &&
     functional.loadFrames === REQUIRED_CORPUS_PROFILE.loadFrames &&
@@ -239,6 +256,8 @@ export function makeReceipt({
     cgroupSwapDisabled: memorySwapMaxBytes === 0,
     emittedRawWithinWranglerLimit:
       bundle.emittedBytes <= RAW_BUNDLE_LIMIT_BYTES,
+    deploymentBundleExecuted,
+    bundleCarriesProvenancedWasm,
     fixedCorpusProfileObserved,
     fullCorpusExecutionPassed,
     durableRecycleReopenVerified,
@@ -298,6 +317,7 @@ export function makeReceipt({
       loadFrames: functional.loadFrames,
       verifyFrames: functional.verifyFrames,
       responseBytes: functional.responseBytes,
+      deploymentBundle: functional.deploymentBundle ?? null,
       reopenedFromDurableStorage: functional.reopenedFromDurableStorage,
       durableLogBytes: functional.durableLogBytes,
       durableImageBytes: functional.durableImageBytes,

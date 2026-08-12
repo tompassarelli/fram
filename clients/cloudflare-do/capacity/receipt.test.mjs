@@ -13,9 +13,27 @@ import {
 import { CAPACITY_RUNTIME_CONFIGURATION } from "./config.mjs";
 
 function fixture(overrides = {}) {
+  const bundle = {
+    emittedBytes: 700,
+    conservativeGzipBytes: 400,
+    files: [
+      {
+        path: `${"1".repeat(32)}-libfram.wasm`,
+        bytes: 123,
+        gzipBytes: 100,
+        sha256: "0".repeat(64),
+      },
+      {
+        path: "worker.js",
+        bytes: 577,
+        gzipBytes: 300,
+        sha256: "3".repeat(64),
+      },
+    ],
+  };
   return {
     plan: "free",
-    bundle: { emittedBytes: 700, conservativeGzipBytes: 400, files: [] },
+    bundle,
     wrangler: {
       reportedRawBytes: 700,
       reportedGzipBytes: 400,
@@ -24,6 +42,7 @@ function fixture(overrides = {}) {
     functional: {
       pass: true,
       corpus: { ...REQUIRED_CORPUS_PROFILE },
+      deploymentBundle: structuredClone(bundle),
       loadFrames: 29,
       verifyFrames: 2,
       responseBytes: 3,
@@ -77,10 +96,18 @@ describe("Cloudflare capacity receipt", () => {
     const expected =
       corpus.articles *
       (3 + corpus.revisionsPerArticle * (4 + corpus.linksPerRevision));
-    expect(corpus.profile).toBe("wiki-shaped-256x3-2k-v1");
-    expect(corpus.decision).toBe("launch-blocking capacity floor");
-    expect(corpus.articles).toBe(256);
-    expect(corpus.expectedFacts).toBe(6912);
+    const generatedNames = new Set([
+      "spaceId",
+      "batches",
+      "loadFrames",
+      "verifyFrames",
+    ]);
+    const requiredSourceProfile = Object.fromEntries(
+      Object.entries(REQUIRED_CORPUS_PROFILE).filter(
+        ([name]) => !generatedNames.has(name),
+      ),
+    );
+    expect(corpus).toEqual(requiredSourceProfile);
     expect(corpus.expectedFacts).toBe(expected);
   });
 
@@ -245,6 +272,23 @@ describe("Cloudflare capacity receipt", () => {
     const receipt = makeReceipt(input);
     expect(receipt.pass).toBe(false);
     expect(receipt.checks.wranglerCompressedWithinPlanLimit).toBe(false);
+  });
+
+  test("fails when workerd did not execute the measured Wrangler bundle", () => {
+    const input = fixture();
+    input.functional.deploymentBundle.files[1].sha256 = "4".repeat(64);
+    const receipt = makeReceipt(input);
+    expect(receipt.pass).toBe(false);
+    expect(receipt.checks.deploymentBundleExecuted).toBe(false);
+  });
+
+  test("fails when Wrangler bundled Wasm outside current-source provenance", () => {
+    const input = fixture();
+    input.bundle.files[0].sha256 = "5".repeat(64);
+    input.functional.deploymentBundle = structuredClone(input.bundle);
+    const receipt = makeReceipt(input);
+    expect(receipt.pass).toBe(false);
+    expect(receipt.checks.bundleCarriesProvenancedWasm).toBe(false);
   });
 
   test("canonical JSON sorts recursively and ends in one newline", () => {

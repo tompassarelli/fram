@@ -3,6 +3,7 @@
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   renameSync,
   readFileSync,
   writeFileSync,
@@ -12,20 +13,41 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { CAPACITY_RUNTIME_CONFIGURATION } from "./config.mjs";
-import { canonicalJson } from "./receipt.mjs";
+import { canonicalJson, measureBundle } from "./receipt.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const client = resolve(here, "..");
-const [corpusArgument, outputArgument, progressArgument] = process.argv.slice(2);
-if (!corpusArgument || !outputArgument) {
+const [bundleArgument, corpusArgument, outputArgument, progressArgument] =
+  process.argv.slice(2);
+if (!bundleArgument || !corpusArgument || !outputArgument) {
   throw new Error(
-    "usage: bun capacity/run-workerd.mjs CORPUS-DIR OUTPUT.json [PROGRESS.json]",
+    "usage: bun capacity/run-workerd.mjs BUNDLE-DIR CORPUS-DIR " +
+      "OUTPUT.json [PROGRESS.json]",
   );
 }
+const bundle = resolve(bundleArgument);
 const corpus = resolve(corpusArgument);
 const output = resolve(outputArgument);
 const progressOutput = resolve(progressArgument ?? `${output}.progress.json`);
 const profile = JSON.parse(readFileSync(`${corpus}/profile.json`, "utf8"));
+const deploymentBundle = measureBundle(bundle);
+const workerFiles = deploymentBundle.files.filter(
+  (file) => file.path === "worker.js",
+);
+const wasmFiles = deploymentBundle.files.filter((file) =>
+  file.path.endsWith(".wasm"),
+);
+if (
+  deploymentBundle.files.length !== 2 ||
+  workerFiles.length !== 1 ||
+  wasmFiles.length !== 1
+) {
+  throw new Error(
+    "Wrangler bundle must contain exactly worker.js and one compiled Wasm module; " +
+      `found ${readdirSync(bundle).sort().join(", ")}`,
+  );
+}
+const workerPath = resolve(bundle, workerFiles[0].path);
+const wasmPath = resolve(bundle, wasmFiles[0].path);
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -78,6 +100,7 @@ let progress = {
   loadedGuestLinearMemoryBytes: null,
   reopenedGuestLinearMemoryBytes: null,
   runtimeConfigurationObserved: false,
+  deploymentBundle,
   processTreeMemory: null,
   processTreeCumulativePeakAtLoadedBytes: null,
   processTreeCumulativePeakAfterReopenBytes: null,
@@ -138,15 +161,12 @@ async function exchange(mf, row) {
 }
 
 const mf = new Miniflare(convertV4MiniflareOptions({
-  modulesRoot: client,
+  modulesRoot: bundle,
   modules: [
-    { type: "ESModule", path: `${here}/worker.mjs` },
-    { type: "ESModule", path: `${here}/config.mjs` },
-    { type: "ESModule", path: `${client}/src/adapter.mjs` },
-    { type: "ESModule", path: `${client}/src/seams.mjs` },
-    { type: "CompiledWasm", path: `${client}/lib/libfram.wasm` },
+    { type: "ESModule", path: workerPath },
+    { type: "CompiledWasm", path: wasmPath },
   ],
-  scriptPath: `${here}/worker.mjs`,
+  scriptPath: workerPath,
   cf: false,
   compatibilityDate: "2026-08-01",
   durableObjects: { FRAM: { className: "CapacityFram", useSQLite: true } },
@@ -247,6 +267,7 @@ try {
     loadFrames: load.length,
     verifyFrames: verify.length,
     responseBytes,
+    deploymentBundle,
     runtimeConfiguration: {
       ...CAPACITY_RUNTIME_CONFIGURATION,
       observedAtRuntime: true,

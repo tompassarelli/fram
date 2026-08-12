@@ -43,6 +43,7 @@ writeFileSync(
       ...CAPACITY_RUNTIME_CONFIGURATION,
       observedAtRuntime: progress.runtimeConfigurationObserved === true,
     },
+    deploymentBundle: progress.deploymentBundle ?? null,
     guestLinearMemoryHighWaterBytes: null,
     loadedGuestLinearMemoryBytes: progress.loadedGuestLinearMemoryBytes,
     reopenedGuestLinearMemoryBytes: progress.reopenedGuestLinearMemoryBytes,
