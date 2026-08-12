@@ -25,6 +25,55 @@
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       forAll = f: nixpkgs.lib.genAttrs systems (system: f system nixpkgs.legacyPackages.${system});
 
+      mkWasiToolchainLicenses = pkgs:
+        let
+          wasiLibc = pkgs.pkgsCross.wasi32.wasilibc;
+          compilerRt = pkgs.pkgsCross.wasi32.llvmPackages.compiler-rt;
+        in
+        pkgs.runCommand
+          "fram-wasi-toolchain-licenses-${wasiLibc.version}-${compilerRt.version}"
+          {} ''
+            mkdir -p "$out"
+            destination="$out/WASI-TOOLCHAIN-LICENSES.txt"
+            append() {
+              logical_path="$1"
+              source_path="$2"
+              test -f "$source_path"
+              test ! -L "$source_path"
+              printf '===== BEGIN %s =====\n' "$logical_path"
+              cat "$source_path"
+              printf '\n===== END %s =====\n\n' "$logical_path"
+            }
+            {
+              printf '%s\n' \
+                'fram-wasi-toolchain-licenses/v1' \
+                'wasi-libc-version ${wasiLibc.version}' \
+                'compiler-rt-version ${compilerRt.version}' \
+                ""
+              append wasi-libc/LICENSE ${wasiLibc.src}/LICENSE
+              append wasi-libc/LICENSE-APACHE-LLVM ${wasiLibc.src}/LICENSE-APACHE-LLVM
+              append wasi-libc/LICENSE-APACHE ${wasiLibc.src}/LICENSE-APACHE
+              append wasi-libc/LICENSE-MIT ${wasiLibc.src}/LICENSE-MIT
+              append wasi-libc/libc-bottom-half/cloudlibc/LICENSE \
+                ${wasiLibc.src}/libc-bottom-half/cloudlibc/LICENSE
+              append wasi-libc/libc-top-half/musl/COPYRIGHT \
+                ${wasiLibc.src}/libc-top-half/musl/COPYRIGHT
+              append wasi-libc/fts/musl-fts/COPYING \
+                ${wasiLibc.src}/fts/musl-fts/COPYING
+              append wasi-libc/fts/musl-fts/NOTICE.wasi-libc.md \
+                ${wasiLibc.src}/fts/musl-fts/NOTICE.wasi-libc.md
+              append wasi-libc/tools/wasi-headers/LICENSE \
+                ${wasiLibc.src}/tools/wasi-headers/LICENSE
+              append wasi-libc/dlmalloc/src/malloc.c \
+                ${wasiLibc.src}/dlmalloc/src/malloc.c
+              append wasi-libc/emmalloc/emmalloc.c \
+                ${wasiLibc.src}/emmalloc/emmalloc.c
+              append compiler-rt/LICENSE.TXT \
+                ${compilerRt.src}/compiler-rt/LICENSE.TXT
+            } >"$destination"
+            test -s "$destination"
+          '';
+
       mkFram = pkgs: cljpkgs:
         let
           serverDeps = cljpkgs.mk-deps-cache {
@@ -447,6 +496,7 @@
           # Bound by absolute path, never added to PATH: a cross cc-wrapper
           # setup hook rebinds CC, which the smoke's native oracle also needs.
           wasiCC = pkgs.pkgsCross.wasi32.stdenv.cc;
+          wasiToolchainLicenses = mkWasiToolchainLicenses pkgs;
           # `beagle build` reads its stage sources, shim, and source-fact
           # projector from <root>/native-core, which the package does not ship.
           nativeBeagle = pkgs.runCommand
@@ -493,6 +543,8 @@
           ];
 
           FRAM_WASI_CC = "${wasiCC}/bin/wasm32-unknown-wasi-clang";
+          FRAM_WASI_NOTICES =
+            "${wasiToolchainLicenses}/WASI-TOOLCHAIN-LICENSES.txt";
           # bin/fram-native-build freezes every native program through Beagle;
           # this is the rev flake.nix already pins for the graph-edit runtime.
           FRAM_BEAGLE = "${nativeBeagle}/bin/beagle";
@@ -521,9 +573,11 @@
         let
           fram = self.packages.${system}.default;
           graphEditRuntime = self.packages.${system}.fram-graph-edit-runtime;
+          wasiToolchainLicenses = mkWasiToolchainLicenses pkgs;
         in {
           packaged-server = fram;
           graph-edit-runtime = graphEditRuntime;
+          wasi-toolchain-licenses = wasiToolchainLicenses;
           package-contract = pkgs.runCommand "fram-package-contract" {} ''
             test "${fram.runtimeRoot}" = "${fram}/libexec/fram"
             test "${fram.babashkaClasspath}" = "${fram}/libexec/fram/out"

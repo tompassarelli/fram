@@ -294,6 +294,45 @@ seed_beagle_tree() {
 }
 seed_beagle_tree "$scratch/tool"
 
+cat >"$scratch/tool/bin/wasi-cc" <<'FAKE_WASI_CC'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf '%s\n' 'fixture wasi clang 21.1.8'
+  exit 0
+fi
+output=""
+compile=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -c) compile=1; shift ;;
+    -o) output="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ -n "$output" ]] || exit 94
+if [[ "$compile" == 1 ]]; then
+  printf '%s\n' 'fixture wasm object' >"$output"
+else
+  printf '\0asm\1\0\0\0' >"$output"
+fi
+FAKE_WASI_CC
+chmod +x "$scratch/tool/bin/wasi-cc"
+
+cat >"$scratch/tool/bin/wasm-tools" <<'FAKE_WASM_TOOLS'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  --version) printf '%s\n' 'wasm-tools fixture 1.244.0' ;;
+  print) printf '%s\n' '(module)' ;;
+  *) exit 95 ;;
+esac
+FAKE_WASM_TOOLS
+chmod +x "$scratch/tool/bin/wasm-tools"
+
+printf '%s\n' 'fram-wasm-embed-seams/v1' >"$scratch/wasm-embed.seams"
+printf '%s\n' 'fixture wasi toolchain licenses' >"$scratch/wasi-notices.txt"
+
 ffc_notice_root="$scratch/tool/native-core/shim/third_party/ffc"
 assert_ffc_notices() {
   local artifact_root="$1" notice
@@ -646,6 +685,62 @@ if "${build_env[@]}" "$builder" --host embed --abi wasm32 \
 fi
 grep -Fq -- '--abi wasm32 needs --host program' "$scratch/embed-wasm-abi.err" ||
   fail "embed host did not refuse a non-native ABI by name"
+
+wasm_build_env=(
+  env
+  PATH="$scratch/tool/bin:$PATH"
+  FRAM_BEAGLE="$scratch/tool/bin/beagle"
+  FRAM_NATIVE_CACHE="$scratch/cache-wasm"
+  FRAM_WASI_CC="$scratch/tool/bin/wasi-cc"
+  FRAM_WASI_NOTICES="$scratch/wasi-notices.txt"
+  FRAM_QBE_FRONTIER_LEDGER="$ledger"
+  FRAM_WASM_SEAMS_LEDGER="$scratch/wasm-embed.seams"
+  FAKE_NATIVE_CALLS="$calls"
+)
+if env -u FRAM_WASI_NOTICES PATH="$scratch/tool/bin:$PATH" \
+    FRAM_BEAGLE="$scratch/tool/bin/beagle" \
+    FRAM_NATIVE_CACHE="$scratch/cache-wasm-missing-notices" \
+    FRAM_WASI_CC="$scratch/tool/bin/wasi-cc" \
+    FRAM_QBE_FRONTIER_LEDGER="$ledger" \
+    FRAM_WASM_SEAMS_LEDGER="$scratch/wasm-embed.seams" \
+    FAKE_NATIVE_CALLS="$calls" \
+    "$builder" --host wasm-embed --abi wasm32 \
+    "$scratch/sources/good.bgl" \
+    >"$scratch/wasm-no-notices.out" 2>"$scratch/wasm-no-notices.err"; then
+  fail "wasm-embed host built without its toolchain license bundle"
+fi
+grep -Fq 'set FRAM_WASI_NOTICES to the wasi toolchain license bundle' \
+  "$scratch/wasm-no-notices.err" ||
+  fail "wasm-embed host did not name the missing FRAM_WASI_NOTICES"
+
+wasm_artifact="$("${wasm_build_env[@]}" "$builder" \
+  --host wasm-embed --abi wasm32 "$scratch/sources/good.bgl")" ||
+  fail "fixture wasm-embed host build failed"
+wasm_notice="$wasm_artifact/THIRD-PARTY/WASI-TOOLCHAIN-LICENSES.txt"
+[[ -f "$wasm_artifact/READY" && -f "$wasm_artifact/lib/libfram.wasm" &&
+  -f "$wasm_notice" && ! -L "$wasm_notice" ]] ||
+  fail "wasm-embed artifact omitted its regular toolchain license bundle"
+cmp -s "$scratch/wasi-notices.txt" "$wasm_notice" ||
+  fail "wasm-embed artifact changed its toolchain license bundle"
+wasi_notice_sha256="$(sha256sum "$scratch/wasi-notices.txt" | sed 's/ .*//')"
+grep -Fqx "wasi-notices-sha256 $wasi_notice_sha256" \
+  "$wasm_artifact/input.manifest" ||
+  fail "wasm-embed input manifest omitted the toolchain license digest"
+wasm_hit="$("${wasm_build_env[@]}" "$builder" \
+  --host wasm-embed --abi wasm32 "$scratch/sources/good.bgl")" ||
+  fail "fixture wasm-embed cache hit failed"
+[[ "$wasm_hit" == "$wasm_artifact" ]] || fail "fixture wasm-embed missed the cache"
+
+printf '%s\n' 'tampered wasi licenses' >"$wasm_notice"
+if "${wasm_build_env[@]}" "$builder" --host wasm-embed --abi wasm32 \
+    "$scratch/sources/good.bgl" \
+    >"$scratch/wasm-notice-tamper.out" 2>"$scratch/wasm-notice-tamper.err"; then
+  fail "wasm-embed cache hit accepted a changed toolchain license bundle"
+fi
+grep -Fq 'wasm artifact wasi toolchain license bundle differs from its build input:' \
+  "$scratch/wasm-notice-tamper.err" ||
+  fail "changed wasm toolchain license bundle failed for the wrong reason"
+cp "$scratch/wasi-notices.txt" "$wasm_notice"
 
 printf '%s\n' '#lang beagle' '(ns demo.missing-symbol)' \
   ';; MISSING_SERVER_SYMBOL' >"$scratch/sources/missing-symbol.bgl"

@@ -185,11 +185,18 @@ cc="$(command -v "$cc_candidate" 2>/dev/null || true)"
 [[ -n "$cc" && -x "$cc" ]] || die "C17 compiler is not executable: $cc_candidate"
 cc="$(realpath "$cc")"
 wasm_tools=""
+wasi_notices=""
 if [[ "$host" == "wasm-embed" ]]; then
   wasm_tools="$(command -v wasm-tools 2>/dev/null || true)"
   [[ -n "$wasm_tools" && -x "$wasm_tools" ]] ||
     die "wasm-tools is required for --host wasm-embed; the seam ledger reads the linked module"
   wasm_tools="$(realpath "$wasm_tools")"
+  wasi_notices="${FRAM_WASI_NOTICES:-}"
+  [[ -n "$wasi_notices" ]] ||
+    die "set FRAM_WASI_NOTICES to the wasi toolchain license bundle for --host wasm-embed"
+  [[ -f "$wasi_notices" && ! -L "$wasi_notices" ]] ||
+    die "wasi toolchain license bundle is unavailable or symlinked: $wasi_notices"
+  wasi_notices="$(realpath "$wasi_notices")"
 fi
 case "${FRAM_NATIVE_STATIC:-}" in
   "") link_mode=dynamic ;;
@@ -315,6 +322,22 @@ copy_ffc_notices() {
   validate_ffc_notices "$artifact_root"
 }
 
+validate_wasi_notices() {
+  local artifact_root="$1"
+  local destination="$artifact_root/THIRD-PARTY/WASI-TOOLCHAIN-LICENSES.txt"
+  [[ -f "$destination" && ! -L "$destination" ]] ||
+    die "wasm artifact omitted its wasi toolchain license bundle: $destination"
+  cmp -s "$wasi_notices" "$destination" ||
+    die "wasm artifact wasi toolchain license bundle differs from its build input: $destination"
+}
+
+copy_wasi_notices() {
+  local artifact_root="$1"
+  mkdir -p "$artifact_root/THIRD-PARTY"
+  cp "$wasi_notices" "$artifact_root/THIRD-PARTY/WASI-TOOLCHAIN-LICENSES.txt"
+  validate_wasi_notices "$artifact_root"
+}
+
 native_server_entries=(
   fram.native-server/server-generated-abi
   fram.native-server/server-store-boot!
@@ -400,6 +423,8 @@ write_input_manifest() {
     printf 'adapter %q %s\n' "$adapter" \
       "$(sha256sum "$adapter" | sed 's/ .*//')"
     if [[ "$host" == "wasm-embed" ]]; then
+      printf 'wasi-notices-sha256 %s\n' \
+        "$(sha256sum "$wasi_notices" | sed 's/ .*//')"
       printf 'wasm-host-source %q %s\n' "$wasm_host_source" \
         "$(sha256sum "$wasm_host_source" | sed 's/ .*//')"
       # The pinned seam set is part of the artifact's identity: editing the
@@ -932,6 +957,7 @@ if [[ -e "$artifact_dir" ]]; then
     die "cache entry identity does not match its input closure: $artifact_dir"
   validate_ffc_notices "$artifact_dir"
   if [[ "$host" == "wasm-embed" ]]; then
+    validate_wasi_notices "$artifact_dir"
     [[ -f "$artifact_dir/include/fram.h" &&
       -f "$artifact_dir/lib/libfram.wasm" ]] ||
       die "wasm-embed cache entry omitted its reactor: $artifact_dir"
@@ -952,6 +978,7 @@ stage="$(mktemp -d "$cache_root/.tmp/$closure_hash.XXXXXX")"
 mkdir -p "$stage/bin" "$stage/include" "$stage/lib"
 cp "$input_manifest" "$stage/input.manifest"
 copy_ffc_notices "$stage"
+[[ "$host" != "wasm-embed" ]] || copy_wasi_notices "$stage"
 for artifact in source.facts module.native-program module.native-program.sha256 \
     module_0.h module_0.c native_shim.h native_shim.c \
     native_unicode15_data.h UNICODE-LICENSE.txt report.txt \
