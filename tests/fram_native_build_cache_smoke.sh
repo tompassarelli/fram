@@ -718,7 +718,9 @@ wasm_artifact="$("${wasm_build_env[@]}" "$builder" \
   fail "fixture wasm-embed host build failed"
 wasm_notice="$wasm_artifact/THIRD-PARTY/WASI-TOOLCHAIN-LICENSES.txt"
 [[ -f "$wasm_artifact/READY" && -f "$wasm_artifact/lib/libfram.wasm" &&
-  -f "$wasm_notice" && ! -L "$wasm_notice" ]] ||
+  -f "$wasm_notice" && ! -L "$wasm_notice" &&
+  -f "$wasm_artifact/provenance.manifest" &&
+  ! -L "$wasm_artifact/provenance.manifest" ]] ||
   fail "wasm-embed artifact omitted its regular toolchain license bundle"
 cmp -s "$scratch/wasi-notices.txt" "$wasm_notice" ||
   fail "wasm-embed artifact changed its toolchain license bundle"
@@ -730,6 +732,28 @@ wasm_hit="$("${wasm_build_env[@]}" "$builder" \
   --host wasm-embed --abi wasm32 "$scratch/sources/good.bgl")" ||
   fail "fixture wasm-embed cache hit failed"
 [[ "$wasm_hit" == "$wasm_artifact" ]] || fail "fixture wasm-embed missed the cache"
+
+provenance="$wasm_artifact/provenance.manifest"
+grep -Fqx 'fram-native-build-provenance/v1' "$provenance" ||
+  fail "wasm-embed provenance omitted its format"
+grep -Fqx 'abi wasm32' "$provenance" ||
+  fail "wasm-embed provenance omitted its ABI"
+grep -Fqx 'host wasm-embed' "$provenance" ||
+  fail "wasm-embed provenance omitted its host"
+! grep -Fq "$scratch" "$provenance" ||
+  fail "wasm-embed provenance leaked a build-local path"
+cp "$provenance" "$scratch/provenance.pristine"
+printf '%s\n' 'tampered provenance' >"$provenance"
+if "${wasm_build_env[@]}" "$builder" --host wasm-embed --abi wasm32 \
+    "$scratch/sources/good.bgl" \
+    >"$scratch/wasm-provenance-tamper.out" \
+    2>"$scratch/wasm-provenance-tamper.err"; then
+  fail "wasm-embed cache hit accepted changed provenance"
+fi
+grep -Fq 'wasm-embed cache entry provenance differs from its build inputs:' \
+  "$scratch/wasm-provenance-tamper.err" ||
+  fail "changed wasm provenance failed for the wrong reason"
+cp "$scratch/provenance.pristine" "$provenance"
 
 printf '%s\n' 'tampered wasi licenses' >"$wasm_notice"
 if "${wasm_build_env[@]}" "$builder" --host wasm-embed --abi wasm32 \

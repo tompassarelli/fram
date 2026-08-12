@@ -436,6 +436,46 @@ write_input_manifest() {
   } >"$destination"
 }
 
+# Release provenance deliberately excludes paths. input.manifest is the local
+# cache identity and contains absolute source/tool paths; this manifest names
+# only the content that can affect the wasm32-wasm-embed release bytes.
+write_wasm_provenance() {
+  local destination="$1" index source version_line
+  version_line="$($cc --version 2>&1 | sed -n '1p')"
+  {
+    printf 'fram-native-build-provenance/v1\n'
+    printf 'builder-sha256 %s\n' "$builder_identity"
+    printf 'beagle-compiler-inputs-sha256 %s\n' "${beagle_identity#content:}"
+    printf 'abi %s\n' "$abi"
+    printf 'host %s\n' "$host"
+    printf 'native-program-sha256 %s\n' "$native_program_digest"
+    for index in "${!normalized_sources[@]}"; do
+      source="${normalized_sources[$index]}"
+      printf 'source-sha256 %06d %s\n' "$index" \
+        "$(sha256sum "$source" | sed 's/ .*//')"
+    done
+    printf 'host-source-sha256 %s\n' "$(sha256sum "$host_source" | sed 's/ .*//')"
+    printf 'host-header-sha256 %s\n' "$(sha256sum "$host_header" | sed 's/ .*//')"
+    printf 'adapter-header-sha256 %s\n' "$(sha256sum "$adapter_header" | sed 's/ .*//')"
+    printf 'adapter-sha256 %s\n' "$(sha256sum "$adapter" | sed 's/ .*//')"
+    printf 'wasm-host-source-sha256 %s\n' "$(sha256sum "$wasm_host_source" | sed 's/ .*//')"
+    printf 'wasm-seams-sha256 %s\n' "$(sha256sum "$wasm_seams_ledger" | sed 's/ .*//')"
+    printf 'wasi-cc-sha256 %s\n' "$(sha256sum "$cc" | sed 's/ .*//')"
+    printf 'wasi-cc-version-sha256 %s\n' \
+      "$(printf '%s\n' "$version_line" | sha256sum | sed 's/ .*//')"
+    version_line="$($wasm_tools --version 2>&1 | sed -n '1p')"
+    printf 'wasm-tools-sha256 %s\n' "$(sha256sum "$wasm_tools" | sed 's/ .*//')"
+    printf 'wasm-tools-version-sha256 %s\n' \
+      "$(printf '%s\n' "$version_line" | sha256sum | sed 's/ .*//')"
+    printf 'wasi-toolchain-licenses-sha256 %s\n' \
+      "$(sha256sum "$wasi_notices" | sed 's/ .*//')"
+    printf 'ffc-license-sha256 %s\n' \
+      "$(sha256sum "$ffc_notice_root/LICENSE-MIT" | sed 's/ .*//')"
+    printf 'ffc-provenance-sha256 %s\n' \
+      "$(sha256sum "$ffc_notice_root/PROVENANCE" | sed 's/ .*//')"
+  } >"$destination"
+}
+
 # The release requirement: C17 completeness plus all nine obligations, which
 # carry the target-neutrality contract (valid-ssa, closed-layouts, legal-abi)
 # and the arena-lifetime contract (epoch-soundness, leak-freedom). The epoch
@@ -959,8 +999,15 @@ if [[ -e "$artifact_dir" ]]; then
   if [[ "$host" == "wasm-embed" ]]; then
     validate_wasi_notices "$artifact_dir"
     [[ -f "$artifact_dir/include/fram.h" &&
-      -f "$artifact_dir/lib/libfram.wasm" ]] ||
+      -f "$artifact_dir/lib/libfram.wasm" &&
+      -f "$artifact_dir/provenance.manifest" &&
+      ! -L "$artifact_dir/provenance.manifest" ]] ||
       die "wasm-embed cache entry omitted its reactor: $artifact_dir"
+    provenance_validate="$(mktemp "$cache_root/.tmp/provenance.XXXXXX")"
+    write_wasm_provenance "$provenance_validate"
+    cmp -s "$provenance_validate" "$artifact_dir/provenance.manifest" ||
+      die "wasm-embed cache entry provenance differs from its build inputs: $artifact_dir"
+    rm -f "${provenance_validate:?}"
   elif [[ "$host" == "embed" ]]; then
     [[ -f "$artifact_dir/include/fram.h" &&
       -f "$artifact_dir/lib/libfram.a" &&
@@ -1068,6 +1115,7 @@ elif [[ "$host" == "wasm-embed" ]]; then
     printf 'native-wasm-seams PASS ledger=%s\n' "${wasm_seams_ledger#"$repo"/}"
     write_qbe_frontier_receipt
   } >"$stage/native-host.report.txt"
+  write_wasm_provenance "$stage/provenance.manifest"
 else
   mkdir -p "$stage/objects"
   embed_sources=("${module_sources[@]}" "$stage/native_shim.c" \
