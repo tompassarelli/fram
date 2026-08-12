@@ -6,6 +6,9 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -51,7 +54,26 @@ enum {
   ACCEPT_POLL_MILLISECONDS = 100,
   /* Keeps the acceptor from spinning accept->create->fail while the process is
      at its thread ceiling. */
-  ACCEPT_PRESSURE_BACKOFF_MILLISECONDS = 10
+  ACCEPT_PRESSURE_BACKOFF_MILLISECONDS = 10,
+  /* Compaction is the only thing that hands a generation chain's arenas back
+     to the allocator, and it used to ride only on a request -- so a server
+     that stopped being written to parked on whatever peak its last write left
+     and held it indefinitely. The acceptor's own poll timeout is already an
+     exact quiet clock, and the client table already says whether anything is
+     in flight; this many consecutive empty polls with no live client is the
+     trigger. Long enough that a burst's inter-arrival gaps do not pay for a
+     replay, short enough that a genuinely idle server settles in seconds. */
+  IDLE_COMPACT_QUIET_POLLS = 20,
+  /* A generation chain's arena chunks double as they grow, so the ones that
+     hold the fold are large -- and a large chunk that came off the main heap
+     can only be returned if nothing above it is live. Under a write soak the
+     compacted generation ends up interleaved with the freed chain, and the
+     process keeps ~190 MB it no longer uses. Placing chunks at or above this
+     size in their own mappings makes free() a munmap, so the chain leaves
+     when it is dropped rather than when the heap top happens to clear.
+     glibc's own starting threshold; pinning it also stops the dynamic
+     adjustment from raising it back out of the arena's range. */
+  ARENA_MMAP_THRESHOLD_BYTES = 131072
 };
 
 typedef enum server_bind {
@@ -913,6 +935,57 @@ static bool server_has_fatal_failure(server_context *server) {
   return fatal;
 }
 
+static bool server_has_live_client(server_context *server) {
+  bool live;
+
+  (void)pthread_mutex_lock(&server->clients_mutex);
+  live = server->client_count != (size_t)0u;
+  (void)pthread_mutex_unlock(&server->clients_mutex);
+  return live;
+}
+
+/* Runs on the acceptor with no client admitted, so the dispatch mutex is taken
+   uncontended and a request that arrives mid-replay waits exactly as it would
+   behind any other write. */
+static int compact_while_quiet(server_context *server) {
+  char error[FRAM_SERVER_ERROR_CAPACITY];
+  int compacted = 0;
+  int hook_status;
+  int thread_status = pthread_mutex_lock(&server->dispatch_mutex);
+
+  if (thread_status != 0) {
+    fprintf(stderr, "fram-server-native: cannot lock idle compaction: %s\n",
+            strerror(thread_status));
+    return -1;
+  }
+  hook_status = fram_server_store_compact_idle(server->store, &compacted,
+                                               error, sizeof(error));
+  thread_status = pthread_mutex_unlock(&server->dispatch_mutex);
+  if (thread_status != 0) {
+    fprintf(stderr, "fram-server-native: cannot unlock idle compaction: %s\n",
+            strerror(thread_status));
+    return -1;
+  }
+  if (hook_status != FRAM_SERVER_OK) {
+    terminate_hook_error(error);
+    fprintf(stderr, "fram-server-native: idle compaction failed: %s\n",
+            hook_detail(error));
+    return -1;
+  }
+#if defined(__GLIBC__)
+  /* Freeing the old generation chain is not the same as giving it back: its
+     arena chunks are malloc'd and mostly land on the main heap rather than in
+     their own mmaps, so without this the process holds the compaction's
+     high-water mark -- both the new generation and the freed chain -- and an
+     idle server's RSS reports the peak rather than the compacted size. Only
+     the call that actually did the work pays for the heap walk. */
+  if (compacted != 0) {
+    (void)malloc_trim(0);
+  }
+#endif
+  return 0;
+}
+
 static void remove_client_locked(server_context *server, client_job *job) {
   client_job **cursor = &server->clients;
 
@@ -973,6 +1046,10 @@ static int accept_loop(int listener_fd, fram_server_store *store,
   report_throttle admission_report = {0, 0uL, false};
   report_throttle pressure_report = {0, 0uL, false};
   report_throttle drain_report = {0, 0uL, false};
+  unsigned long quiet_polls = 0uL;
+  /* Armed by activity, spent by one compaction: a store that stays quiet pays
+     for exactly one replay, not one every quiet window. */
+  bool idle_compaction_armed = false;
   bool failed = false;
 
   if (initialize_server_context(&server, store) != 0) {
@@ -1002,6 +1079,19 @@ static int accept_loop(int listener_fd, fram_server_store *store,
       break;
     }
     if (status == 0) {
+      if (!idle_compaction_armed || server_has_live_client(&server)) {
+        quiet_polls = 0uL;
+        continue;
+      }
+      quiet_polls += 1uL;
+      if (quiet_polls >= (unsigned long)IDLE_COMPACT_QUIET_POLLS) {
+        quiet_polls = 0uL;
+        idle_compaction_armed = false;
+        if (compact_while_quiet(&server) != 0) {
+          failed = true;
+          break;
+        }
+      }
       continue;
     }
     if ((listener_poll.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
@@ -1106,6 +1196,10 @@ static int accept_loop(int listener_fd, fram_server_store *store,
       break;
     }
     (void)pthread_mutex_unlock(&server.clients_mutex);
+    /* An admitted client is the only thing that can dirty the chain, so it is
+       also the only thing that makes a later compaction worth its replay. */
+    idle_compaction_armed = true;
+    quiet_polls = 0uL;
   }
   notify_service_manager("STOPPING=1\nSTATUS=draining clients\n");
   if (stop_clients_and_wait(&server)) {
@@ -1125,8 +1219,12 @@ int main(int argc, char **argv) {
   int listener_fd = -1;
   int result = 1;
   int status;
-  uint32_t generated_abi = fram_server_generated_abi();
+  uint32_t generated_abi;
 
+#if defined(__GLIBC__)
+  (void)mallopt(M_MMAP_THRESHOLD, ARENA_MMAP_THRESHOLD_BYTES);
+#endif
+  generated_abi = fram_server_generated_abi();
   if (generated_abi != FRAM_SERVER_GENERATED_ABI) {
     fprintf(stderr,
             "fram-server-native: generated host ABI mismatch; expected %u, "

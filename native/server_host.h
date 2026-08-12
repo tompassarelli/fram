@@ -86,6 +86,13 @@ int fram_server_store_dispatch(fram_server_store *store,
 int fram_server_store_shutdown(fram_server_store *store,
                                char *error, size_t error_capacity);
 
+/* Compacts only when writes have accumulated since the last compaction, so a
+   caller may offer every quiet moment without ever repeating the replay.
+   COMPACTED_OUT (optional) reports whether this call did the work. */
+int fram_server_store_compact_idle(fram_server_store *store,
+                                   int *compacted_out, char *error,
+                                   size_t error_capacity);
+
 int fram_server_codec_decode_request(const uint8_t *bytes, size_t length,
                                      fram_server_request **request_out,
                                      char *error, size_t error_capacity);

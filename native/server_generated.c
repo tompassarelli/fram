@@ -998,6 +998,41 @@ static int compact_store(fram_server_store *store, char *error,
   return FRAM_SERVER_OK;
 }
 
+/* Compaction is what returns a generation chain's arenas to the allocator, and
+   until now only a write could reach it: an idle server parked forever on
+   whichever peak its last write left. The chain carries its own answer to
+   "would this repeat work" -- a compacted store has exactly one generation and
+   sets its base to it, so any excess over the base is unprojected writes. */
+int fram_server_store_compact_idle(fram_server_store *store,
+                                   int *compacted_out, char *error,
+                                   size_t error_capacity) {
+  int status;
+
+  clear_error(error, error_capacity);
+  if (compacted_out != NULL) {
+    *compacted_out = 0;
+  }
+  if (store == NULL) {
+    copy_error(error, error_capacity,
+               "generated idle compaction requires an owned store");
+    return FRAM_SERVER_FATAL;
+  }
+  if (store->poisoned) {
+    copy_error(error, error_capacity,
+               "canonical FRAMLOG is poisoned after a durability failure");
+    return FRAM_SERVER_FATAL;
+  }
+  if (store->current->chain_generations <=
+      store->compaction_base_generations) {
+    return FRAM_SERVER_OK;
+  }
+  status = compact_store(store, error, error_capacity);
+  if (status == FRAM_SERVER_OK && compacted_out != NULL) {
+    *compacted_out = 1;
+  }
+  return status;
+}
+
 uint32_t fram_server_generated_abi(void) {
   generated_owner *owner =
       owner_create(FRAM_SERVER_DEFAULT_ARENA_GROWTH_BYTES, NULL, 0u);
