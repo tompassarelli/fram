@@ -57,6 +57,7 @@ run-shell	current-bun-package-release	tests/bun_release_artifact_test.sh	-
 run-shell	current-model	tests/codegraph_exec_test.sh	-
 run-shell	current-docs	tests/docs_semantics_ratchet.sh	-
 run-shell	current-boundary	tests/occurrence_native_ci_compare_test.sh	-
+run-shell	current-runner	tests/hosted_test_process_reaping_test.sh	-
 run-shell	current-cache	tests/fri_golden.sh	-
 run-shell	current-model	tests/fri2_replay_oracle_test.sh	-
 run-node	current-cloudflare	tests/cloudflare_worker_client_test.mjs	-

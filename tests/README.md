@@ -11,6 +11,14 @@ bb -cp out tests/<file>.clj            # e.g. bb -cp out tests/code_edit_min_smo
 FRAM_LOG=/path/to/code.log bb -cp out tests/<file>.clj   # for the ones that need a log
 ```
 
+For a batch, timeout, or any test that can start `bin/fram-server` or
+`bin/fram-native-build`, use the hosted runner so interruption cannot orphan a
+server or build:
+
+```bash
+tests/run_hosted_test.sh 240s bb -cp out tests/<file>.clj
+```
+
 Run from the **repo root** (`~/code/fram/main`), not from inside `tests/`. Each script does
 `(load-file "server.clj")` / `(load-file "database.clj")` by a path **relative to the
 current working directory** — those two implementation files intentionally stay at the repo root (the

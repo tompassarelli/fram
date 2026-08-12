@@ -81,6 +81,7 @@ jobs:
           set -uo pipefail
           manifest=tests/occurrence_native_ci_manifest.txt
           pristine_failures=tests/occurrence_native_ci_failures.txt
+          hosted_test=tests/run_hosted_test.sh
           manifest_scratch="$(mktemp -d)"
           trap 'rm -rf "${manifest_scratch:?}"' EXIT INT TERM
 
@@ -156,38 +157,34 @@ jobs:
             case "$disposition" in
               run-bb)
                 echo "== $test_path =="
-                env -u FRAM_TELEMETRY_LOG \
-                  timeout --signal=TERM --kill-after=10s 240s \
+                "$hosted_test" 240s env -u FRAM_TELEMETRY_LOG \
                   bb -cp out "$test_path" || fail=1
                 ;;
               run-clojure)
                 echo "== $test_path =="
-                env -u FRAM_TELEMETRY_LOG \
-                  timeout --signal=TERM --kill-after=10s 240s \
+                "$hosted_test" 240s env -u FRAM_TELEMETRY_LOG \
                   clojure -M "$test_path" || fail=1
                 ;;
               run-shell)
                 echo "== $test_path =="
-                env -u FRAM_TELEMETRY_LOG \
-                  timeout --signal=TERM --kill-after=10s 240s \
+                "$hosted_test" 240s env -u FRAM_TELEMETRY_LOG \
                   bash "$test_path" || fail=1
                 ;;
               run-node)
                 echo "== $test_path =="
-                timeout --signal=TERM --kill-after=10s 240s \
+                "$hosted_test" 240s \
                   node "$test_path" || fail=1
                 ;;
               run-bun)
                 echo "== $test_path =="
-                timeout --signal=TERM --kill-after=10s 240s \
+                "$hosted_test" 240s \
                   bun test "$test_path" || fail=1
                 ;;
               baseline-bb)
                 baseline_index=$((baseline_index + 1))
                 baseline_output="$manifest_scratch/baseline-$baseline_index.out"
                 echo "== $test_path (known-failure baseline: $class) =="
-                if env -u FRAM_TELEMETRY_LOG \
-                    timeout --signal=TERM --kill-after=10s 240s \
+                if "$hosted_test" 240s env -u FRAM_TELEMETRY_LOG \
                     bb -cp out "$test_path" > "$baseline_output" 2>&1; then
                   :
                 elif rg -q -- "$evidence_regex" "$baseline_output"; then
@@ -203,8 +200,7 @@ jobs:
                 baseline_index=$((baseline_index + 1))
                 baseline_output="$manifest_scratch/baseline-$baseline_index.out"
                 echo "== $test_path (known-failure baseline: $class) =="
-                if env -u FRAM_TELEMETRY_LOG \
-                    timeout --signal=TERM --kill-after=10s 240s \
+                if "$hosted_test" 240s env -u FRAM_TELEMETRY_LOG \
                     bash "$test_path" > "$baseline_output" 2>&1; then
                   :
                 else

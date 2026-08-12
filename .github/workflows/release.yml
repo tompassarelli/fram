@@ -123,6 +123,7 @@ jobs:
         run: |
           set -uo pipefail
           manifest=tests/occurrence_native_ci_manifest.txt
+          hosted_test=tests/run_hosted_test.sh
           # Named, not scanned: these two are the release-relevant run-shell
           # gates that need nothing past the runner's own cc.
           smokes=(
@@ -141,8 +142,7 @@ jobs:
             fi
             gates=$((gates + 1))
             echo "== $test_path =="
-            env -u FRAM_TELEMETRY_LOG \
-              timeout --signal=TERM --kill-after=10s 240s \
+            "$hosted_test" 240s env -u FRAM_TELEMETRY_LOG \
               bb -cp out "$test_path" || fail=1
           done < "$manifest"
 
@@ -156,8 +156,7 @@ jobs:
             fi
             gates=$((gates + 1))
             echo "== $smoke =="
-            env -u FRAM_TELEMETRY_LOG \
-              timeout --signal=TERM --kill-after=10s 600s \
+            "$hosted_test" 600s env -u FRAM_TELEMETRY_LOG \
               bash "$smoke" || fail=1
           done
 
