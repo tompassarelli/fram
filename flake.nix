@@ -510,6 +510,7 @@
             # loads selfhost/main.bb from <root>/self-host, which the package omits.
             cp -r ${beagleSource}/self-host "$out/self-host"
             chmod -R u+w "$out/self-host"
+            printf '%s\n' '${beagle.rev}' > "$out/BEAGLE_REVISION"
             # Every bin/ wrapper re-enters its original store root, which has no
             # native-core; rebase them onto the composed one.
             grep -rlF "${beaglePkg}" "$out/bin" | while IFS= read -r wrapper; do

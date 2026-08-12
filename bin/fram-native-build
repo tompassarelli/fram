@@ -23,6 +23,8 @@ Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, FRAM_NATIVE_CC,
 FRAM_NATIVE_STATIC=1 (server host: link -static), FRAM_NATIVE_AR,
 FRAM_WASI_CC (or WASI_CC), FRAM_QBE_FRONTIER_LEDGER, and
 FRAM_WASM_SEAMS_LEDGER as needed.
+Set FRAM_ALLOW_UNPINNED_BEAGLE=1 only for an intentional local compiler-pin
+bump; release builds never permit it.
 
 Native hosts default to native/server_generated.c beside this script. The
 embed host emits include/fram.h, lib/libfram.a, and lib/libfram.so. The
@@ -40,7 +42,7 @@ requires wasm32. Each profile gets its own native program cache entry and its ow
 QBE frontier scope.
 
 RELEASE GATE
-  REQUIRED (build fails)  complete C17 materialization, all seven obligation
+  REQUIRED (build fails)  complete C17 materialization, all nine obligation
                           projections PASS, no pending lowering work, and for
                           server/embed/wasm-embed a clean C17 host link.
   RATCHETED (build fails) the QBE frontier: an unrecorded refusal fails, and a
@@ -295,6 +297,33 @@ if [[ -n "$beagle_root" ]]; then
   git -C "$beagle_root" diff --cached --quiet --ignore-submodules -- ||
     die "Beagle has staged changes: $beagle_root"
 fi
+beagle_pin_file="$repo/beagle-pin.txt"
+[[ -f "$beagle_pin_file" && ! -L "$beagle_pin_file" ]] ||
+  die "tracked Beagle pin is unavailable or symlinked: $beagle_pin_file"
+mapfile -t beagle_pin_lines <"$beagle_pin_file"
+[[ "${#beagle_pin_lines[@]}" == 1 &&
+  "${beagle_pin_lines[0]}" =~ ^[0-9a-f]{40}$ ]] ||
+  die "beagle-pin.txt must contain exactly one lowercase 40-hex revision"
+beagle_pin="${beagle_pin_lines[0]}"
+if [[ -n "$beagle_root" ]]; then
+  beagle_revision="$(git -C "$beagle_root" rev-parse 'HEAD^{commit}')"
+else
+  beagle_revision_file="$beagle_home/BEAGLE_REVISION"
+  [[ -f "$beagle_revision_file" && ! -L "$beagle_revision_file" ]] ||
+    die "packaged Beagle revision marker is unavailable or symlinked: $beagle_revision_file"
+  beagle_revision="$(<"$beagle_revision_file")"
+fi
+[[ "$beagle_revision" =~ ^[0-9a-f]{40}$ ]] ||
+  die "Beagle revision is not a lowercase 40-hex commit: $beagle_revision"
+case "${FRAM_ALLOW_UNPINNED_BEAGLE:-}" in
+  "") ;;
+  1) ;;
+  *) die "FRAM_ALLOW_UNPINNED_BEAGLE must be 1 or unset" ;;
+esac
+if [[ "$beagle_revision" != "$beagle_pin" &&
+  "${FRAM_ALLOW_UNPINNED_BEAGLE:-}" != 1 ]]; then
+  die "Beagle revision $beagle_revision differs from pinned revision $beagle_pin"
+fi
 ffc_notice_root="$beagle_home/native-core/shim/third_party/ffc"
 [[ -d "$ffc_notice_root" && ! -L "$ffc_notice_root" &&
   "$(realpath "$ffc_notice_root")" == "$ffc_notice_root" ]] ||
@@ -535,9 +564,10 @@ write_wasm_provenance() {
   local destination="$1" index source version_line
   version_line="$($cc --version 2>&1 | sed -n '1p')"
   {
-    printf 'fram-native-build-provenance/v1\n'
+    printf 'fram-native-build-provenance/v2\n'
     printf 'builder-sha256 %s\n' "$builder_identity"
     printf 'beagle-compiler-inputs-sha256 %s\n' "${beagle_identity#content:}"
+    printf 'beagle-revision %s\n' "$beagle_revision"
     printf 'abi %s\n' "$abi"
     printf 'host %s\n' "$host"
     printf 'native-program-sha256 %s\n' "$native_program_digest"
@@ -1089,6 +1119,12 @@ if [[ -e "$artifact_dir" ]]; then
     die "cache entry exists but is not READY: $artifact_dir"
   cmp -s "$input_manifest" "$artifact_dir/input.manifest" ||
     die "cache entry identity does not match its input closure: $artifact_dir"
+  [[ -f "$artifact_dir/beagle-revision.txt" &&
+    ! -L "$artifact_dir/beagle-revision.txt" ]] ||
+    die "cache entry omitted its Beagle revision provenance: $artifact_dir"
+  cached_beagle_revision="$(<"$artifact_dir/beagle-revision.txt")"
+  [[ "$cached_beagle_revision" =~ ^[0-9a-f]{40}$ ]] ||
+    die "cache entry has invalid Beagle revision provenance: $artifact_dir"
   validate_ffc_notices "$artifact_dir"
   if [[ "$host" == "wasm-embed" ]]; then
     validate_wasi_notices "$artifact_dir"
@@ -1099,7 +1135,16 @@ if [[ -e "$artifact_dir" ]]; then
       die "wasm-embed cache entry omitted its reactor: $artifact_dir"
     provenance_validate="$(mktemp "$cache_root/.tmp/provenance.XXXXXX")"
     write_wasm_provenance "$provenance_validate"
-    cmp -s "$provenance_validate" "$artifact_dir/provenance.manifest" ||
+    provenance_beagle_revision="$(awk '$1 == "beagle-revision" { print $2 }' \
+      "$artifact_dir/provenance.manifest")"
+    [[ "$(grep -c '^beagle-revision ' "$artifact_dir/provenance.manifest" || true)" == 1 &&
+      "$provenance_beagle_revision" =~ ^[0-9a-f]{40}$ ]] ||
+      die "wasm-embed cache entry has invalid Beagle revision provenance: $artifact_dir"
+    [[ "$provenance_beagle_revision" == "$cached_beagle_revision" ]] ||
+      die "wasm-embed cache entry Beagle revision provenance disagrees: $artifact_dir"
+    cmp -s \
+      <(grep -v '^beagle-revision ' "$provenance_validate") \
+      <(grep -v '^beagle-revision ' "$artifact_dir/provenance.manifest") ||
       die "wasm-embed cache entry provenance differs from its build inputs: $artifact_dir"
     rm -f "${provenance_validate:?}"
   elif [[ "$host" == "embed" ]]; then
@@ -1118,6 +1163,7 @@ fi
 stage="$(mktemp -d "$cache_root/.tmp/$closure_hash.XXXXXX")"
 mkdir -p "$stage/bin" "$stage/include" "$stage/lib"
 cp "$input_manifest" "$stage/input.manifest"
+printf '%s\n' "$beagle_revision" >"$stage/beagle-revision.txt"
 copy_ffc_notices "$stage"
 [[ "$host" != "wasm-embed" ]] || copy_wasi_notices "$stage"
 for artifact in source.facts module.native-program module.native-program.sha256 \

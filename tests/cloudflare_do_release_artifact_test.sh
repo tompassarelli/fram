@@ -95,6 +95,7 @@ GIT_COMMITTER_DATE='2026-01-02T03:04:05Z' \
 GIT_COMMITTER_NAME=Fram GIT_COMMITTER_EMAIL=fram@example.invalid \
 GIT_COMMITTER_DATE='2026-01-02T03:05:06Z' \
   git -C "$source_seed" tag -a v1.2.3 -m release
+git -C "$source_seed" tag v1.2.4
 source_commit="$(git -C "$source_seed" rev-parse 'HEAD^{commit}')"
 source_epoch="$(git -C "$source_seed" show -s --format=%ct HEAD)"
 tag_object="$(git -C "$source_seed" rev-parse refs/tags/v1.2.3)"
@@ -227,6 +228,14 @@ fi
 grep -Fq 'does not point at source commit' "$scratch/untagged.stderr" ||
   fail "tag/HEAD mismatch did not fail exactly"
 
+if "$packager" --source-root "$scratch/work-a" \
+    --output "$scratch/out-lightweight" --version v1.2.4 \
+    >"$scratch/lightweight.stdout" 2>"$scratch/lightweight.stderr"; then
+  fail "packager accepted a lightweight release tag"
+fi
+grep -Fq 'must name an annotated tag object' "$scratch/lightweight.stderr" ||
+  fail "lightweight release tag failed for the wrong reason"
+
 git clone -q --no-local "$source_seed" "$scratch/symlink-source"
 git -C "$scratch/symlink-source" config user.name Fram
 git -C "$scratch/symlink-source" config user.email fram@example.invalid
@@ -234,9 +243,9 @@ rm "$scratch/symlink-source/clients/cloudflare-do/README.md"
 ln -s ../../../LICENSE "$scratch/symlink-source/clients/cloudflare-do/README.md"
 git -C "$scratch/symlink-source" add clients/cloudflare-do/README.md
 git -C "$scratch/symlink-source" commit -q -m symlink-input
-git -C "$scratch/symlink-source" tag v1.2.4
+git -C "$scratch/symlink-source" tag -a v1.2.5 -m symlink-input
 if "$packager" --source-root "$scratch/symlink-source" \
-    --output "$scratch/out-symlink" --version v1.2.4 \
+    --output "$scratch/out-symlink" --version v1.2.5 \
     >"$scratch/symlink.stdout" 2>"$scratch/symlink.stderr"; then
   fail "packager accepted a symlink package input"
 fi

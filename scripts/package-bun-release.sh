@@ -81,7 +81,11 @@ git -C "$source_root" diff --cached --quiet --ignore-submodules -- ||
 source_commit="$(git -C "$source_root" rev-parse 'HEAD^{commit}')"
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] ||
   die "source HEAD is not a full commit identity"
+tag_object="$(git -C "$source_root" rev-parse "refs/tags/$version" 2>/dev/null || true)"
 tag_commit="$(git -C "$source_root" rev-parse "refs/tags/$version^{commit}" 2>/dev/null || true)"
+[[ "$tag_object" =~ ^[0-9a-f]{40}$ &&
+  "$(git -C "$source_root" cat-file -t "$tag_object" 2>/dev/null || true)" == tag ]] ||
+  die "$version must name an annotated tag object"
 [[ "$tag_commit" == "$source_commit" ]] ||
   die "$version does not point at source commit $source_commit"
 source_epoch="$(git -C "$source_root" show -s --format=%ct "$source_commit")"
@@ -216,16 +220,22 @@ done
 package_json_sha256="$(sha256sum "$shipped_root/package.json" | awk '{print $1}')"
 archive_sha256="$(sha256sum "$temporary_archive" | awk '{print $1}')"
 cat >"$temporary_receipt" <<RECEIPT
-fram-bun-release-receipt/v1
+fram-bun-release-receipt/v2
 source-commit $source_commit
 source-date-epoch $source_epoch
 release-tag $version
+release-tag-object $tag_object
 package-name @tompassarelli/framrpc
 package-version $package_version
 package-json-sha256 $package_json_sha256
 archive-name $release_name.tgz
 archive-sha256 $archive_sha256
 RECEIPT
+
+[[ "$(git -C "$source_root" rev-parse 'HEAD^{commit}')" == "$source_commit" &&
+  "$(git -C "$source_root" rev-parse "refs/tags/$version")" == "$tag_object" &&
+  "$(git -C "$source_root" rev-parse "refs/tags/$version^{commit}")" == "$source_commit" ]] ||
+  die "source HEAD or release tag moved during packaging"
 
 publish_file() {
   local candidate="$1" destination="$2"

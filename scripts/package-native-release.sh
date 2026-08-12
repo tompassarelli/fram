@@ -97,17 +97,29 @@ git -C "$source_root" diff --cached --quiet --ignore-submodules -- ||
 source_commit="$(git -C "$source_root" rev-parse 'HEAD^{commit}')"
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] ||
   die "source HEAD is not a full commit identity"
+tag_object="$(git -C "$source_root" rev-parse "refs/tags/$version" 2>/dev/null || true)"
 tag_commit="$(git -C "$source_root" rev-parse "refs/tags/$version^{commit}" 2>/dev/null || true)"
+[[ "$tag_object" =~ ^[0-9a-f]{40}$ &&
+  "$(git -C "$source_root" cat-file -t "$tag_object" 2>/dev/null || true)" == tag ]] ||
+  die "$version must name an annotated tag object"
 [[ "$tag_commit" == "$source_commit" ]] ||
   die "$version does not point at source commit $source_commit"
 source_epoch="$(git -C "$source_root" show -s --format=%ct "$source_commit")"
 [[ "$source_epoch" =~ ^[0-9]+$ ]] ||
   die "source commit has no integer timestamp: $source_commit"
 
-for license in LICENSE LICENSE-MIT LICENSE-APACHE; do
-  [[ -f "$source_root/$license" ]] ||
-    die "source worktree omitted $license"
+source_files=(LICENSE LICENSE-MIT LICENSE-APACHE beagle-pin.txt bin/fram-native-build)
+for source_file in "${source_files[@]}"; do
+  [[ -f "$source_root/$source_file" && ! -L "$source_root/$source_file" ]] ||
+    die "source worktree omitted regular $source_file"
+  git -C "$source_root" ls-files --error-unmatch "$source_file" >/dev/null 2>&1 ||
+    die "source file is not tracked: $source_file"
 done
+mapfile -t beagle_pin_lines <"$source_root/beagle-pin.txt"
+[[ "${#beagle_pin_lines[@]}" == 1 &&
+  "${beagle_pin_lines[0]}" =~ ^[0-9a-f]{40}$ ]] ||
+  die "beagle-pin.txt must contain exactly one lowercase 40-hex revision"
+beagle_revision="${beagle_pin_lines[0]}"
 
 [[ ! -L "$artifact" ]] || die "artifact path must not be a symlink: $artifact"
 artifact="$(realpath "$artifact")"
@@ -116,12 +128,36 @@ artifact_identity="${artifact##*/}"
 [[ "$artifact_identity" =~ ^[0-9a-f]{64}$ ]] ||
   die "artifact directory name is not a content hash: $artifact"
 ready="$artifact/READY"
+input_manifest="$artifact/input.manifest"
+artifact_beagle_revision_file="$artifact/beagle-revision.txt"
 server="$artifact/bin/fram-server-native"
 [[ ! -L "$ready" ]] || die "artifact READY receipt must not be a symlink: $ready"
+[[ ! -L "$input_manifest" ]] ||
+  die "artifact input manifest must not be a symlink: $input_manifest"
+[[ ! -L "$artifact_beagle_revision_file" ]] ||
+  die "artifact Beagle revision provenance must not be a symlink"
 [[ ! -L "$server" ]] || die "artifact executable must not be a symlink: $server"
 [[ -r "$ready" ]] || die "artifact READY receipt is unavailable: $ready"
+[[ -f "$input_manifest" ]] ||
+  die "artifact input manifest is unavailable: $input_manifest"
+[[ -f "$artifact_beagle_revision_file" ]] ||
+  die "artifact Beagle revision provenance is unavailable"
 [[ "$(<"$ready")" == "fram-native-build/v1 $artifact_identity" ]] ||
   die "artifact READY receipt does not match its content hash: $ready"
+[[ "$(sha256sum "$input_manifest" | awk '{print $1}')" == "$artifact_identity" ]] ||
+  die "artifact directory does not equal sha256(input.manifest)"
+[[ "$(sed -n '1p' "$input_manifest")" == "fram-native-build-input/v3" ]] ||
+  die "artifact input manifest is not fram-native-build-input/v3"
+[[ "$(grep -Fxc 'host=server' "$input_manifest" || true)" == 1 ]] ||
+  die "artifact input manifest is not uniquely bound to host=server"
+builder_sha256="$(sha256sum "$source_root/bin/fram-native-build" | awk '{print $1}')"
+[[ "$(sed -n '2p' "$input_manifest")" == "$builder_sha256" ]] ||
+  die "artifact input manifest is not bound to the release builder"
+artifact_beagle_revision="$(<"$artifact_beagle_revision_file")"
+[[ "$artifact_beagle_revision" =~ ^[0-9a-f]{40}$ ]] ||
+  die "artifact Beagle revision provenance is invalid"
+[[ "$artifact_beagle_revision" == "$beagle_revision" ]] ||
+  die "artifact Beagle revision differs from beagle-pin.txt"
 [[ -f "$server" && -x "$server" ]] ||
   die "artifact native server is unavailable: $server"
 readelf -h "$server" >/dev/null 2>&1 ||
@@ -176,16 +212,24 @@ cmp -s "$server" "$shipped_server" ||
 executable_sha256="$(sha256sum "$shipped_server" | awk '{print $1}')"
 archive_sha256="$(sha256sum "$temporary_archive" | awk '{print $1}')"
 cat >"$temporary_receipt" <<RECEIPT
-fram-native-release-receipt/v1
+fram-native-release-receipt/v2
 source-commit $source_commit
 source-date-epoch $source_epoch
-version $version
+release-tag $version
+release-tag-object $tag_object
 target $target
+native-build-closure-sha256 $artifact_identity
+beagle-revision $beagle_revision
 executable-path $release_name/bin/fram-server-native
 executable-sha256 $executable_sha256
 archive-name $release_name.tar.gz
 archive-sha256 $archive_sha256
 RECEIPT
+
+[[ "$(git -C "$source_root" rev-parse 'HEAD^{commit}')" == "$source_commit" &&
+  "$(git -C "$source_root" rev-parse "refs/tags/$version")" == "$tag_object" &&
+  "$(git -C "$source_root" rev-parse "refs/tags/$version^{commit}")" == "$source_commit" ]] ||
+  die "source HEAD or release tag moved during packaging"
 
 publish_file() {
   local candidate="$1" destination="$2"

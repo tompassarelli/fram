@@ -83,10 +83,8 @@ source_commit="$(git -C "$source_root" rev-parse 'HEAD^{commit}')"
 tag_object="$(git -C "$source_root" rev-parse "refs/tags/$version" 2>/dev/null || true)"
 [[ "$tag_object" =~ ^[0-9a-f]{40}$ ]] ||
   die "$version is not a local tag object"
-case "$(git -C "$source_root" cat-file -t "$tag_object" 2>/dev/null || true)" in
-  commit|tag) ;;
-  *) die "$version does not name a commit or annotated tag object" ;;
-esac
+[[ "$(git -C "$source_root" cat-file -t "$tag_object" 2>/dev/null || true)" == tag ]] ||
+  die "$version must name an annotated tag object"
 tag_commit="$(git -C "$source_root" rev-parse "refs/tags/$version^{commit}" 2>/dev/null || true)"
 [[ "$tag_commit" == "$source_commit" ]] ||
   die "$version does not point at source commit $source_commit"

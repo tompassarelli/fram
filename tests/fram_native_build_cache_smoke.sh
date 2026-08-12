@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 builder="$repo/bin/fram-native-build"
+beagle_pin="$(<"$repo/beagle-pin.txt")"
 scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch:?}"' EXIT INT TERM
 
@@ -308,6 +309,7 @@ seed_beagle_tree() {
     >"$root/native-core/shim/third_party/ffc/LICENSE-MIT"
   printf '%s\n' 'fixture ffc provenance' \
     >"$root/native-core/shim/third_party/ffc/PROVENANCE"
+  printf '%s\n' "$beagle_pin" >"$root/BEAGLE_REVISION"
 }
 seed_beagle_tree "$scratch/tool"
 
@@ -375,6 +377,47 @@ build_env=(
   FRAM_QBE_FRONTIER_LEDGER="$ledger"
   FAKE_NATIVE_CALLS="$calls"
 )
+
+printf '%s\n' '1111111111111111111111111111111111111111' \
+  >"$scratch/tool/BEAGLE_REVISION"
+if "${build_env[@]}" "$builder" --host program --entry demo.main/start \
+    "$scratch/sources/good.bgl" \
+    >"$scratch/beagle-pin-mismatch.out" 2>"$scratch/beagle-pin-mismatch.err"; then
+  fail "native builder accepted a mismatched Beagle revision"
+fi
+grep -Fq "differs from pinned revision $beagle_pin" \
+  "$scratch/beagle-pin-mismatch.err" ||
+  fail "Beagle pin mismatch failed for the wrong reason"
+if "${build_env[@]}" FRAM_ALLOW_UNPINNED_BEAGLE=yes \
+    "$builder" --host program --entry demo.main/start \
+    "$scratch/sources/good.bgl" \
+    >"$scratch/beagle-pin-invalid-override.out" \
+    2>"$scratch/beagle-pin-invalid-override.err"; then
+  fail "native builder accepted an invalid Beagle pin override"
+fi
+grep -Fq 'FRAM_ALLOW_UNPINNED_BEAGLE must be 1 or unset' \
+  "$scratch/beagle-pin-invalid-override.err" ||
+  fail "invalid Beagle pin override failed for the wrong reason"
+override_artifact="$("${build_env[@]}" \
+  FRAM_ALLOW_UNPINNED_BEAGLE=1 \
+  FRAM_NATIVE_CACHE="$scratch/cache-pin-override" \
+  "$builder" --host program --entry demo.main/start \
+  "$scratch/sources/good.bgl")" ||
+  fail "explicit Beagle pin override did not permit a local build"
+[[ -f "$override_artifact/READY" ]] ||
+  fail "explicit Beagle pin override produced no ready artifact"
+override_calls="$(wc -l <"$calls")"
+printf '%s\n' "$beagle_pin" >"$scratch/tool/BEAGLE_REVISION"
+pinned_hit="$("${build_env[@]}" \
+  FRAM_NATIVE_CACHE="$scratch/cache-pin-override" \
+  "$builder" --host program --entry demo.main/start \
+  "$scratch/sources/good.bgl")" ||
+  fail "pinned Beagle revision did not reuse a content-equivalent cache entry"
+[[ "$pinned_hit" == "$override_artifact" &&
+  "$(wc -l <"$calls")" == "$override_calls" ]] ||
+  fail "Beagle revision changed the content-keyed native program cache"
+! grep -Fq "$beagle_pin" "$pinned_hit/input.manifest" ||
+  fail "Beagle revision leaked into the native program cache identity"
 
 # A QBE refusal invokes a second C17 materialization. Both passes must consume
 # the launch snapshot even when the original worktree source changes between
@@ -791,8 +834,10 @@ wasm_hit="$("${wasm_build_env[@]}" "$builder" \
 [[ "$wasm_hit" == "$wasm_artifact" ]] || fail "fixture wasm-embed missed the cache"
 
 provenance="$wasm_artifact/provenance.manifest"
-grep -Fqx 'fram-native-build-provenance/v1' "$provenance" ||
+grep -Fqx 'fram-native-build-provenance/v2' "$provenance" ||
   fail "wasm-embed provenance omitted its format"
+grep -Fqx "beagle-revision $beagle_pin" "$provenance" ||
+  fail "wasm-embed provenance omitted its pinned Beagle revision"
 grep -Fqx 'abi wasm32' "$provenance" ||
   fail "wasm-embed provenance omitted its ABI"
 grep -Fqx 'host wasm-embed' "$provenance" ||
@@ -807,7 +852,7 @@ if "${wasm_build_env[@]}" "$builder" --host wasm-embed --abi wasm32 \
     2>"$scratch/wasm-provenance-tamper.err"; then
   fail "wasm-embed cache hit accepted changed provenance"
 fi
-grep -Fq 'wasm-embed cache entry provenance differs from its build inputs:' \
+grep -Fq 'wasm-embed cache entry has invalid Beagle revision provenance:' \
   "$scratch/wasm-provenance-tamper.err" ||
   fail "changed wasm provenance failed for the wrong reason"
 cp "$scratch/provenance.pristine" "$provenance"
@@ -1011,6 +1056,7 @@ portable_b="$scratch/different/depth/checkout-b"
 for portable in "$portable_a" "$portable_b"; do
   mkdir -p "$portable/bin" "$portable/native" "$portable/src"
   cp "$builder" "$portable/bin/fram-native-build"
+  cp "$repo/beagle-pin.txt" "$portable/beagle-pin.txt"
   cp "$repo/native/server_host.c" "$portable/native/server_host.c"
   cp "$repo/native/server_host.h" "$portable/native/server_host.h"
   cp "$adapter" "$portable/native/server_generated.c"

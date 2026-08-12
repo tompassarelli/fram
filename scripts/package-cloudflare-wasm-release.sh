@@ -87,6 +87,8 @@ tag_object="$(git -C "$source_root" rev-parse "refs/tags/$version" 2>/dev/null |
 tag_commit="$(git -C "$source_root" rev-parse "refs/tags/$version^{commit}" 2>/dev/null || true)"
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ && "$tag_object" =~ ^[0-9a-f]{40}$ ]] ||
   die "source commit or release tag is not a full object identity"
+[[ "$(git -C "$source_root" cat-file -t "$tag_object")" == tag ]] ||
+  die "$version must name an annotated tag object"
 [[ "$tag_commit" == "$source_commit" ]] ||
   die "$version does not point at source commit $source_commit"
 source_epoch="$(git -C "$source_root" show -s --format=%ct "$source_commit")"
@@ -97,6 +99,7 @@ source_files=(
   LICENSE
   LICENSE-MIT
   LICENSE-APACHE
+  beagle-pin.txt
   bin/fram-native-build
   native/core_closure_sources.txt
   native/fram_embed.c
@@ -113,6 +116,11 @@ for source_file in "${source_files[@]}"; do
   git -C "$source_root" ls-files --error-unmatch "$source_file" >/dev/null 2>&1 ||
     die "source file is not tracked: $source_file"
 done
+mapfile -t beagle_pin_lines <"$source_root/beagle-pin.txt"
+[[ "${#beagle_pin_lines[@]}" == 1 &&
+  "${beagle_pin_lines[0]}" =~ ^[0-9a-f]{40}$ ]] ||
+  die "beagle-pin.txt must contain exactly one lowercase 40-hex revision"
+beagle_pin="${beagle_pin_lines[0]}"
 
 [[ ! -L "$artifact" ]] || die "artifact path must not be a symlink: $artifact"
 artifact="$(realpath "$artifact")"
@@ -123,6 +131,7 @@ artifact_identity="${artifact##*/}"
 
 artifact_files=(
   READY
+  beagle-revision.txt
   input.manifest
   provenance.manifest
   module.native-program
@@ -140,6 +149,8 @@ for artifact_file in "${artifact_files[@]}"; do
 done
 [[ "$(<"$artifact/READY")" == "fram-native-build/v1 $artifact_identity" ]] ||
   die "artifact READY receipt does not match its input hash"
+[[ "$(<"$artifact/beagle-revision.txt")" == "$beagle_pin" ]] ||
+  die "artifact Beagle revision differs from beagle-pin.txt"
 input_sha256="$(sha256sum "$artifact/input.manifest" | awk '{print $1}')"
 [[ "$input_sha256" == "$artifact_identity" ]] ||
   die "artifact directory does not equal sha256(input.manifest)"
@@ -149,12 +160,20 @@ input_sha256="$(sha256sum "$artifact/input.manifest" | awk '{print $1}')"
   die "artifact input manifest is not uniquely bound to host=wasm-embed"
 
 provenance="$artifact/provenance.manifest"
-[[ "$(sed -n '1p' "$provenance")" == "fram-native-build-provenance/v1" ]] ||
+[[ "$(sed -n '1p' "$provenance")" == "fram-native-build-provenance/v2" ]] ||
   die "artifact provenance manifest has an unsupported format"
 provenance_keys="$(awk 'NR > 1 { print $1 }' "$provenance")"
-expected_fixed_keys=$'builder-sha256\nbeagle-compiler-inputs-sha256\nabi\nhost\nnative-program-sha256'
-[[ "$(printf '%s\n' "$provenance_keys" | sed -n '1,5p')" == "$expected_fixed_keys" ]] ||
+expected_fixed_keys=$'builder-sha256\nbeagle-compiler-inputs-sha256\nbeagle-revision\nabi\nhost\nnative-program-sha256'
+[[ "$(printf '%s\n' "$provenance_keys" | sed -n '1,6p')" == "$expected_fixed_keys" ]] ||
   die "artifact provenance manifest has a non-canonical prefix"
+beagle_revision="$(awk '$1 == "beagle-revision" { print $2 }' "$provenance")"
+[[ "$(grep -c '^beagle-revision ' "$provenance" || true)" == 1 &&
+  "$beagle_revision" =~ ^[0-9a-f]{40}$ ]] ||
+  die "artifact provenance manifest has an invalid beagle-revision"
+[[ "$beagle_revision" == "$beagle_pin" ]] ||
+  die "artifact Beagle revision differs from beagle-pin.txt"
+[[ "$beagle_revision" == "$(<"$artifact/beagle-revision.txt")" ]] ||
+  die "artifact provenance disagrees with its Beagle revision marker"
 [[ "$(awk '$1 == "abi" { print $2 }' "$provenance")" == "wasm32" &&
   "$(awk '$1 == "host" { print $2 }' "$provenance")" == "wasm-embed" ]] ||
   die "artifact provenance manifest is not bound to wasm32-wasm-embed"
@@ -317,12 +336,14 @@ ffc_provenance_sha256="$(sha256sum "$verify_root/THIRD-PARTY/ffc/PROVENANCE" | a
 native_provenance_sha256="$(sha256sum "$verify_root/native-provenance.manifest" | awk '{print $1}')"
 archive_sha256="$(sha256sum "$temporary_archive" | awk '{print $1}')"
 cat >"$temporary_receipt" <<RECEIPT
-fram-cloudflare-wasm-release-receipt/v1
+fram-cloudflare-wasm-release-receipt/v2
 source-commit $source_commit
 source-date-epoch $source_epoch
 release-tag $version
 release-tag-object $tag_object
 target wasm32-wasm-embed
+native-build-closure-sha256 $artifact_identity
+beagle-revision $beagle_revision
 native-provenance-sha256 $native_provenance_sha256
 wasm-path $release_name/lib/libfram.wasm
 wasm-bytes $wasm_bytes

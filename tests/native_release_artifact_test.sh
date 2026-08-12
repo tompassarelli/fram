@@ -19,21 +19,29 @@ for command in cmp git gzip readelf sha256sum tar; do
   command -v "$command" >/dev/null 2>&1 || fail "missing command: $command"
 done
 source_seed="$scratch/source-seed"
-mkdir -p "$source_seed"
+mkdir -p "$source_seed/bin"
 git -C "$source_seed" init -q
 printf '%s\n' 'release source' >"$source_seed/source.txt"
 cat >"$source_seed/server.c" <<'C'
 int main(void) { return 0; }
 C
 cp "$repo/LICENSE" "$repo/LICENSE-MIT" "$repo/LICENSE-APACHE" "$source_seed/"
-git -C "$source_seed" add source.txt server.c LICENSE LICENSE-MIT LICENSE-APACHE
+cp "$repo/beagle-pin.txt" "$source_seed/"
+cp "$repo/bin/fram-native-build" "$source_seed/bin/"
+git -C "$source_seed" add source.txt server.c LICENSE LICENSE-MIT LICENSE-APACHE \
+  beagle-pin.txt bin/fram-native-build
 GIT_AUTHOR_NAME=Fram GIT_AUTHOR_EMAIL=fram@example.invalid \
 GIT_AUTHOR_DATE='2026-01-02T03:04:05Z' \
 GIT_COMMITTER_NAME=Fram GIT_COMMITTER_EMAIL=fram@example.invalid \
 GIT_COMMITTER_DATE='2026-01-02T03:04:05Z' \
   git -C "$source_seed" commit -q -m release
-git -C "$source_seed" tag v1.2.3
+GIT_COMMITTER_NAME=Fram GIT_COMMITTER_EMAIL=fram@example.invalid \
+GIT_COMMITTER_DATE='2026-01-02T04:05:06Z' \
+  git -C "$source_seed" tag -a v1.2.3 -m release
+git -C "$source_seed" tag v1.2.4
 source_commit="$(git -C "$source_seed" rev-parse HEAD)"
+tag_object="$(git -C "$source_seed" rev-parse refs/tags/v1.2.3)"
+beagle_revision="$(<"$source_seed/beagle-pin.txt")"
 
 git clone -q --no-local "$source_seed" "$scratch/work-a"
 git clone -q --no-local "$source_seed" "$scratch/different/depth/work-b"
@@ -41,7 +49,14 @@ git clone -q --no-local "$source_seed" "$scratch/different/depth/work-b"
 cc="${CC:-cc}"
 command -v "$cc" >/dev/null 2>&1 || fail "missing C compiler: $cc"
 
-artifact_identity="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+input_template="$scratch/input.manifest"
+printf '%s\n' \
+  'fram-native-build-input/v3' \
+  "$(sha256sum "$source_seed/bin/fram-native-build" | awk '{print $1}')" \
+  'host=server' \
+  'program=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' \
+  >"$input_template"
+artifact_identity="$(sha256sum "$input_template" | awk '{print $1}')"
 for work in "$scratch/work-a" "$scratch/different/depth/work-b"; do
   mkdir -p "$work/artifacts/$artifact_identity/bin"
   server="$work/artifacts/$artifact_identity/bin/fram-server-native"
@@ -51,6 +66,9 @@ for work in "$scratch/work-a" "$scratch/different/depth/work-b"; do
     fail "release-test executable is dynamically linked"
   printf 'fram-native-build/v1 %s\n' "$artifact_identity" \
     >"$work/artifacts/$artifact_identity/READY"
+  cp "$input_template" "$work/artifacts/$artifact_identity/input.manifest"
+  printf '%s\n' "$beagle_revision" \
+    >"$work/artifacts/$artifact_identity/beagle-revision.txt"
 done
 reference_server="$scratch/work-a/artifacts/$artifact_identity/bin/fram-server-native"
 
@@ -77,6 +95,12 @@ for forbidden_path in "$scratch/work-a" "$scratch/different/depth/work-b"; do
 done
 grep -Fxq "source-commit $source_commit" "${files_a[1]}" ||
   fail "receipt omitted the exact source commit"
+grep -Fxq "release-tag-object $tag_object" "${files_a[1]}" ||
+  fail "receipt omitted the annotated tag object"
+grep -Fxq "native-build-closure-sha256 $artifact_identity" "${files_a[1]}" ||
+  fail "receipt omitted the native build closure"
+grep -Fxq "beagle-revision $beagle_revision" "${files_a[1]}" ||
+  fail "receipt omitted the pinned Beagle revision"
 archive_sha256="$(sha256sum "${files_a[0]}" | awk '{print $1}')"
 grep -Fxq "archive-sha256 $archive_sha256" "${files_a[1]}" ||
   fail "receipt does not hash the shipped archive"
@@ -115,6 +139,8 @@ symlink_server_artifact="$scratch/symlink-server/$artifact_identity"
 mkdir -p "$symlink_server_artifact/bin"
 printf 'fram-native-build/v1 %s\n' "$artifact_identity" \
   >"$symlink_server_artifact/READY"
+cp "$input_template" "$symlink_server_artifact/input.manifest"
+printf '%s\n' "$beagle_revision" >"$symlink_server_artifact/beagle-revision.txt"
 ln -s "$reference_server" \
   "$symlink_server_artifact/bin/fram-server-native"
 if "$packager" --source-root "$scratch/work-a" \
@@ -143,6 +169,8 @@ set -e
 [[ "$changed_status" == 7 ]] ||
   fail "changed release-test executable did not run with its expected result"
 printf 'fram-native-build/v1 %s\n' "$artifact_identity" >"$changed_artifact/READY"
+cp "$input_template" "$changed_artifact/input.manifest"
+printf '%s\n' "$beagle_revision" >"$changed_artifact/beagle-revision.txt"
 mapfile -t changed_files < <(
   "$packager" --source-root "$scratch/work-a" --artifact "$changed_artifact" \
     --output "$scratch/out-changed" --version v1.2.3
@@ -151,6 +179,20 @@ mapfile -t changed_files < <(
   fail "changed executable did not change the archive"
 ! cmp -s "${files_a[1]}" "${changed_files[1]}" ||
   fail "changed executable did not change the receipt"
+
+expected_receipt_keys=$'fram-native-release-receipt/v2\nsource-commit\nsource-date-epoch\nrelease-tag\nrelease-tag-object\ntarget\nnative-build-closure-sha256\nbeagle-revision\nexecutable-path\nexecutable-sha256\narchive-name\narchive-sha256'
+[[ "$(awk 'NR == 1 { print; next } { print $1 }' "${files_a[1]}")" == \
+  "$expected_receipt_keys" ]] ||
+  fail "receipt schema is not closed and ordered"
+
+if "$packager" --source-root "$scratch/work-a" \
+    --artifact "$scratch/work-a/artifacts/$artifact_identity" \
+    --output "$scratch/out-lightweight" --version v1.2.4 \
+    >"$scratch/lightweight.stdout" 2>"$scratch/lightweight.stderr"; then
+  fail "packager accepted a lightweight release tag"
+fi
+grep -Fq 'must name an annotated tag object' "$scratch/lightweight.stderr" ||
+  fail "lightweight release tag failed for the wrong reason"
 
 printf 'native release artifact test: PASS commit=%s archive=%s\n' \
   "$source_commit" "$archive_sha256"

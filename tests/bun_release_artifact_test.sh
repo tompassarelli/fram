@@ -58,8 +58,12 @@ GIT_AUTHOR_DATE='2026-01-02T03:04:05Z' \
 GIT_COMMITTER_NAME=Fram GIT_COMMITTER_EMAIL=fram@example.invalid \
 GIT_COMMITTER_DATE='2026-01-02T03:04:05Z' \
   git -C "$source_seed" commit -q -m release
-git -C "$source_seed" tag v1.2.3
+GIT_COMMITTER_NAME=Fram GIT_COMMITTER_EMAIL=fram@example.invalid \
+GIT_COMMITTER_DATE='2026-01-02T04:05:06Z' \
+  git -C "$source_seed" tag -a v1.2.3 -m release
+git -C "$source_seed" tag v1.2.4
 source_commit="$(git -C "$source_seed" rev-parse HEAD)"
+tag_object="$(git -C "$source_seed" rev-parse refs/tags/v1.2.3)"
 
 git clone -q --no-local "$source_seed" "$scratch/work-a"
 git clone -q --no-local "$source_seed" "$scratch/different/depth/work-b"
@@ -91,6 +95,8 @@ grep -Fxq "source-commit $source_commit" "${files_a[1]}" ||
   fail "receipt omitted the exact source commit"
 grep -Fxq 'release-tag v1.2.3' "${files_a[1]}" ||
   fail "receipt omitted the repository release tag"
+grep -Fxq "release-tag-object $tag_object" "${files_a[1]}" ||
+  fail "receipt omitted the annotated tag object"
 grep -Fxq 'package-name @tompassarelli/framrpc' "${files_a[1]}" ||
   fail "receipt omitted the package name"
 grep -Fxq 'package-version 0.4.0' "${files_a[1]}" ||
@@ -98,6 +104,10 @@ grep -Fxq 'package-version 0.4.0' "${files_a[1]}" ||
 archive_sha256="$(sha256sum "${files_a[0]}" | awk '{print $1}')"
 grep -Fxq "archive-sha256 $archive_sha256" "${files_a[1]}" ||
   fail "receipt does not hash the shipped archive"
+expected_receipt_keys=$'fram-bun-release-receipt/v2\nsource-commit\nsource-date-epoch\nrelease-tag\nrelease-tag-object\npackage-name\npackage-version\npackage-json-sha256\narchive-name\narchive-sha256'
+[[ "$(awk 'NR == 1 { print; next } { print $1 }' "${files_a[1]}")" == \
+  "$expected_receipt_keys" ]] ||
+  fail "receipt schema is not closed and ordered"
 
 expected_entries=$'package/package.json\npackage/LICENSE\npackage/LICENSE-APACHE\npackage/LICENSE-MIT\npackage/README.md\npackage/backup.mjs\npackage/framrpc-core.d.ts\npackage/framrpc-core.mjs\npackage/framrpc.d.ts\npackage/framrpc.mjs\npackage/schema.d.ts\npackage/schema.mjs'
 [[ "$(tar -tzf "${files_a[0]}")" == "$expected_entries" ]] ||
@@ -286,6 +296,14 @@ if "$packager" --source-root "$scratch/untagged-source" \
 fi
 grep -Fq 'does not point at source commit' "$scratch/untagged.stderr" ||
   fail "tag/HEAD mismatch did not fail exactly"
+
+if "$packager" --source-root "$scratch/work-a" \
+    --output "$scratch/out-lightweight" --version v1.2.4 \
+    >"$scratch/lightweight.stdout" 2>"$scratch/lightweight.stderr"; then
+  fail "packager accepted a lightweight release tag"
+fi
+grep -Fq 'must name an annotated tag object' "$scratch/lightweight.stderr" ||
+  fail "lightweight release tag failed for the wrong reason"
 
 printf 'bun release artifact test: PASS commit=%s archive=%s\n' \
   "$source_commit" "$archive_sha256"

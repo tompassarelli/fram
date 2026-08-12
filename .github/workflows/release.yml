@@ -66,6 +66,11 @@ jobs:
           ref: b7662922b8fb5eb65c5d64a5addd352e90a75519
           path: .beagle
 
+      - name: Verify the checked-out Beagle compiler pin
+        run: |
+          test "$(cat beagle-pin.txt)" = \
+            "$(git -C "$BEAGLE_HOME" rev-parse 'HEAD^{commit}')"
+
       - name: Install Racket (Beagle graph-authoring runtime)
         uses: Bogdanp/setup-racket@v1.14
         with:
@@ -219,6 +224,11 @@ jobs:
           ref: b7662922b8fb5eb65c5d64a5addd352e90a75519
           path: .beagle
 
+      - name: Verify the checked-out Beagle compiler pin
+        run: |
+          test "$(cat beagle-pin.txt)" = \
+            "$(git -C "$BEAGLE_HOME" rev-parse 'HEAD^{commit}')"
+
       - name: Install Racket for the pinned Beagle compiler
         uses: Bogdanp/setup-racket@v1.14
         with:
@@ -296,6 +306,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
           RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          RELEASE_TAG_OBJECT: ${{ steps.release.outputs['tag-object'] }}
         run: |
           set -euo pipefail
           mapfile -t package_files < <(
@@ -332,6 +343,10 @@ jobs:
           }
           grep -Fxq "source-commit $RELEASE_COMMIT" "${package_files[1]}" || {
             echo "Bun package receipt is not bound to $RELEASE_COMMIT" >&2
+            exit 1
+          }
+          grep -Fxq "release-tag-object $RELEASE_TAG_OBJECT" "${package_files[1]}" || {
+            echo "Bun package receipt is not bound to $RELEASE_TAG_OBJECT" >&2
             exit 1
           }
           echo "archive=${package_files[0]}" >> "$GITHUB_OUTPUT"
@@ -529,15 +544,16 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
           RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          RELEASE_TAG_OBJECT: ${{ steps.release.outputs['tag-object'] }}
           PACKAGE_ARCHIVE: ${{ steps.bun_client.outputs.archive }}
           PACKAGE_RECEIPT: ${{ steps.bun_client.outputs.receipt }}
         run: |
           set -euo pipefail
-          [[ "$(wc -l < "$PACKAGE_RECEIPT")" == 9 ]] || {
-            echo "Bun package receipt must contain exactly nine lines" >&2
+          [[ "$(wc -l < "$PACKAGE_RECEIPT")" == 10 ]] || {
+            echo "Bun package receipt must contain exactly ten lines" >&2
             exit 1
           }
-          expected_keys=$'fram-bun-release-receipt/v1\nsource-commit\nsource-date-epoch\nrelease-tag\npackage-name\npackage-version\npackage-json-sha256\narchive-name\narchive-sha256'
+          expected_keys=$'fram-bun-release-receipt/v2\nsource-commit\nsource-date-epoch\nrelease-tag\nrelease-tag-object\npackage-name\npackage-version\npackage-json-sha256\narchive-name\narchive-sha256'
           observed_keys="$(awk 'NR == 1 { print; next } { print $1 }' "$PACKAGE_RECEIPT")"
           [[ "$observed_keys" == "$expected_keys" ]] || {
             echo "Bun package receipt schema is not closed or ordered" >&2
@@ -551,6 +567,7 @@ jobs:
           expected_archive="tompassarelli-framrpc-${package_version}.tgz"
           [[ "$(receipt_value source-commit)" == "$RELEASE_COMMIT" ]]
           [[ "$(receipt_value release-tag)" == "$RELEASE_TAG" ]]
+          [[ "$(receipt_value release-tag-object)" == "$RELEASE_TAG_OBJECT" ]]
           [[ "$(receipt_value package-name)" == @tompassarelli/framrpc ]]
           [[ "$(receipt_value archive-name)" == "$expected_archive" ]]
           [[ "$(basename "$PACKAGE_ARCHIVE")" == "$expected_archive" ]]
@@ -647,11 +664,11 @@ jobs:
             exit 1
           }
 
-          [[ "$(wc -l < "$WASM_RECEIPT")" == 18 ]] || {
-            echo "Cloudflare Wasm receipt must contain exactly eighteen lines" >&2
+          [[ "$(wc -l < "$WASM_RECEIPT")" == 20 ]] || {
+            echo "Cloudflare Wasm receipt must contain exactly twenty lines" >&2
             exit 1
           }
-          wasm_keys=$'fram-cloudflare-wasm-release-receipt/v1\nsource-commit\nsource-date-epoch\nrelease-tag\nrelease-tag-object\ntarget\nnative-provenance-sha256\nwasm-path\nwasm-bytes\nwasm-sha256\nseams-path\nseams-sha256\nunicode-license-sha256\nwasi-toolchain-licenses-sha256\nffc-license-sha256\nffc-provenance-sha256\narchive-name\narchive-sha256'
+          wasm_keys=$'fram-cloudflare-wasm-release-receipt/v2\nsource-commit\nsource-date-epoch\nrelease-tag\nrelease-tag-object\ntarget\nnative-build-closure-sha256\nbeagle-revision\nnative-provenance-sha256\nwasm-path\nwasm-bytes\nwasm-sha256\nseams-path\nseams-sha256\nunicode-license-sha256\nwasi-toolchain-licenses-sha256\nffc-license-sha256\nffc-provenance-sha256\narchive-name\narchive-sha256'
           [[ "$(awk 'NR == 1 { print; next } { print $1 }' "$WASM_RECEIPT")" == \
             "$wasm_keys" ]] || {
             echo "Cloudflare Wasm receipt schema is not closed or ordered" >&2
@@ -667,6 +684,8 @@ jobs:
           [[ "$(wasm_value release-tag)" == "$RELEASE_TAG" ]]
           [[ "$(wasm_value release-tag-object)" == "$RELEASE_TAG_OBJECT" ]]
           [[ "$(wasm_value target)" == wasm32-wasm-embed ]]
+          [[ "$(wasm_value beagle-revision)" == "$(cat beagle-pin.txt)" ]]
+          [[ "$(wasm_value native-build-closure-sha256)" =~ ^[0-9a-f]{64}$ ]]
           [[ "$(wasm_value wasm-path)" == "$release_root/lib/libfram.wasm" ]]
           [[ "$(wasm_value seams-path)" == "$release_root/wasm-embed.seams" ]]
           [[ "$(wasm_value archive-name)" == "$wasm_name" ]]
@@ -761,6 +780,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
           RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          RELEASE_TAG_OBJECT: ${{ steps.release.outputs['tag-object'] }}
           RELEASE_ARCHIVE: ${{ steps.native.outputs.archive }}
           RELEASE_RECEIPT: ${{ steps.native.outputs.receipt }}
         run: |
@@ -768,11 +788,11 @@ jobs:
           expected_root="fram-${RELEASE_TAG}-x86_64-linux-musl"
           expected_executable="$expected_root/bin/fram-server-native"
           expected_archive="$expected_root.tar.gz"
-          [[ "$(wc -l < "$RELEASE_RECEIPT")" == 9 ]] || {
-            echo "native release receipt must contain exactly nine lines" >&2
+          [[ "$(wc -l < "$RELEASE_RECEIPT")" == 12 ]] || {
+            echo "native release receipt must contain exactly twelve lines" >&2
             exit 1
           }
-          expected_keys=$'fram-native-release-receipt/v1\nsource-commit\nsource-date-epoch\nversion\ntarget\nexecutable-path\nexecutable-sha256\narchive-name\narchive-sha256'
+          expected_keys=$'fram-native-release-receipt/v2\nsource-commit\nsource-date-epoch\nrelease-tag\nrelease-tag-object\ntarget\nnative-build-closure-sha256\nbeagle-revision\nexecutable-path\nexecutable-sha256\narchive-name\narchive-sha256'
           observed_keys="$(awk 'NR == 1 { print; next } { print $1 }' "$RELEASE_RECEIPT")"
           [[ "$observed_keys" == "$expected_keys" ]] || {
             echo "native release receipt schema is not closed or ordered" >&2
@@ -783,8 +803,11 @@ jobs:
             awk -v key="$key" '$1 == key && NF == 2 { print $2 }' "$RELEASE_RECEIPT"
           }
           [[ "$(receipt_value source-commit)" == "$RELEASE_COMMIT" ]]
-          [[ "$(receipt_value version)" == "$RELEASE_TAG" ]]
+          [[ "$(receipt_value release-tag)" == "$RELEASE_TAG" ]]
+          [[ "$(receipt_value release-tag-object)" == "$RELEASE_TAG_OBJECT" ]]
           [[ "$(receipt_value target)" == x86_64-linux-musl ]]
+          [[ "$(receipt_value beagle-revision)" == "$(cat beagle-pin.txt)" ]]
+          [[ "$(receipt_value native-build-closure-sha256)" =~ ^[0-9a-f]{64}$ ]]
           [[ "$(receipt_value executable-path)" == "$expected_executable" ]]
           [[ "$(receipt_value archive-name)" == "$expected_archive" ]]
           [[ "$(basename "$RELEASE_ARCHIVE")" == "$expected_archive" ]]

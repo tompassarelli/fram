@@ -13,9 +13,10 @@ pagination. `fram-mcp` remains the narrower agent-facing JSON-RPC surface.
 
 Every tagged Fram release attaches a reproducible
 `tompassarelli-framrpc-<package-version>.tgz` and its
-`fram-bun-release-receipt/v1` file. The receipt binds the tarball hash and
-declared package version to the exact Fram release tag and source commit. Once
-the tarball is downloaded, installation needs no registry or network access:
+`fram-bun-release-receipt/v2` file. The receipt binds the tarball hash and
+declared package version to the exact annotated Fram release tag object and
+source commit. Once the tarball is downloaded, installation needs no registry
+or network access:
 
 ```console
 $ bun add --offline /path/to/tompassarelli-framrpc-0.4.0.tgz

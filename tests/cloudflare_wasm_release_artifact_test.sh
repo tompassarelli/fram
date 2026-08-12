@@ -21,6 +21,7 @@ done
 source_seed="$scratch/source-seed"
 mkdir -p "$source_seed/bin" "$source_seed/native" "$source_seed/src"
 cp "$repo/LICENSE" "$repo/LICENSE-MIT" "$repo/LICENSE-APACHE" "$source_seed/"
+cp "$repo/beagle-pin.txt" "$source_seed/"
 cp "$repo/native/wasm-embed.seams" "$source_seed/native/wasm-embed.seams"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$source_seed/bin/fram-native-build"
 chmod +x "$source_seed/bin/fram-native-build"
@@ -31,7 +32,7 @@ printf '%s\n' src/core-a.bgl src/core-b.bgl >"$source_seed/native/core_closure_s
 printf '%s\n' '#lang beagle' '(ns synthetic.a)' >"$source_seed/src/core-a.bgl"
 printf '%s\n' '#lang beagle' '(ns synthetic.b)' >"$source_seed/src/core-b.bgl"
 git -C "$source_seed" init -q
-git -C "$source_seed" add LICENSE LICENSE-MIT LICENSE-APACHE bin native src
+git -C "$source_seed" add LICENSE LICENSE-MIT LICENSE-APACHE beagle-pin.txt bin native src
 GIT_AUTHOR_NAME=Fram GIT_AUTHOR_EMAIL=fram@example.invalid \
 GIT_AUTHOR_DATE='2026-01-02T03:04:05Z' \
 GIT_COMMITTER_NAME=Fram GIT_COMMITTER_EMAIL=fram@example.invalid \
@@ -40,8 +41,10 @@ GIT_COMMITTER_DATE='2026-01-02T03:04:05Z' \
 GIT_COMMITTER_NAME=Fram GIT_COMMITTER_EMAIL=fram@example.invalid \
 GIT_COMMITTER_DATE='2026-01-02T04:05:06Z' \
   git -C "$source_seed" tag -a v1.2.3 -m release
+git -C "$source_seed" tag v1.2.4
 source_commit="$(git -C "$source_seed" rev-parse HEAD)"
 tag_object="$(git -C "$source_seed" rev-parse refs/tags/v1.2.3)"
+beagle_revision="$(<"$source_seed/beagle-pin.txt")"
 
 git clone -q --no-local "$source_seed" "$scratch/work-a"
 git clone -q --no-local "$source_seed" "$scratch/different/depth/work-b"
@@ -70,6 +73,7 @@ make_artifact() {
   mkdir -p "$artifact/lib" "$artifact/THIRD-PARTY/ffc"
   cp "$input_manifest" "$artifact/input.manifest"
   printf 'fram-native-build/v1 %s\n' "$artifact_identity" >"$artifact/READY"
+  printf '%s\n' "$beagle_revision" >"$artifact/beagle-revision.txt"
   # A complete empty Wasm module; the native builder is responsible for the
   # full import/export validation before it writes READY.
   printf '\x00asm\x01\x00\x00\x00' >"$artifact/lib/libfram.wasm"
@@ -83,9 +87,10 @@ make_artifact() {
   printf '%s\n' 'synthetic native program' >"$artifact/module.native-program"
   {
     printf '%s\n' \
-      'fram-native-build-provenance/v1' \
+      'fram-native-build-provenance/v2' \
       "builder-sha256 $(sha256sum "$source_seed/bin/fram-native-build" | awk '{print $1}')" \
       'beagle-compiler-inputs-sha256 1111111111111111111111111111111111111111111111111111111111111111' \
+      "beagle-revision $beagle_revision" \
       'abi wasm32' \
       'host wasm-embed' \
       "native-program-sha256 $(sha256sum "$artifact/module.native-program" | awk '{print $1}')"
@@ -159,10 +164,14 @@ $release_name/wasm-embed.seams"
   fail "archive member set or order is not canonical"
 
 receipt_keys="$(awk '{print $1}' "${files_a[1]}")"
-expected_keys=$'fram-cloudflare-wasm-release-receipt/v1\nsource-commit\nsource-date-epoch\nrelease-tag\nrelease-tag-object\ntarget\nnative-provenance-sha256\nwasm-path\nwasm-bytes\nwasm-sha256\nseams-path\nseams-sha256\nunicode-license-sha256\nwasi-toolchain-licenses-sha256\nffc-license-sha256\nffc-provenance-sha256\narchive-name\narchive-sha256'
+expected_keys=$'fram-cloudflare-wasm-release-receipt/v2\nsource-commit\nsource-date-epoch\nrelease-tag\nrelease-tag-object\ntarget\nnative-build-closure-sha256\nbeagle-revision\nnative-provenance-sha256\nwasm-path\nwasm-bytes\nwasm-sha256\nseams-path\nseams-sha256\nunicode-license-sha256\nwasi-toolchain-licenses-sha256\nffc-license-sha256\nffc-provenance-sha256\narchive-name\narchive-sha256'
 [[ "$receipt_keys" == "$expected_keys" ]] || fail "receipt schema is not closed and ordered"
 grep -Fxq "source-commit $source_commit" "${files_a[1]}" || fail "receipt omitted source commit"
 grep -Fxq "release-tag-object $tag_object" "${files_a[1]}" || fail "receipt omitted tag object"
+grep -Fxq "native-build-closure-sha256 ${artifact_a##*/}" "${files_a[1]}" ||
+  fail "receipt omitted native build closure"
+grep -Fxq "beagle-revision $beagle_revision" "${files_a[1]}" ||
+  fail "receipt omitted pinned Beagle revision"
 native_provenance_sha256="$(sha256sum "$artifact_a/provenance.manifest" | awk '{print $1}')"
 grep -Fxq "native-provenance-sha256 $native_provenance_sha256" "${files_a[1]}" ||
   fail "receipt omitted path-independent native provenance"
@@ -218,6 +227,10 @@ git -C "$scratch/untagged" commit --allow-empty -q -m after-release
 expect_failure untagged 'does not point at source commit' \
   "$packager" --source-root "$scratch/untagged" --artifact "$artifact_a" \
   --output "$scratch/out-untagged" --version v1.2.3
+
+expect_failure lightweight 'must name an annotated tag object' \
+  "$packager" --source-root "$scratch/work-a" --artifact "$artifact_a" \
+  --output "$scratch/out-lightweight" --version v1.2.4
 
 printf '%s\n' different >"${files_a[1]}"
 expect_failure different-output 'refusing to replace different release output' \
