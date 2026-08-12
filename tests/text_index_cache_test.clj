@@ -1,5 +1,6 @@
 ;; Exact-snapshot text-index residency, single-flight, and cache bounds.
-(require '[fram.text-index :as text-index]
+(require '[fram.query :as q]
+         '[fram.text-index :as text-index]
          '[fram.text-search :as text-search]
          '[fram.types :as t])
 (load-file "server.clj")
@@ -24,12 +25,20 @@
                   (swap! build-count inc)
                   (original rows maximum)))]
   (let [first-source (cached!
-                      (snapshot 1) cancellation deadline #(identity propositions))
+                      (snapshot 1) cancellation deadline #(identity propositions)
+                      #{"body"})
         second-source (cached!
-                       (snapshot 1) cancellation deadline #(identity propositions))]
+                       (snapshot 1) cancellation deadline #(identity propositions)
+                       #{"body"})]
     (chk "an exact snapshot returns the identical immutable source"
          (identical? first-source second-source))
-    (chk "an exact snapshot builds once" (= 1 @build-count)))
+    (chk "an exact snapshot and attribute scope build once" (= 1 @build-count))
+    (let [other-scope (cached!
+                       (snapshot 1) cancellation deadline
+                       #(identity propositions) #{"title"})]
+      (chk "different bound attribute scopes do not share cache entries"
+           (and (not (identical? first-source other-scope))
+                (= 2 @build-count)))))
 
   (reset! build-count 0)
   (reset! server/text-index-cache
@@ -44,7 +53,7 @@
                    (swap! results conj
                           (cached!
                            (snapshot 2) cancellation deadline
-                           #(identity propositions))))))
+                           #(identity propositions) #{"body"})))))
               (range 32))]
     (doseq [thread threads] (.start thread))
     (.countDown barrier)
@@ -55,7 +64,8 @@
 
 (doseq [version (range 3 9)]
   (cached!
-   (snapshot version) cancellation deadline #(identity propositions)))
+   (snapshot version) cancellation deadline #(identity propositions)
+   #{"body"}))
 (chk "LRU retains at most four exact snapshot versions"
      (<= (count (:entries @server/text-index-cache)) 4))
 (chk "LRU retains at most 64 MiB by estimated resident weight"
@@ -76,7 +86,7 @@
         (let [work (future
                      (cached!
                       (snapshot 9) cancellation deadline
-                      #(identity propositions)))]
+                      #(identity propositions) #{"body"}))]
           (deref entered 2000 false)
           (reset! server/text-index-cache
                   ((var server/empty-text-index-cache) 8))
@@ -93,6 +103,15 @@
                 (catch clojure.lang.ExceptionInfo error error))]
   (chk "oversize combined search build fails with typed query-text-index-limit"
        (= :query-text-index-limit (:fram/code (ex-data problem)))))
+
+(let [mixed (conj propositions
+                  (t/triple "@ignored" "private-note"
+                            (apply str (repeat 10000 "unrelated "))))
+      scoped (text-search/build-source-for-attributes mixed #{"body"}
+                                                       text-index/text-index-max-bytes)]
+  (chk "attribute-scoped source excludes unrelated live strings"
+       (= (count propositions)
+          (count (text-search/textsearchsource-rows scoped)))))
 
 (let [bad (remove second @checks)]
   (doseq [[name ok] @checks]

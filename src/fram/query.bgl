@@ -23,6 +23,7 @@
    strata: (Vec (Vec d/Rule))
    order: (Vec OrderClause)
    limit: Int?])
+(defalias TextAttributeScope (U (Set Any) Nil))
 (defrecord Projection [edb: d/Db candidates: d/CandidateSources])
 (defrecord ProjectionResult
   [projection: Projection?
@@ -101,6 +102,36 @@
 
 (defn query-plan [find: FindSpec strata: (Vec (Vec d/Rule))] -> QueryPlan
   (ordered-query-plan find strata [] nil))
+
+(defn- literal-text-attribute-scope
+  [literal: d/Literal
+   scope: TextAttributeScope] -> TextAttributeScope
+  (if (nil? scope)
+    nil
+    (if (and (= :relation (d/literal-kind literal))
+             (contains? d/text-relations (d/literal-relation literal)))
+      (let [attribute (nth (d/literal-arguments literal) 1)]
+        (if (some? (d/queryterm-variable attribute))
+          nil
+          (conj scope (d/queryterm-value attribute))))
+      scope)))
+
+(defn- rule-text-attribute-scope
+  [rule: d/Rule
+   scope: TextAttributeScope] -> TextAttributeScope
+  (reduce
+   (fn [current: TextAttributeScope literal: d/Literal] -> TextAttributeScope
+     (literal-text-attribute-scope literal current))
+   scope (d/rule-body rule)))
+
+(defn plan-text-attribute-scope [plan: QueryPlan] -> TextAttributeScope
+  (reduce
+   (fn [scope: TextAttributeScope stratum: (Vec d/Rule)] -> TextAttributeScope
+     (reduce
+      (fn [current: TextAttributeScope rule: d/Rule] -> TextAttributeScope
+        (rule-text-attribute-scope rule current))
+      scope stratum))
+   #{} (queryplan-strata plan)))
 
 (defn query-plan? [value: Any] -> Bool (instance? QueryPlan value))
 (defn projection? [value: Any] -> Bool (instance? Projection value))

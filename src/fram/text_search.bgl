@@ -299,6 +299,21 @@
              true (->TextSearchSource exact rows maximum cell weight)
              (text-index/no-text-error))))))))
 
+(defn propositions-for-attributes
+  [propositions: (Vec t/Triple)
+   attributes: (Set Any)] -> (Vec t/Triple)
+  (filterv
+   (fn [proposition: t/Triple] -> Bool
+     (contains? attributes (t/triple-t2 proposition)))
+   propositions))
+
+(defn build-source-for-attributes-result
+  [propositions: (Vec t/Triple)
+   attributes: (Set Any)
+   maximum: Int] -> TextSearchSourceResult
+  (build-source-result
+   (propositions-for-attributes propositions attributes) maximum))
+
 (defn build-source
   [propositions: (Vec t/Triple)
    maximum: Int] -> TextSearchSource
@@ -313,6 +328,13 @@
         cell: (Atom (U SearchAnalyzers Nil)) (atom empty-analyzers)]
     (index-limit weight maximum)
     (->TextSearchSource exact rows maximum cell weight)))
+
+(defn build-source-for-attributes
+  [propositions: (Vec t/Triple)
+   attributes: (Set Any)
+   maximum: Int] -> TextSearchSource
+  (build-source
+   (propositions-for-attributes propositions attributes) maximum))
 
 ;; Build-on-first-use with a benign race: a concurrent double build is
 ;; idempotent and last-wins, matching the snapshot cache's own semantics.

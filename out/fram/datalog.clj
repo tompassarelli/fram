@@ -583,6 +583,11 @@
    source (text-search/source-result-source result)]
   (if (some? source) (->CandidateSourcesResult (text-candidate-sources source) nil) (->CandidateSourcesResult {} (query-evaluation-error-from-text-error (text-search/source-result-error result))))))
 
+(defn ^CandidateSourcesResult build-text-candidates-for-attributes-result [propositions attributes]
+  (let [result (text-search/build-source-for-attributes-result propositions attributes text-index/text-index-max-bytes)
+   source (text-search/source-result-source result)]
+  (if (some? source) (->CandidateSourcesResult (text-candidate-sources source) nil) (->CandidateSourcesResult {} (query-evaluation-error-from-text-error (text-search/source-result-error result))))))
+
 (defn build-text-candidates [propositions]
   (text-candidate-sources (text-search/build-source propositions text-index/text-index-max-bytes)))
 

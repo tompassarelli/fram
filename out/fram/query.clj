@@ -147,6 +147,16 @@
 (defn ^QueryPlan query-plan [^FindSpec find strata]
   (ordered-query-plan find strata [] nil))
 
+(defn- literal-text-attribute-scope [literal scope]
+  (if (nil? scope) nil (if (and (= :relation (d/literal-kind literal)) (contains? d/text-relations (d/literal-relation literal))) (let [attribute (nth (d/literal-arguments literal) 1)]
+  (if (some? (d/queryterm-variable attribute)) nil (conj scope (d/queryterm-value attribute)))) scope)))
+
+(defn- rule-text-attribute-scope [rule scope]
+  (reduce (fn [current literal] (literal-text-attribute-scope literal current)) scope (d/rule-body rule)))
+
+(defn plan-text-attribute-scope [^QueryPlan plan]
+  (reduce (fn [scope stratum] (reduce (fn [current rule] (rule-text-attribute-scope rule current)) scope stratum)) #{} (queryplan-strata plan)))
+
 (defn ^Boolean query-plan? [value]
   (instance? QueryPlan value))
 

@@ -40,6 +40,20 @@
             :body [{:rel "text-search"
                     :args [{:var "e"} {:var "a"} query {:var "score"}]}]}]})
 
+(let [constant-query
+      {:find "hit"
+       :rules [{:head {:rel "hit" :args [{:var "e"}]}
+                :body [{:rel "text-match"
+                        :args [{:var "e"} "title" "quick"]}]}]}
+      constant-plan (q/compiled-plan (q/compile-query constant-query))
+      variable-plan
+      (q/compiled-plan
+       (q/compile-query (relation-query "text-match" "quick")))]
+  (chk "constant text attributes produce an exact index scope"
+       (= #{"title"} (q/plan-text-attribute-scope constant-plan)))
+  (chk "variable text attributes conservatively retain the whole corpus"
+       (nil? (q/plan-text-attribute-scope variable-plan))))
+
 (chk "tokenizer folds case and splits punctuation, underscore, and hyphen"
      (= ["42" "brown" "fox" "quick" "the"]
         (text-index/tokenize "The QUICK-brown_fox 42")))

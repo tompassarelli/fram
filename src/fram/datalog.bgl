@@ -66,9 +66,7 @@
 
 ;; A projected rotation carries the upper snapshot only, so a since window's
 ;; lower bound has to ride alongside it.
-(defrecord RotationCandidateSource
-  [rotation: rot/Rotation
-   lower-exclusive: Int])
+(defrecord RotationCandidateSource [rotation: rot/Rotation lower-exclusive: Int])
 
 ;; Candidate handles are private positions in one immutable relation vector.
 (defrecord CandidateSource
@@ -994,6 +992,21 @@
         (text-search/build-source-result
          propositions text-index/text-index-max-bytes)
         source: text-search/TextSearchSource? (text-search/source-result-source result)]
+    (if (some? source)
+      (->CandidateSourcesResult (text-candidate-sources source) nil)
+      (->CandidateSourcesResult
+       {}
+       (query-evaluation-error-from-text-error
+        (text-search/source-result-error result))))))
+
+(defn build-text-candidates-for-attributes-result
+  [propositions: (Vec t/Triple)
+   attributes: (Set Any)] -> CandidateSourcesResult
+  (let [result: text-search/TextSearchSourceResult
+        (text-search/build-source-for-attributes-result
+         propositions attributes text-index/text-index-max-bytes)
+        source: text-search/TextSearchSource?
+        (text-search/source-result-source result)]
     (if (some? source)
       (->CandidateSourcesResult (text-candidate-sources source) nil)
       (->CandidateSourcesResult

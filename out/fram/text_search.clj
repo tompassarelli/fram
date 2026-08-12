@@ -236,6 +236,12 @@
    cell (atom empty-analyzers)]
   (->TextSearchSourceResult true (->TextSearchSource exact rows maximum cell weight) (text-index/no-text-error))))))))
 
+(defn propositions-for-attributes [propositions attributes]
+  (filterv (fn [proposition] (contains? attributes (t/triple-t2 proposition))) propositions))
+
+(defn ^TextSearchSourceResult build-source-for-attributes-result [propositions attributes maximum]
+  (build-source-result (propositions-for-attributes propositions attributes) maximum))
+
 (defn ^TextSearchSource build-source [propositions maximum]
   (let [rows (vec propositions)
    exact (text-index/build-source rows maximum)
@@ -244,6 +250,9 @@
    cell (atom empty-analyzers)]
   (index-limit weight maximum)
   (->TextSearchSource exact rows maximum cell weight)))
+
+(defn ^TextSearchSource build-source-for-attributes [propositions attributes maximum]
+  (build-source (propositions-for-attributes propositions attributes) maximum))
 
 (defn- ^SearchAnalyzersResult analyzers-of-result! [^TextSearchSource source]
   (let [current (deref (textsearchsource-analyzers-cell source))]

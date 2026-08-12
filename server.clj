@@ -1295,16 +1295,23 @@
             (:source outcome)))))))
 
 (defn- cached-text-index!
-  [snapshot cancellation deadline-ns propositions]
-  (let [key (result-snapshot-key snapshot)
+  [snapshot cancellation deadline-ns propositions attributes]
+  (let [scope-key (if (some? attributes)
+                    (vec (sort (map query/term-key attributes)))
+                    :all)
+        key (conj (result-snapshot-key snapshot) scope-key)
         {:keys [kind source flight]} (begin-text-index-access! key)]
     (case kind
       :hit (do (cancelled! cancellation) source)
       :wait (wait-text-index-flight! flight cancellation deadline-ns)
       :build
       (try
-        (let [source (text-search/build-source
-                      (vec (propositions)) text-index-byte-limit)]
+        (let [rows (vec (propositions))
+              source
+              (if (some? attributes)
+                (text-search/build-source-for-attributes
+                 rows attributes text-index-byte-limit)
+                (text-search/build-source rows text-index-byte-limit))]
           (complete-text-index-flight! key flight source)
           source)
         (catch Throwable error
@@ -1655,13 +1662,16 @@
              (try
                (let [root (query-page-root! db version)
                      text? (plan-uses-text? plan)
+                     text-attributes
+                     (when text? (query/plan-text-attribute-scope plan))
                      occurrence? (plan-uses-occurrence? plan)
                      only-text? (and text? (plan-uses-only-text-base? plan))
                      source
                      (when text?
                        (cached-text-index!
                         cache-snapshot cancellation deadline-ns
-                        (fn [] (term-store/live-propositions (atom root)))))
+                        (fn [] (term-store/live-propositions (atom root)))
+                        text-attributes))
                      candidates
                      (cond->
                       {}

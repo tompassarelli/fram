@@ -1062,11 +1062,18 @@
           nil)
         text-result: d/CandidateSourcesResult
         (if (plan-uses-any-relation? plan d/text-relations)
-          (d/build-text-candidates-result
-           (rot/propositions
-            (d/events-after-sequence
-             (rot/all-occurrences rotation)
-             (queryview-lower-exclusive view))))
+          (let [propositions: (Vec t/Triple)
+                (rot/propositions
+                 (d/events-after-sequence
+                  (rot/all-occurrences rotation)
+                  (queryview-lower-exclusive view)))
+                attributes: query/TextAttributeScope
+                (query/plan-text-attribute-scope plan)]
+            (if (some? attributes)
+              (let [scope: (Set Any) attributes]
+                (d/build-text-candidates-for-attributes-result
+                 propositions scope))
+              (d/build-text-candidates-result propositions)))
           (d/->CandidateSourcesResult {} nil))
         error-value: d/QueryEvaluationError? (d/candidatesourcesresult-error text-result)
         control: d/QueryControl (d/query-control query-step-limit timeout-ms)]

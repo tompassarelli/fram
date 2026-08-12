@@ -68,9 +68,15 @@ Tokenizer v0 takes maximal Unicode Letter/DecimalDigit runs, lowercases without 
 - `text-stem` — English stemming, so one needle unifies inflected forms (`runs`, `runner`, `running` all stem to `run`). It does not change `text-match`.
 - `text-search` — four arity: the fourth argument binds a score. Exact evidence outranks stem evidence, which outranks substring evidence.
 
-One index serves all five. The analyzers behind phrase, substring, stem, and search realize on first use of their relation, so a `text-match` query pays neither their build time nor their bytes; a plan that names no text relation builds no index at all. An index build is bounded at 64 MiB and fails typed `:query-text-index-limit`.
+One index serves all five. When every text-relation attribute is a constant,
+FRAM builds that query's source from only those attributes; a variable
+attribute conservatively retains the full live String corpus. The analyzers
+behind phrase, substring, stem, and search realize on first use of their
+relation, so a `text-match` query pays neither their build time nor their
+bytes; a plan that names no text relation builds no index at all. An index
+build is bounded at 64 MiB and fails typed `:query-text-index-limit`.
 
-Retention differs by route. The JVM server retains the index per immutable snapshot in a single-flight LRU keyed by server generation, SpaceId, and version, holding four versions; version identity replaces TTL, and there is no scan fallback. The native engine builds the source per query and relies on the ordered-result cache below for repeats.
+Retention differs by route. The JVM server retains the index per immutable snapshot and attribute scope in a single-flight LRU keyed by server generation, SpaceId, and version, holding four entries; version identity replaces TTL, and there is no scan fallback. The native engine builds the source per query and relies on the ordered-result cache below for repeats.
 
 ## Occurrence history and views
 
