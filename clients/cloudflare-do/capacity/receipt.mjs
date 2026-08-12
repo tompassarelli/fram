@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { relative, resolve } from "node:path";
+import { CAPACITY_RUNTIME_CONFIGURATION } from "./config.mjs";
 
 export const RAW_BUNDLE_LIMIT_BYTES = 64 * 1024 * 1024;
 export const COMPRESSED_LIMIT_BYTES = Object.freeze({
@@ -14,6 +15,22 @@ export const COMPRESSED_LIMIT_BYTES = Object.freeze({
   paid: 10 * 1024 * 1024,
 });
 export const ISOLATE_MEMORY_LIMIT_BYTES = 128 * 1024 * 1024;
+export const REQUIRED_CORPUS_PROFILE = Object.freeze({
+  schema: "fram-wiki-capacity-corpus/v1",
+  profile: "wiki-shaped-256x3-2k-v1",
+  interpretation: "fixed structural workload, not a traffic forecast",
+  decision: "launch-blocking capacity floor",
+  articles: 256,
+  revisionsPerArticle: 3,
+  linksPerRevision: 4,
+  bodyBytes: 2048,
+  actionsPerBatch: 240,
+  expectedFacts: 6912,
+  spaceId: "fram-wiki-capacity-v1",
+  batches: 29,
+  loadFrames: 29,
+  verifyFrames: 2,
+});
 
 export function canonicalJson(value) {
   const normalize = (one) => {
@@ -95,7 +112,7 @@ export function parseProperties(text) {
       .filter(Boolean)
       .map((line) => {
         const at = line.indexOf("=");
-        if (at <= 0) throw new Error(`invalid systemd property row: ${line}`);
+        if (at <= 0) throw new Error(`invalid capacity property row: ${line}`);
         return [line.slice(0, at), line.slice(at + 1)];
       }),
   );
@@ -104,9 +121,24 @@ export function parseProperties(text) {
 function integerProperty(properties, name) {
   const value = Number(properties[name]);
   if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`systemd ${name} is not a non-negative integer`);
+    throw new Error(`capacity property ${name} is not a non-negative integer`);
   }
   return value;
+}
+
+function runtimeConfigurationMatches(configuration) {
+  return (
+    configuration?.observedAtRuntime === true &&
+    Object.entries(CAPACITY_RUNTIME_CONFIGURATION).every(
+      ([name, value]) => configuration[name] === value,
+    )
+  );
+}
+
+function corpusProfileMatches(corpus) {
+  return Object.entries(REQUIRED_CORPUS_PROFILE).every(
+    ([name, value]) => corpus?.[name] === value,
+  );
 }
 
 export function makeReceipt({
@@ -122,21 +154,107 @@ export function makeReceipt({
   const memoryPeakBytes = integerProperty(cgroup, "MemoryPeak");
   const memoryMaxBytes = integerProperty(cgroup, "MemoryMax");
   const memorySwapMaxBytes = integerProperty(cgroup, "MemorySwapMax");
-  const exitStatus = integerProperty(cgroup, "ExecMainStatus");
+  const controllerExitStatus = integerProperty(
+    cgroup,
+    "ControllerExitStatus",
+  );
+  const memoryOomKills = integerProperty(cgroup, "MemoryOomKills");
+  const processesRemainingAfterController = integerProperty(
+    cgroup,
+    "ProcessesRemainingAfterController",
+  );
   const guestLinearMemoryMeasured =
     Number.isSafeInteger(functional.guestLinearMemoryHighWaterBytes) &&
     functional.guestLinearMemoryHighWaterBytes > 0;
+  const runtimeConfigurationObserved = runtimeConfigurationMatches(
+    functional.runtimeConfiguration,
+  );
+  const loadedGuestLinearMemoryMeasured =
+    Number.isSafeInteger(functional.loadedGuestLinearMemoryBytes) &&
+    functional.loadedGuestLinearMemoryBytes > 0;
+  const reopenedGuestLinearMemoryMeasured =
+    Number.isSafeInteger(functional.reopenedGuestLinearMemoryBytes) &&
+    functional.reopenedGuestLinearMemoryBytes > 0;
+  const conservativeRecycleReopenLinearBytes =
+    loadedGuestLinearMemoryMeasured && reopenedGuestLinearMemoryMeasured
+      ? functional.loadedGuestLinearMemoryBytes +
+        functional.reopenedGuestLinearMemoryBytes
+      : null;
+  const conservativeRecycleReopenLinearMeasured =
+    conservativeRecycleReopenLinearBytes !== null &&
+    functional.conservativeLoadedPlusReopenedGuestLinearBytes ===
+      conservativeRecycleReopenLinearBytes;
+  const guestLinearMemoryHighWaterConsistent =
+    guestLinearMemoryMeasured &&
+    loadedGuestLinearMemoryMeasured &&
+    reopenedGuestLinearMemoryMeasured &&
+    functional.guestLinearMemoryHighWaterBytes ===
+      Math.max(
+        functional.loadedGuestLinearMemoryBytes,
+        functional.reopenedGuestLinearMemoryBytes,
+      );
+  const phasePeakAtLoaded =
+    functional.workerdProcessTreeCumulativePeakAtLoadedBytes;
+  const phasePeakAfterReopen =
+    functional.workerdProcessTreeCumulativePeakAfterReopenBytes;
+  const processTreePhasePeaksMeasured =
+    Number.isSafeInteger(phasePeakAtLoaded) &&
+    phasePeakAtLoaded > 0 &&
+    Number.isSafeInteger(phasePeakAfterReopen) &&
+    phasePeakAfterReopen >= phasePeakAtLoaded &&
+    memoryPeakBytes >= phasePeakAfterReopen;
+  const currentSourceArtifact =
+    wasm.sourceMode === "built-current-tree" &&
+    wasm.sourceTreeClean === true &&
+    /^[0-9a-f]{40}$/.test(wasm.sourceCommit) &&
+    /^[0-9a-f]{64}$/.test(wasm.artifactInputManifestSha256) &&
+    wasm.artifactAddress === wasm.artifactInputManifestSha256 &&
+    wasm.host === "wasm-embed" &&
+    wasm.abi === "wasm32" &&
+    Number.isSafeInteger(wasm.wasmBytes) &&
+    wasm.wasmBytes > 0 &&
+    /^[0-9a-f]{64}$/.test(wasm.wasmSha256);
+  const fixedCorpusProfileObserved = corpusProfileMatches(functional.corpus);
+  const fullCorpusExecutionPassed =
+    functional.pass === true &&
+    functional.loadFrames === REQUIRED_CORPUS_PROFILE.loadFrames &&
+    functional.verifyFrames === REQUIRED_CORPUS_PROFILE.verifyFrames &&
+    Number.isSafeInteger(functional.responseBytes) &&
+    functional.responseBytes > 0;
+  const durableRecycleReopenVerified =
+    functional.reopenedFromDurableStorage === true &&
+    Number.isSafeInteger(functional.durableLogBytes) &&
+    functional.durableLogBytes > 0 &&
+    Number.isSafeInteger(functional.storageCommits) &&
+    functional.storageCommits >= REQUIRED_CORPUS_PROFILE.loadFrames &&
+    /^[0-9a-f]{64}$/.test(functional.reopenedTitleResponseSha256);
   const checks = {
     cgroupLimitIs128MiB: memoryMaxBytes === ISOLATE_MEMORY_LIMIT_BYTES,
-    workerdProcessSucceeded: cgroup.Result === "success" && exitStatus === 0,
+    memoryScopeIsWorkerdProcessTreeOnly:
+      cgroup.Scope === "workerd-process-tree-only",
+    controllerSucceeded: controllerExitStatus === 0,
+    controllerReapedWorkerd: processesRemainingAfterController === 0,
+    workerdProcessTreeNotOomKilled:
+      cgroup.MemoryResult === "not-oom-killed" && memoryOomKills === 0,
     cgroupSwapDisabled: memorySwapMaxBytes === 0,
     emittedRawWithinWranglerLimit:
       bundle.emittedBytes <= RAW_BUNDLE_LIMIT_BYTES,
-    functionalCorpusPassed: functional.pass === true,
+    fixedCorpusProfileObserved,
+    fullCorpusExecutionPassed,
+    durableRecycleReopenVerified,
+    runtimeConfigurationObserved,
+    currentSourceArtifact,
     guestLinearMemoryMeasured,
+    guestLinearMemoryHighWaterConsistent,
     guestLinearMemoryWithin128MiB:
       guestLinearMemoryMeasured &&
       functional.guestLinearMemoryHighWaterBytes <= ISOLATE_MEMORY_LIMIT_BYTES,
+    loadedAndReopenedGuestLinearMemoryMeasured:
+      conservativeRecycleReopenLinearMeasured,
+    conservativeRecycleReopenGuestLinearWithin128MiB:
+      conservativeRecycleReopenLinearMeasured &&
+      conservativeRecycleReopenLinearBytes <= ISOLATE_MEMORY_LIMIT_BYTES,
+    workerdProcessTreePhasePeaksMeasured: processTreePhasePeaksMeasured,
     workerdProcessTreePeakWithin128MiB:
       memoryPeakBytes <= ISOLATE_MEMORY_LIMIT_BYTES,
     wranglerCompressedWithinPlanLimit:
@@ -146,7 +264,7 @@ export function makeReceipt({
       wrangler.reportedRawBytes <= RAW_BUNDLE_LIMIT_BYTES,
   };
   return {
-    schema: "fram-cloudflare-capacity/v1",
+    schema: "fram-cloudflare-capacity/v2",
     evidenceKind: "capacity-only-not-release-proof",
     pass: Object.values(checks).every(Boolean),
     checks,
@@ -185,20 +303,53 @@ export function makeReceipt({
       durableImageBytes: functional.durableImageBytes,
       storageCommits: functional.storageCommits,
       reopenedTitleResponseSha256: functional.reopenedTitleResponseSha256,
+      failure: functional.failure ?? null,
     },
     memory: {
       cloudflareDocumentedIsolateLimitBytes: ISOLATE_MEMORY_LIMIT_BYTES,
-      enforcement: "linux-cgroup-v2-workerd-process-tree",
-      enforcedProcesses: "workerd and every descendant",
       controllerProcesses: "Bun and Miniflare excluded",
       relationshipToProduction:
         "conservative whole-workerd-runtime proxy for one workload, not isolate accounting",
-      workerdProcessTreeLimitBytes: memoryMaxBytes,
-      workerdProcessTreePeakBytes: memoryPeakBytes,
-      workerdProcessTreeSwapMaxBytes: memorySwapMaxBytes,
-      guestLinearMemoryHighWaterBytes:
-        functional.guestLinearMemoryHighWaterBytes,
-      guestArenaPeakLiveBytes: functional.guestArenaPeakLiveBytes,
+      engineMemoryBudgetBytes:
+        functional.runtimeConfiguration?.engineMemoryBudgetBytes ?? null,
+      guestArenaInitialPages:
+        functional.runtimeConfiguration?.guestArenaInitialPages ?? null,
+      guestArenaGrowPages:
+        functional.runtimeConfiguration?.guestArenaGrowPages ?? null,
+      runtimeConfigurationObserved,
+      guestLinearMemory: {
+        metric:
+          "WebAssembly.Memory byteLength; reserved linear memory, not RSS",
+        highWaterBytes: functional.guestLinearMemoryHighWaterBytes,
+        loadedBytes: functional.loadedGuestLinearMemoryBytes,
+        reopenedBytes: functional.reopenedGuestLinearMemoryBytes,
+        conservativeLoadedPlusReopenedBytes:
+          conservativeRecycleReopenLinearBytes,
+        arenaPeakLiveBytes: functional.guestArenaPeakLiveBytes,
+      },
+      workerdProcessTreeMemory: {
+        metric:
+          "Linux cgroup-v2 charged memory for workerd and descendants; not isolate-only RSS",
+        enforcement: "linux-cgroup-v2",
+        scope: cgroup.Scope,
+        memoryResult: cgroup.MemoryResult,
+        oomKills: memoryOomKills,
+        controllerExitStatus,
+        processesRemainingAfterController,
+        limitBytes: memoryMaxBytes,
+        peakBytes: memoryPeakBytes,
+        swapMaxBytes: memorySwapMaxBytes,
+        cumulativePeakAtLoadedBytes:
+          phasePeakAtLoaded ?? null,
+        cumulativePeakAfterReopenBytes:
+          phasePeakAfterReopen ?? null,
+      },
+      recycleReopenOverlap: {
+        measuredDirectly: false,
+        conservativeGuestLinearBytes: conservativeRecycleReopenLinearBytes,
+        reason:
+          "workerd exposes neither per-isolate resident memory nor old-instance collection timing; the gate enforces both the loaded-plus-reopened linear sum and whole-process-tree peak",
+      },
       productionIsolatePeakMeasured: false,
       proxyNote:
         "The cgroup includes the full workerd runtime subtree; Cloudflare production isolate-only accounting is not locally observable.",
@@ -206,8 +357,11 @@ export function makeReceipt({
     wasm: {
       abi: wasm.abi,
       artifactAddress: wasm.artifactAddress,
-      framCommit: wasm.framCommit,
+      artifactInputManifestSha256: wasm.artifactInputManifestSha256,
       host: wasm.host,
+      sourceCommit: wasm.sourceCommit,
+      sourceMode: wasm.sourceMode,
+      sourceTreeClean: wasm.sourceTreeClean,
       wasmBytes: wasm.wasmBytes,
       wasmSha256: wasm.wasmSha256,
     },

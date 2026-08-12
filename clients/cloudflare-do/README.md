@@ -23,9 +23,10 @@ build-wasm: lib/libfram.wasm <- <artifact-address> (<bytes> bytes, sha256 <hash>
 
 `scripts/build-wasm.sh` copies `lib/libfram.wasm` out of a content-addressed
 `fram-native-build` artifact and writes `lib/provenance.json` beside it, which
-pins the artifact address, the wasm's sha256, and the Fram commit. Both files
-are build outputs and are not tracked; `scripts/check-seams.mjs` re-derives the
-hash and refuses a wasm that does not match its own provenance.
+pins the source mode and commit, the native-build input-manifest digest, the
+artifact address, and the Wasm's SHA-256. Both files are build outputs and are
+not tracked; `scripts/check-seams.mjs` re-derives the hash and refuses a Wasm
+that does not match its own provenance.
 
 ## Use it
 
@@ -222,10 +223,12 @@ It SKIPs cleanly when Bun, Miniflare, or the wasi compiler is absent.
 
 `capacity/run-gate.sh` builds the current `libfram.wasm`, makes Wrangler emit
 the deployment-shaped Worker bundle, and loads the fixed wiki-shaped corpus
-through workerd. The functional process tree runs in a Linux cgroup with an
-exact 128 MiB memory ceiling and swap disabled. The Bun/Miniflare controller
-stays outside that cgroup; the real workerd process and all descendants are in
-it:
+through workerd. It refuses a supplied `FRAM_DO_WASM_ARTIFACT` and a dirty
+source tree, so its receipt binds the exact source commit, native-build input
+manifest, and emitted Wasm digest. The functional process tree runs in a Linux
+cgroup with an exact 128 MiB memory ceiling and swap disabled. The
+Bun/Miniflare controller stays outside that cgroup; the real workerd process
+and all descendants are in it:
 
 ```sh
 $ bun run capacity
@@ -238,7 +241,16 @@ also enforce Wrangler's 64 MiB pre-compression limit.
 The deterministic receipt is `capacity/out/receipt.json`. It reports Wrangler's
 displayed upload totals, hashes and exact byte sizes for emitted modules, guest
 linear-memory high-water, and the kernel's peak for the whole workerd runtime
-process tree. The process-tree row is deliberately stricter than an
+process tree. The receipt keeps Wasm linear-memory capacity separate from
+kernel cgroup-charged process-tree memory; neither is mislabeled as production
+isolate RSS. It records the loaded and reopened Wasm sizes separately and gates
+their conservative sum because workerd does not expose old-instance collection
+timing during recycle/reopen. The Worker also reports the exact FRAM engine
+memory budget and guest-arena sizing it observed at runtime. The tracked profile
+uses a 64 MiB engine budget and eight-page arena growth so FRAM compacts before
+an allocation spike can consume the isolate ceiling. That budget is an engine
+control, not a claim that the Worker fits: the full cgroup row must still pass.
+The process-tree row is deliberately stricter than an
 isolate-only limit, but it is not a measurement of Cloudflare production
 isolate accounting. The receipt is capacity evidence only: it does not prove a
 release, Access policy, production identity, an admin path, or backup/restore

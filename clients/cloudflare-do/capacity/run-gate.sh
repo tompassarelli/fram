@@ -38,10 +38,22 @@ die() {
   exit 2
 }
 
+assert_source_unchanged() {
+  [[ "$(git -C "$repo" rev-parse 'HEAD^{commit}')" == "$source_commit" ]] ||
+    die "the source commit changed during the capacity run"
+  [[ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]] ||
+    die "the source tree changed during the capacity run"
+}
+
 case "$plan" in
   free|paid) ;;
   *) die "FRAM_CF_CAPACITY_PLAN must be free or paid" ;;
 esac
+[[ -z "${FRAM_DO_WASM_ARTIFACT:-}" ]] ||
+  die "the certifying gate refuses FRAM_DO_WASM_ARTIFACT; build current source"
+[[ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]] ||
+  die "the certifying gate requires a clean source tree"
+source_commit="$(git -C "$repo" rev-parse 'HEAD^{commit}')"
 [[ -f /sys/fs/cgroup/cgroup.controllers ]] ||
   die "cgroup v2 is required for the enforced memory row"
 uid="$(id -u)"
@@ -56,6 +68,15 @@ bun_binary="$(command -v bun)"
 cd "$client"
 bun install --frozen-lockfile
 "$client/scripts/build-wasm.sh"
+assert_source_unchanged
+provenance_source="$(
+  "$bun_binary" -e '
+    const provenance = await Bun.file(process.argv[1]).json();
+    process.stdout.write(provenance.sourceCommit ?? "");
+  ' "$client/lib/provenance.json"
+)"
+[[ "$provenance_source" == "$source_commit" ]] ||
+  die "wasm provenance does not identify the gated source commit"
 direnv exec "$repo" bb -cp "$repo/out" \
   "$here/generate-wiki-corpus.clj" "$scratch/corpus" "$here/corpus.json"
 
@@ -93,7 +114,7 @@ MINIFLARE_WORKERD_PATH="$here/workerd-cgroup-wrapper.sh" \
 FRAM_CF_REAL_WORKERD="$real_workerd" \
 FRAM_CF_CGROUP_LOCATOR="$scratch/cgroup.locator" \
 timeout 600 "$bun_binary" "$here/run-workerd.mjs" \
-  "$scratch/corpus" "$scratch/functional.json" \
+  "$scratch/corpus" "$scratch/functional.json" "$scratch/progress.json" \
   >"$scratch/workerd.log" 2>&1
 functional_status=$?
 set -e
@@ -108,21 +129,36 @@ workerd_cgroup="$candidate_cgroup"
 [[ -d "$workerd_cgroup" ]] || die "the workerd cgroup disappeared before measurement"
 peak="$(<"$workerd_cgroup/memory.peak")"
 oom_kills="$(awk '$1 == "oom_kill" { print $2 }' "$workerd_cgroup/memory.events")"
-result=success
+remaining_processes="$(awk 'NF { count += 1 } END { print count + 0 }' \
+  "$workerd_cgroup/cgroup.procs")"
+memory_result=not-oom-killed
 if [[ "${oom_kills:-0}" != 0 ]]; then
-  result=oom-kill
-elif [[ "$functional_status" != 0 ]]; then
-  result=exit-code
+  memory_result=oom-kill
 fi
 printf '%s\n' \
-  "Result=$result" \
-  "ExecMainStatus=$functional_status" \
+  "Scope=workerd-process-tree-only" \
+  "MemoryResult=$memory_result" \
+  "MemoryOomKills=${oom_kills:-0}" \
+  "ControllerExitStatus=$functional_status" \
+  "ProcessesRemainingAfterController=$remaining_processes" \
   "MemoryPeak=$peak" \
   "MemoryMax=$(<"$workerd_cgroup/memory.max")" \
   "MemorySwapMax=$(<"$workerd_cgroup/memory.swap.max")" \
   >"$scratch/cgroup.properties"
-if [[ "$(<"$workerd_cgroup/cgroup.procs")" != "" ]]; then
-  die "workerd left a process in its capacity cgroup"
+if [[ "$remaining_processes" != 0 ]]; then
+  if [[ -f "$workerd_cgroup/cgroup.kill" ]]; then
+    printf '1\n' >"$workerd_cgroup/cgroup.kill"
+  else
+    while read -r process; do
+      [[ -n "$process" ]] && kill -TERM "$process" 2>/dev/null || true
+    done <"$workerd_cgroup/cgroup.procs"
+  fi
+  for _ in $(seq 1 50); do
+    [[ ! -s "$workerd_cgroup/cgroup.procs" ]] && break
+    sleep 0.1
+  done
+  [[ ! -s "$workerd_cgroup/cgroup.procs" ]] ||
+    die "workerd processes survived capacity cleanup"
 fi
 rmdir "$workerd_cgroup"
 workerd_cgroup=""
@@ -131,8 +167,11 @@ if [[ ! -s "$scratch/functional.json" ]]; then
   "$bun_binary" "$here/write-functional-failure.mjs" \
     "$scratch/corpus/profile.json" \
     "$scratch/cgroup.properties" \
+    "$scratch/progress.json" \
     "$scratch/functional.json"
 fi
+
+assert_source_unchanged
 
 set +e
 "$bun_binary" "$here/assemble-receipt.mjs" \
@@ -149,6 +188,7 @@ set -e
 cp "$scratch/receipt.json" "$output/receipt.json"
 cp "$scratch/functional.json" "$output/functional.json"
 cp "$scratch/cgroup.properties" "$output/cgroup.properties"
+cp "$scratch/progress.json" "$output/progress.json"
 cp "$scratch/wrangler.log" "$output/wrangler.log"
 cp "$scratch/workerd.log" "$output/workerd.log"
 cp "$scratch/wrangler-metafile.json" "$output/wrangler-metafile.json"

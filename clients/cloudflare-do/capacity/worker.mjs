@@ -2,6 +2,7 @@
 // A deployment-shaped Worker used only by the repeatable capacity gate.
 import framModule from "../lib/libfram.wasm";
 import { FramDurableObjectBase, hex } from "../src/adapter.mjs";
+import { CAPACITY_RUNTIME_CONFIGURATION } from "./config.mjs";
 
 const OBJECT_NAME = "fram-wiki-capacity-v1";
 const SPACE_ID = "fram-wiki-capacity-v1";
@@ -20,7 +21,13 @@ export class CapacityFram extends FramDurableObjectBase {
       logLabel: "cloudflare-capacity",
       instance: {
         nowMs: () => 1700000000000,
-        arena: { initialPages: 128 },
+        memoryBudgetBytes:
+          CAPACITY_RUNTIME_CONFIGURATION.engineMemoryBudgetBytes,
+        arena: {
+          initialPages:
+            CAPACITY_RUNTIME_CONFIGURATION.guestArenaInitialPages,
+          growPages: CAPACITY_RUNTIME_CONFIGURATION.guestArenaGrowPages,
+        },
       },
     });
   }
@@ -50,7 +57,11 @@ export class CapacityFram extends FramDurableObjectBase {
       }
       if (url.pathname === "/stats") {
         const instance = await this.fram();
-        return json({ engine: instance.stats(), storage: this.store.stats() });
+        return json({
+          engine: instance.stats(),
+          storage: this.store.stats(),
+          runtimeConfiguration: CAPACITY_RUNTIME_CONFIGURATION,
+        });
       }
       if (url.pathname === "/recycle") {
         const before = this.instance?.stats() ?? null;
