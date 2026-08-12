@@ -10,6 +10,6 @@
   [PASS] (c) :nearest names parse-cookies
   [PASS] (d) clean ->> stage NOT flagged as arity
   [PASS] (d) untyped source detected as untyped
-  [PASS] (d) typed source NOT treated as untyped — typed -> routes to sidecar type-checker (unchanged)
+  [PASS] (d) Beagle source NOT treated as untyped — the language header routes inferred Beagle to the sidecar
 
 === 13/13 checks passed ===

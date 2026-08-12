@@ -3,9 +3,9 @@
             [clojure.string :as str]
             [resolve-core :as resolve-core]))
 
-(def ^:private parameter-heads
-  #{"defn" "defn-" "defmacro"})
-(def ^:private type-colons #{":-" ":"})
+(def ^:private executable-heads #{"defn" "defn-"})
+(def ^:private macro-heads #{"defmacro"})
+(def ^:private value-heads #{"def" "def-" "defonce"})
 (def ^:private max-edits 32)
 (def ^:private source-meta-keys
   [:line :column :end-line :end-column :file])
@@ -152,7 +152,8 @@
   (let [index (object-index facts)
         edges (ordered-edges facts definition)
         anchor
-        (if (contains? parameter-heads head)
+        (if (or (contains? executable-heads head)
+                (contains? macro-heads head))
           (some (fn [[i node]] (when (brackets? facts index node) i))
                 (map-indexed vector children))
           (some (fn [[i node]]
@@ -161,10 +162,36 @@
     (when (nil? anchor)
       (reject! :definition-shape "definition has no body anchor"
                {:definition definition :name name}))
-    (let [typed? (contains? type-colons
-                            (symbol-value index (nth children (inc anchor) nil)))
-          body-start (+ anchor (if typed? 3 1))
-          body (subvec edges body-start)]
+    (let [after-return (+ anchor 2)
+          raises? (and (contains? executable-heads head)
+                       (= ":raises"
+                          (symbol-value index
+                                        (nth children after-return nil))))
+          body-start (cond
+                       (contains? executable-heads head)
+                       (+ anchor (if raises? 4 2))
+
+                       (contains? macro-heads head)
+                       (inc anchor)
+
+                       (contains? value-heads head)
+                       (dec (count edges))
+
+                       :else
+                       (reject! :definition-shape
+                                "definition kind has no replaceable body"
+                                {:definition definition :name name :head head}))
+          _ (when (or (and (contains? executable-heads head)
+                           (nil? (nth children (inc anchor) nil)))
+                      (and raises?
+                           (nil? (nth children (inc after-return) nil)))
+                      (>= body-start (count edges)))
+              (reject! :definition-shape
+                       "definition has no complete signature and body"
+                       {:definition definition :name name :head head}))
+          body (if (contains? value-heads head)
+                 (subvec edges body-start (inc body-start))
+                 (subvec edges body-start))]
       (when (empty? body)
         (reject! :definition-shape "definition has no body edges"
                  {:definition definition :name name}))

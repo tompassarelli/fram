@@ -644,13 +644,11 @@
             "; 1 text seg minted)"))))))
 
 ;; ---------------------------------------------------------------------------
-;; set-body — replace a def/defn's body with a freshly-minted body datum.
-;; Handles BOTH shapes: a defn (`(defn f [params] -> R body…)`), where the body
-;; follows the [param] vector, AND a plain value-def (`(def x: T val)` /
-;; `defonce`), where the body is the single value form that follows the NAME. The
-;; two are symmetric under `ret?` (an optional `:- T` return/type annotation): the
-;; only difference is the ANCHOR slot the body starts after — the param bracket
-;; for a defn, the name for a value-def. (The old PARAM-FORMS gate rejected every
+;; set-body — replace a definition's body with a freshly-minted datum.
+;; Executable bodies follow `[params] Return`, or `[params] Return :raises Error`;
+;; macro bodies follow the parameter vector directly. A value def's body is its
+;; final meaningful slot, after any positional type and docstring. (The old
+;; PARAM-FORMS gate rejected every
 ;; js/export-wrapped value-def with code 5, so "add a field to this map" was
 ;; unauthorable — the duel's F021–F024 failure.)
 ;; ---------------------------------------------------------------------------
@@ -667,17 +665,16 @@
       (when (or (nil? form) (not (contains? rc/VALUE-DEFS (str (rr/head-sym ctx view d)))))
         (warn (str "REJECTED — `" name "` is not a def/defn with a body in \"" scope "\" (set-body needs a value binding; no facts mutated)."))
         (reject 5))
-      (let [fnf (:fn-facts v) mint (:mint v) kids (vec (fnf d)) param? (contains? rc/PARAM-FORMS (str (rr/head-sym ctx view d))) anchor-n (nn (if param? (some (fn
-                                                                                                                                                                 [(e Any)] Any (when (rb/brackets? ctx view (nn (enode e))) (ekey e))) kids) (some (fn
-                                                                                                                                                                                                                                                         [(e Any)] Any (when (= name (rr/sym-val ctx view (rr/unwrap-meta ctx view (nn (enode e))))) (ekey e))) kids))) ret? (some (fn
-                                                                                                                                                                                                                                                                                                                                                                                         [(e Any)] Any (when (and (= (ekey e) (+ anchor-n 1)) (contains? rc/TYPE-COLON (str (rr/sym-val ctx view (nn (enode e)))))) true)) kids) body-start (+ anchor-n (if (some? ret?) 3 1)) body-slots (vec (filter (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             [(e Any)] Bool (>= (nn (ekey e)) body-start)) kids)) new-root (mint src datum)]
+      (let [fnf (:fn-facts v) mint (:mint v) kids (vec (fnf d)) head (str (rr/head-sym ctx view d)) param? (contains? rc/PARAM-FORMS head) anchor-edge (if param? (some (fn
+                                                                                                                                                                       [(e Any)] Any (when (rb/brackets? ctx view (nn (enode e))) e)) kids) (some (fn
+                                                                                                                                                                                                                                                     [(e Any)] Any (when (= name (rr/sym-val ctx view (rr/unwrap-meta ctx view (nn (enode e))))) e)) kids)) anchor-n (if (some? anchor-edge) (ekey anchor-edge) -1) forms (if (and param? (>= anchor-n 0)) (mapv enode (filter (fn [(e Any)] Bool (>= (ekey e) anchor-n)) kids)) []) sig (when param? (rb/signature-tail ctx view forms (= "defmacro" head))) first-body (when param? (first (:body sig))) body-start (if param? (some (fn [(e Any)] Any (when (= first-body (enode e)) (ekey e))) kids) (when (seq kids) (ekey (last kids)))) body-start-n (nn (if (nil? body-start) -1 body-start)) body-slots (if (< body-start-n 0) [] (if param? (vec (filter (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             [(e Any)] Bool (>= (nn (ekey e)) body-start-n)) kids)) (vec (filter (fn [(e Any)] Bool (= (ekey e) body-start-n)) kids)))) new-root (mint src datum)]
         (when (= 0 (count body-slots))
           (warn (str "REJECTED — `" name "` has no body fN edges to replace; no facts mutated."))
           (reject 5))
         (let [retire (:retire v) emit (:emit v)]
           (doseq [(e Any) body-slots] (retire (ecid e)))
-          (ri/assert! ctx (nn d) (str "f" body-start) (nn new-root))
+          (ri/assert! ctx (nn d) (str "f" body-start-n) (nn new-root))
           (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
           (emit "set-body"
             (str "replaced body of `"

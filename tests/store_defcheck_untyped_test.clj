@@ -13,7 +13,8 @@
 ;;   (c) a def calling an own-def with the WRONG arity is REJECTED with
 ;;       :kind "arity-mismatch", :expected/:got arities, :nearest naming the def.
 ;;   (d) arity is NOT falsely flagged through a threading macro (->>), and
-;;       DISPATCH: a TYPED Beagle module (has `:-`) is NOT treated as untyped
+;;       DISPATCH: a `#lang beagle` module is NOT treated as untyped, even when
+;;       all of its bindings are inferred,
 ;;       (routes to the typed sidecar path — unchanged) while an untyped one is.
 ;;
 ;; Run:  clojure -M tests/store_defcheck_untyped_test.clj ; echo EXIT=$?
@@ -57,7 +58,7 @@
 (def undef-src   (str clean-src "\n(defn broken [r] (parse-cookiez r nil))\n"))   ; typo of parse-cookies
 (def arity-src   (str clean-src "\n(defn broken [r] (parse-cookies r nil :extra))\n")) ; expects 2, given 3
 (def typed-src
-  (str "#lang beagle/clj\n(ns gw.d)\n(defn f [x :- Int] :- Int (+ x 1))\n"))
+  (str "#lang beagle/clj\n(ns gw.d)\n(defn f [x] Int (+ x 1))\n"))
 
 ;; --- (a) clean ---------------------------------------------------------------
 (let [errs (analyze "cookies" clean-src)]
@@ -86,8 +87,8 @@
 ;; --- (d) no false arity through ->> + dispatch -------------------------------
 (check! "(d) clean ->> stage NOT flagged as arity" (empty? (filter #(= "arity-mismatch" (:kind %)) (analyze "cookies" clean-src))))
 (check! "(d) untyped source detected as untyped"   (true? (boolean (untyped? clean-src))))
-(check! "(d) typed source NOT treated as untyped"  (false? (boolean (untyped? typed-src)))
-        "typed -> routes to sidecar type-checker (unchanged)")
+(check! "(d) Beagle source NOT treated as untyped" (false? (boolean (untyped? typed-src)))
+        "the language header routes inferred Beagle to the sidecar")
 
 ;; --- summary -----------------------------------------------------------------
 (let [fails (remove second @results)]

@@ -96,7 +96,7 @@ corpus-store-frame-residue	parse-require	292	verb-env	-
 corpus-store-frame-residue	module-exports	293	-	-
 corpus-store-frame-residue	module-types	295	re-resolve!	-
 corpus-store-frame-residue	module-accessors	296	re-resolve!	-
-corpus-store-frame-residue	srcs	304	-main,author-emit!,binding-privacy,call-edges,corpus-state,emit-srcs,import-graph,install-warm-corpus!,re-resolve!,run-verb-warm!,scope->srcs,verb-env,walk-corpus,with-corpus-state!	~/code/fram/coord_daemon.clj=12,~/code/fram/tests/coord_bound_identity_coldrestart_receipt.clj=1,~/code/fram/tests/store_colon_marker_roundtrip_test.clj=1,~/code/fram/tests/store_delete_reorder_test.clj=3
+corpus-store-frame-residue	srcs	304	-main,author-emit!,binding-privacy,call-edges,corpus-state,emit-srcs,import-graph,install-warm-corpus!,re-resolve!,run-verb-warm!,scope->srcs,verb-env,walk-corpus,with-corpus-state!	~/code/fram/coord_daemon.clj=12,~/code/fram/tests/coord_bound_identity_coldrestart_receipt.clj=1,~/code/fram/tests/store_structured_binding_roundtrip_test.clj=1,~/code/fram/tests/store_delete_reorder_test.clj=3
 corpus-store-frame-residue	file-modframe	305	call-edges,def-binding,install-corpus-tables!,verb-env,walk-corpus,with-corpus-state!	~/code/fram/coord_daemon.clj=2,~/code/fram/tests/coord_bound_identity_coldrestart_receipt.clj=1
 corpus-store-frame-residue	file-typeframe	306	def-binding,install-corpus-tables!,verb-env,walk-corpus,with-corpus-state!	~/code/fram/coord_daemon.clj=2
 corpus-store-frame-residue	file-accessors	307	install-corpus-tables!,walk-corpus,with-corpus-state!	~/code/fram/coord_daemon.clj=2
@@ -120,7 +120,7 @@ extract-emit-residue	structural-kids	555-561	descendants	-
 extract-emit-residue	descendants	562-567	emit-env,verb-env	-
 extract-emit-residue	form-for-victim	568-573	verb-env	~/code/fram/coord_daemon.clj=1,~/code/fram/tests/store_delete_reorder_test.clj=3
 extract-emit-residue	emit-env	579-581	extract-file!	-
-extract-emit-residue	extract-file!	582-585	-main,author-emit!,author-emit-scoped!,verb-env	~/code/fram/coord_daemon.clj=2,~/code/fram/tests/store_colon_marker_roundtrip_test.clj=1,~/code/fram/tests/store_delete_reorder_test.clj=1
+extract-emit-residue	extract-file!	582-585	-main,author-emit!,author-emit-scoped!,verb-env	~/code/fram/coord_daemon.clj=2,~/code/fram/tests/store_structured_binding_roundtrip_test.clj=1,~/code/fram/tests/store_delete_reorder_test.clj=1
 extract-emit-residue	*resolve-out*	592	out-path,run-verb-warm!	-
 extract-emit-residue	out-path	593-594	-main,author-emit!,author-emit-scoped!,extract-file!,verb-env	-
 extract-emit-residue	*project-srcs*	645	emit-srcs,run-verb-warm!	-
@@ -129,7 +129,7 @@ extract-emit-residue	*capture-only?*	655	author-emit-scoped!,verb-env	~/code/fra
 extract-emit-residue	author-emit-scoped!	657-663	verb-env	-
 extract-emit-residue	scope-match?	676-678	scope->srcs	-
 extract-emit-residue	scope->srcs	679	verb-env	-
-other	*reject!*	59	verb-env	~/code/fram/coord_daemon.clj=1,~/code/fram/tests/store_colon_marker_roundtrip_test.clj=1,~/code/fram/tests/store_delete_reorder_test.clj=2
+other	*reject!*	59	verb-env	~/code/fram/coord_daemon.clj=1,~/code/fram/tests/store_structured_binding_roundtrip_test.clj=1,~/code/fram/tests/store_delete_reorder_test.clj=2
 other	named-def-head?	184-185	-	-
 other	extend-method-form?	202-206	extend-target-lint	-
 other	extend-target-lint	207-218	-	~/code/fram/coord_daemon.clj=1
@@ -158,7 +158,7 @@ dynamic_vars[39]{name,qualified_refs,binding_sites,sites}
 *deleted-forms*	0	0	-
 *deleted-subtree*	0	0	-
 *project-srcs*	0	0	-
-*reject!*	4	4	~/code/fram/coord_daemon.clj:q1/b1,~/code/fram/tests/store_colon_marker_roundtrip_test.clj:q1/b1,~/code/fram/tests/store_delete_reorder_test.clj:q2/b2
+*reject!*	4	4	~/code/fram/coord_daemon.clj:q1/b1,~/code/fram/tests/store_structured_binding_roundtrip_test.clj:q1/b1,~/code/fram/tests/store_delete_reorder_test.clj:q2/b2
 *resolve-out*	0	0	-
 *resolve-walk?*	5	5	~/code/fram/coord_daemon.clj:q1/b1,~/code/fram/tests/coord_gate_feasibility.clj:q2/b2,~/code/fram/tests/coord_ksweep.clj:q2/b2
 *tresolve*	0	0	-
@@ -187,7 +187,7 @@ n-resolved	0	0	-
 n-type	0	0	-
 n-unresolved	0	0	-
 n-xmod	0	0	-
-srcs	17	1	~/code/fram/coord_daemon.clj:q12/b1,~/code/fram/tests/coord_bound_identity_coldrestart_receipt.clj:q1/b0,~/code/fram/tests/store_colon_marker_roundtrip_test.clj:q1/b0,~/code/fram/tests/store_delete_reorder_test.clj:q3/b0
+srcs	17	1	~/code/fram/coord_daemon.clj:q12/b1,~/code/fram/tests/coord_bound_identity_coldrestart_receipt.clj:q1/b0,~/code/fram/tests/store_structured_binding_roundtrip_test.clj:q1/b0,~/code/fram/tests/store_delete_reorder_test.clj:q3/b0
 tx	1	1	~/code/fram/coord_daemon.clj:q1/b1
 walked-modules	2	0	~/code/fram/coord_daemon.clj:q2/b0
 ```

@@ -150,7 +150,7 @@ exclude	removed-flat-log	tests/show_reporter_join_test.clj	tests/show_reporter_j
 exclude	removed-flat-log	tests/slow_read_attribution_test.clj	tests/slow_read_attribution_test.clj#coordination\.log
 exclude	removed-flat-log	tests/snapshot_retention_test.clj	tests/snapshot_retention_test.clj#coordination\.log
 exclude	moved-graph-control	tests/store_anchor_disambig_test.clj	tests/store_anchor_disambig_test.clj#replace-in-body
-exclude	moved-graph-control	tests/store_colon_marker_roundtrip_test.clj	tests/store_colon_marker_roundtrip_test.clj#graph.?author
+exclude	moved-graph-control	tests/store_structured_binding_roundtrip_test.clj	tests/store_structured_binding_roundtrip_test.clj#graph.?author
 exclude	moved-graph-control	tests/store_defcheck_test.clj	tests/store_defcheck_test.clj#graph.?author
 exclude	moved-graph-control	tests/store_delete_reorder_test.clj	tests/store_delete_reorder_test.clj#out/resolve\.clj
 exclude	removed-flat-store	tests/store_domain_test.clj	tests/store_domain_test.clj#c/entity!

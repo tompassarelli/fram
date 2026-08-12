@@ -1,4 +1,4 @@
-[:mode {:typed-source? true, :plain-source? false, :typed-routes-untyped? false, :plain-routes-untyped? true}]
+[:mode {:typed-source? true, :inferred-beagle-source? true, :plain-source? false, :typed-routes-untyped? false, :plain-routes-untyped? true}]
 [:diag {:nearest ["helper"], :stage :type, :suggestion "return a String", :error-code "return-type", :got "Int", :ok false, :kind "type-error", :at {:module "demo", :def "broken", :line 17}, :expected "String", :message "expected String"}]
 [:diag-parse {:ok false, :stage :parse, :at {:module "demo", :line 3}, :message "bad form", :kind "parse-error"}]
 [:primary {:at {:def "wanted"}, :message "preferred"}]

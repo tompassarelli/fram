@@ -19,11 +19,15 @@
 (def arity-src
   (str clean-src "(defn broken [x] (helper x x))\n"))
 (def typed-src
-  "#lang beagle/clj\n(ns demo.typed)\n(defn f [x :- Int] :- Int (+ x 1))\n")
+  "#lang beagle/clj\n(ns demo.typed)\n(defn f [(x Int)] Int (+ x 1))\n")
+
+(def inferred-beagle-src
+  "#lang beagle/clj\n(ns demo.inferred)\n(defn f [x] Int (+ x 1))\n")
 
 (emit :mode
-      {:typed-source? ((f 'source-typed?) typed-src)
-       :plain-source? ((f 'source-typed?) clean-src)
+      {:typed-source? ((f 'beagle-source?) typed-src)
+       :inferred-beagle-source? ((f 'beagle-source?) inferred-beagle-src)
+       :plain-source? ((f 'beagle-source?) clean-src)
        :typed-routes-untyped? ((f 'untyped-mode?) typed-src)
        :plain-routes-untyped? ((f 'untyped-mode?) clean-src)})
 
