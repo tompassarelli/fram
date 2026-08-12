@@ -305,11 +305,12 @@ or more for `multi`; zero desired single values clear the cell. Duplicate
 desired Terms are asserted once.
 Every existing occurrence is retracted, including duplicate equal
 propositions. When `allowedCurrent` is present, the current occurrences must
-either be absent when the allowed set is empty, or represent exactly one
-distinct value in a nonempty allowed set. `allowedCurrent: []` is therefore an
-absence compare-and-set. `allowedCurrent` is valid only with `single`;
-multi-valued replacement has no transition guard. An exact single occurrence
-already equal to the desired single value is a no-op. Duplicate equal
+either be absent when the allowed set is empty, represent exactly one distinct
+value in a nonempty allowed set for `single`, or equal the complete
+order-insensitive distinct Term set for `multi`. `allowedCurrent: []` is
+therefore an absence compare-and-set for either cardinality. Duplicate expected
+Terms are canonicalized to the same set. An exact single occurrence already
+equal to the desired single value is a no-op. Duplicate equal
 occurrences still retract in full and collapse to one assertion. The updated
 field predicate must differ from the lookup identity predicate, which is
 immutable through this operation. Each

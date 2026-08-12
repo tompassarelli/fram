@@ -292,13 +292,6 @@ function normalizeUpdateField(value, label, identity) {
     );
   }
   const hasAllowedCurrent = own(fieldInput, 'allowedCurrent');
-  if (cardinality === 'multi' && hasAllowedCurrent) {
-    schemaError(
-      SCHEMA_ERROR_CODES.INVALID_INPUT,
-      `${label}.allowedCurrent is supported only for single cardinality`,
-      { label, cardinality },
-    );
-  }
   const allowedInput = hasAllowedCurrent
     ? fieldInput.allowedCurrent : undefined;
   if (allowedInput !== undefined && !Array.isArray(allowedInput)) {
@@ -1206,12 +1199,17 @@ export function schemaClient(fram, {
       const field = cell.field;
       if (field.allowedCurrent !== null) {
         const distinctCurrent = distinctTerms(current);
-        const accepted = field.allowedCurrent.length === 0
-          ? distinctCurrent.length === 0
-          : distinctCurrent.length === 1
-            && field.allowedCurrent.some(allowed => (
-              sameTerm(allowed, distinctCurrent[0])
-            ));
+        const accepted = field.cardinality === 'multi'
+          ? distinctCurrent.length === field.allowedCurrent.length
+            && distinctCurrent.every(currentValue => (
+              field.allowedCurrent.some(allowed => sameTerm(allowed, currentValue))
+            ))
+          : field.allowedCurrent.length === 0
+            ? distinctCurrent.length === 0
+            : distinctCurrent.length === 1
+              && field.allowedCurrent.some(allowed => (
+                sameTerm(allowed, distinctCurrent[0])
+              ));
         if (!accepted) {
           schemaError(
             SCHEMA_ERROR_CODES.CURRENT_VALUE_REJECTED,

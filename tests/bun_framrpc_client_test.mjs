@@ -316,6 +316,11 @@ async function exerciseClient(fram) {
       keywordTerm('page'),
       keywordTerm('canonical-revision'),
     );
+    const linksTo = tripleTerm(
+      keywordTerm('field'),
+      keywordTerm('page'),
+      keywordTerm('links-to'),
+    );
     const revisionSubject = tripleTerm(
       keywordTerm('entity'),
       keywordTerm('revision'),
@@ -407,6 +412,59 @@ async function exerciseClient(fram) {
     assert.deepEqual(
       (await fram.scan({ t1: subject, t2: canonicalRevision })).result,
       [tripleTerm(subject, canonicalRevision, revisionSubject)],
+    );
+
+    const linked = await schema.transactUnique({
+      updates: [{
+        identity: { predicate: slug, value: home },
+        fields: [{
+          predicate: linksTo,
+          values: [revisionSubject, authorSubject],
+          cardinality: 'multi',
+          allowedCurrent: [],
+        }],
+      }],
+      requireUnique: [
+        { subject: revisionSubject, predicate: revisionId, value: rev1 },
+        { subject: authorSubject, predicate: authorName, value: tom },
+      ],
+    });
+    assert.equal(linked.changed, true);
+    assert.deepEqual(
+      new Set((await fram.scan({ t1: subject, t2: linksTo })).result.map(JSON.stringify)),
+      new Set([
+        tripleTerm(subject, linksTo, revisionSubject),
+        tripleTerm(subject, linksTo, authorSubject),
+      ].map(JSON.stringify)),
+    );
+
+    const beforeRejectedLinks = await fram.version();
+    await assert.rejects(
+      schema.transactUnique({
+        updates: [{
+          identity: { predicate: slug, value: home },
+          fields: [
+            {
+              predicate: title,
+              values: [stringTerm('must not land')],
+              cardinality: 'single',
+              allowedCurrent: [canonicalTitle],
+            },
+            {
+              predicate: linksTo,
+              values: [authorSubject],
+              cardinality: 'multi',
+              allowedCurrent: [authorSubject],
+            },
+          ],
+        }],
+      }),
+      error => error.code === 'schema/current-value-rejected',
+    );
+    assert.equal((await fram.version()).servedVersion, beforeRejectedLinks.servedVersion);
+    assert.deepEqual(
+      (await fram.scan({ t1: subject, t2: title })).result,
+      [tripleTerm(subject, title, canonicalTitle)],
     );
 
     const beforeRejectedPublish = await fram.version();

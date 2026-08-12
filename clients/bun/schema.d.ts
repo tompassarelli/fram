@@ -75,7 +75,7 @@ export interface MultiUpdateField {
   predicate: TermInput;
   values: readonly TermInput[];
   cardinality: 'multi';
-  allowedCurrent?: never;
+  allowedCurrent?: readonly TermInput[];
 }
 
 export type UpdateField = SingleUpdateField | MultiUpdateField;

@@ -505,19 +505,93 @@ check('updateUnique rejects a missing or duplicate source before scanning or wri
   }
 });
 
-check('updateUnique rejects allowedCurrent on a multi field before I/O', async () => {
-  const fram = mockFram();
-  const schema = schemaClient(fram.client);
+check('multi allowedCurrent accepts reordered sets and duplicate occurrences', async () => {
+  const fram = mockFram({
+    versions: [81n],
+    queryResults: [[[PAGE_A]]],
+    scanResults: [[
+      tripleFixture(PAGE_A, TAG, OLD_TITLE_A),
+      tripleFixture(PAGE_A, TAG, OLD_TITLE_B),
+      tripleFixture(PAGE_A, TAG, OLD_TITLE_A),
+    ]],
+  });
+  await schemaClient(fram.client).updateUnique(updateInput({
+    predicate: TAG,
+    cardinality: 'multi',
+    values: [NEW_TITLE],
+    allowedCurrent: [OLD_TITLE_B, OLD_TITLE_A, OLD_TITLE_B],
+  }));
+
+  assertPinnedReads(fram.calls, [81n]);
+  assert.deepEqual(semanticActions(fram.calls.batch[0].actions), [
+    { op: 'retract', terms: [PAGE_A, TAG, OLD_TITLE_A] },
+    { op: 'retract', terms: [PAGE_A, TAG, OLD_TITLE_B] },
+    { op: 'retract', terms: [PAGE_A, TAG, OLD_TITLE_A] },
+    { op: 'assert', terms: [PAGE_A, TAG, NEW_TITLE] },
+  ]);
+});
+
+check('multi allowedCurrent rejects stale missing and extra values without writing', async () => {
+  const cases = [
+    [tripleFixture(PAGE_A, TAG, OLD_TITLE_A)],
+    [
+      tripleFixture(PAGE_A, TAG, OLD_TITLE_A),
+      tripleFixture(PAGE_A, TAG, OLD_TITLE_B),
+      tripleFixture(PAGE_A, TAG, WIKI_TAG),
+    ],
+  ];
+  for (const [index, current] of cases.entries()) {
+    const version = 82n + BigInt(index);
+    const fram = mockFram({
+      versions: [version],
+      queryResults: [[[PAGE_A]]],
+      scanResults: [current],
+    });
+    await assert.rejects(
+      schemaClient(fram.client).updateUnique(updateInput({
+        predicate: TAG,
+        cardinality: 'multi',
+        values: [NEW_TITLE],
+        allowedCurrent: [OLD_TITLE_A, OLD_TITLE_B],
+      })),
+      error => error instanceof SchemaConstraintError
+        && error.code === 'schema/current-value-rejected',
+    );
+    assertPinnedReads(fram.calls, [version]);
+    assert.equal(fram.calls.batch.length, 0);
+  }
+});
+
+check('multi allowedCurrent empty set accepts only an empty current cell', async () => {
+  const accepted = mockFram({
+    versions: [84n],
+    queryResults: [[[PAGE_A]]],
+    scanResults: [[]],
+  });
+  await schemaClient(accepted.client).updateUnique(updateInput({
+    predicate: TAG,
+    cardinality: 'multi',
+    values: [NEW_TITLE],
+    allowedCurrent: [],
+  }));
+  assert.equal(accepted.calls.batch.length, 1);
+
+  const rejected = mockFram({
+    versions: [85n],
+    queryResults: [[[PAGE_A]]],
+    scanResults: [[tripleFixture(PAGE_A, TAG, OLD_TITLE_A)]],
+  });
   await assert.rejects(
-    schema.updateUnique(updateInput({
+    schemaClient(rejected.client).updateUnique(updateInput({
+      predicate: TAG,
       cardinality: 'multi',
-      values: [],
-      allowedCurrent: [OLD_TITLE_A],
+      values: [NEW_TITLE],
+      allowedCurrent: [],
     })),
     error => error instanceof SchemaConstraintError
-      && error.code === 'schema/invalid-input',
+      && error.code === 'schema/current-value-rejected',
   );
-  assertNoIo(fram.calls);
+  assert.equal(rejected.calls.batch.length, 0);
 });
 
 check('updateUnique rejects a field predicate equal to its identity predicate before I/O', async () => {
@@ -1435,6 +1509,89 @@ check('transactUnique mixes create and update while zero desired single values c
     { op: 'assert', terms: [PAGE_C, TAG, PAGE_A] },
     { op: 'retract', terms: [PAGE_A, TITLE, OLD_TITLE_A] },
   ]);
+});
+
+check('transactUnique composes an exact multi-set guard with required Ref identities', async () => {
+  const fram = mockFram({
+    versions: [172n],
+    queryResults: [[[PAGE_A]], [[PAGE_B]], [[PAGE_C]]],
+    scanResults: [[
+      tripleFixture(PAGE_A, TAG, PAGE_C),
+      tripleFixture(PAGE_A, TAG, PAGE_B),
+    ]],
+  });
+  const result = await schemaClient(fram.client).transactUnique({
+    updates: [{
+      identity: { predicate: SLUG, value: HOME },
+      fields: [{
+        predicate: TAG,
+        values: [PAGE_B],
+        cardinality: 'multi',
+        allowedCurrent: [PAGE_B, PAGE_C],
+      }],
+    }],
+    requireUnique: [
+      { subject: PAGE_B, predicate: AUTHOR_EMAIL, value: ALICE_EMAIL },
+      { subject: PAGE_C, predicate: REVISION_ID, value: REV_1 },
+    ],
+  });
+
+  assert.deepEqual(result.updatedSubjects, [PAGE_A]);
+  assertPinnedReads(fram.calls, [172n]);
+  assert.equal(fram.calls.batch[0].options.expectedVersion, 172n);
+  assert.deepEqual(semanticActions(fram.calls.batch[0].actions), [
+    { op: 'retract', terms: [PAGE_A, TAG, PAGE_C] },
+    { op: 'retract', terms: [PAGE_A, TAG, PAGE_B] },
+    { op: 'assert', terms: [PAGE_A, TAG, PAGE_B] },
+  ]);
+});
+
+check('transactUnique multi-set or target identity failure has zero partial effects', async () => {
+  const staleSet = mockFram({
+    versions: [173n],
+    queryResults: [[[PAGE_A]], [[PAGE_B]]],
+    scanResults: [[tripleFixture(PAGE_A, TAG, PAGE_B)]],
+  });
+  await assert.rejects(
+    schemaClient(staleSet.client).transactUnique({
+      updates: [{
+        identity: { predicate: SLUG, value: HOME },
+        fields: [{
+          predicate: TAG,
+          values: [PAGE_B],
+          cardinality: 'multi',
+          allowedCurrent: [PAGE_B, PAGE_C],
+        }],
+      }],
+      requireUnique: [requiredAuthor()],
+    }),
+    error => error instanceof SchemaConstraintError
+      && error.code === 'schema/current-value-rejected',
+  );
+  assert.equal(staleSet.calls.batch.length, 0);
+
+  const missingTarget = mockFram({
+    versions: [174n],
+    queryResults: [[[PAGE_A]], []],
+  });
+  await assert.rejects(
+    schemaClient(missingTarget.client).transactUnique({
+      updates: [{
+        identity: { predicate: SLUG, value: HOME },
+        fields: [{
+          predicate: TAG,
+          values: [PAGE_B],
+          cardinality: 'multi',
+          allowedCurrent: [],
+        }],
+      }],
+      requireUnique: [requiredAuthor()],
+    }),
+    error => error instanceof SchemaConstraintError
+      && error.code === 'schema/required-identity-missing',
+  );
+  assert.equal(missingTarget.calls.scan.length, 0);
+  assert.equal(missingTarget.calls.batch.length, 0);
 });
 
 check('an already-empty single clear is an update-only transaction no-op', async () => {
