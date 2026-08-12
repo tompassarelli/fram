@@ -18,25 +18,25 @@
 
 (require clojure.string :as str)
 
-(def space-id: String "codegraph")
+(def space-id String "codegraph")
 
 ;; The fact stream's own ids are the store's node terms: the kernel accepts any
 ;; Atom, so a line becomes a proposition with nothing minted or remapped.
-(defn line->operation [line: String] -> Any
+(defn line->operation [(line String)] Any
   (let [trip (edn/read-string line)]
     (c/assert-operation (t/triple (nth trip 0) (nth trip 1) (nth trip 2)))))
 
-(defn propositions-of [ctx: Any node: Any] -> (Vec Any)
-  (filterv (fn [p: Any] -> Bool (= node (t/triple-t1 p)))
+(defn propositions-of [(ctx Any) (node Any)] (Vec Any)
+  (filterv (fn [(p Any)] Bool (= node (t/triple-t1 p)))
     (c/live-propositions ctx)))
 
-(defn sym? [ctx: Any node: Any] -> Bool
-  (pos? (count (filterv (fn [p: Any] -> Bool
+(defn sym? [(ctx Any) (node Any)] Bool
+  (pos? (count (filterv (fn [(p Any)] Bool
                           (and (= "kind" (t/triple-t2 p)) (= "symbol" (t/triple-t3 p))))
                  (propositions-of ctx node)))))
 
-(defn first-sym-value-proposition [ctx: Any old-name: String] -> Any
-  (let [hits (filterv (fn [p: Any] -> Bool
+(defn first-sym-value-proposition [(ctx Any) (old-name String)] Any
+  (let [hits (filterv (fn [(p Any)] Bool
                         (and (= "v" (t/triple-t2 p))
                           (and (= old-name (t/triple-t3 p)) (sym? ctx (t/triple-t1 p)))))
                (c/live-propositions ctx))]
@@ -44,47 +44,47 @@
 
 ;; An occurrence coordinate is ((space "tx-sequence" seq) "op-ordinal" ordinal);
 ;; render it as space/sequence#ordinal so a report line stays one line.
-(defn occurrence-label [occurrence: Any] -> String
+(defn occurrence-label [(occurrence Any)] String
   (let [transaction (t/triple-t1 occurrence)]
     (str (t/triple-t1 transaction) "/" (t/triple-t3 transaction) "#" (t/triple-t3 occurrence))))
 
-(defn proposition-label [proposition: Any] -> String
+(defn proposition-label [(proposition Any)] String
   (str "(" (t/triple-t1 proposition)
     " " (pr-str (t/triple-t2 proposition))
     " " (pr-str (t/triple-t3 proposition)) ")"))
 
-(defn assertion-occurrence-of [events: (Vec Any) proposition: Any] -> Any
-  (let [hits (filterv (fn [e: Any] -> Bool
+(defn assertion-occurrence-of [(events (Vec Any)) (proposition Any)] Any
+  (let [hits (filterv (fn [(e Any)] Bool
                         (and (= t/asserts (t/triple-t2 e)) (= proposition (t/triple-t3 e))))
                events)]
     (if (empty? hits) nil (t/triple-t1 (nth hits 0)))))
 
-(defn withdrawal-of [ctx: Any occurrence: Any] -> Any
-  (let [hits (filterv (fn [w: Any] -> Bool (= occurrence (t/triple-t3 w)))
+(defn withdrawal-of [(ctx Any) (occurrence Any)] Any
+  (let [hits (filterv (fn [(w Any)] Bool (= occurrence (t/triple-t3 w)))
                (c/withdrawal-triples ctx))]
     (if (empty? hits) nil (nth hits 0))))
 
-(defn live-occurrence? [ctx: Any occurrence: Any] -> Bool
-  (pos? (count (filterv (fn [e: Any] -> Bool (= occurrence (t/triple-t1 e)))
+(defn live-occurrence? [(ctx Any) (occurrence Any)] Bool
+  (pos? (count (filterv (fn [(e Any)] Bool (= occurrence (t/triple-t1 e)))
                  (c/live-occurrences ctx)))))
 
-(defn -main [& args] -> Nil
-  (let [ctx: Any (c/new-term-store space-id)
-        lines: (Vec String) (str/split-lines (slurp "/tmp/trap.edn"))
-        operations: (Vec Any) (mapv (fn [line: String] -> Any (line->operation line))
-                                (filterv (fn [line: String] -> Bool (str/starts-with? line "["))
+(defn -main [& args] Nil
+  (let [(ctx Any) (c/new-term-store space-id)
+        (lines (Vec String)) (str/split-lines (slurp "/tmp/trap.edn"))
+        (operations (Vec Any)) (mapv (fn [(line String)] Any (line->operation line))
+                                (filterv (fn [(line String)] Bool (str/starts-with? line "["))
                                   lines))
-        _load: Any (when (pos? (count operations)) (c/commit-transaction! ctx operations))
-        old-proposition: Any (first-sym-value-proposition ctx "red")
-        node: Any (t/triple-t1 old-proposition)
-        new-proposition: Any (t/triple node "v" "crimson")
-        history-before: (Vec Any) (c/semantic-history ctx)
-        old-occurrence: Any (assertion-occurrence-of history-before old-proposition)
-        _edit: Any (c/commit-transaction! ctx [(c/retract-operation old-proposition)
+        (_load Any) (when (pos? (count operations)) (c/commit-transaction! ctx operations))
+        (old-proposition Any) (first-sym-value-proposition ctx "red")
+        (node Any) (t/triple-t1 old-proposition)
+        (new-proposition Any) (t/triple node "v" "crimson")
+        (history-before (Vec Any)) (c/semantic-history ctx)
+        (old-occurrence Any) (assertion-occurrence-of history-before old-proposition)
+        (_edit Any) (c/commit-transaction! ctx [(c/retract-operation old-proposition)
                                                (c/assert-operation new-proposition)])
-        history: (Vec Any) (c/semantic-history ctx)
-        new-occurrence: Any (assertion-occurrence-of history new-proposition)
-        withdrawal: Any (withdrawal-of ctx old-occurrence)]
+        (history (Vec Any)) (c/semantic-history ctx)
+        (new-occurrence Any) (assertion-occurrence-of history new-proposition)
+        (withdrawal Any) (withdrawal-of ctx old-occurrence)]
     (println "node (the symbol node):" node)
     (println)
     (println "OLD value-assertion  at="
@@ -114,8 +114,8 @@
     (println "old still retrievable (history preserved)? "
       (some? (assertion-occurrence-of history old-proposition)))
     (println "live view of the node's v-propositions (live-propositions is live-only):"
-      (mapv (fn [p: Any] -> String (pr-str (t/triple-t3 p)))
-        (filterv (fn [p: Any] -> Bool (= "v" (t/triple-t2 p)))
+      (mapv (fn [(p Any)] String (pr-str (t/triple-t3 p)))
+        (filterv (fn [(p Any)] Bool (= "v" (t/triple-t2 p)))
           (propositions-of ctx node))))
     (println "=> old red assertion EXISTS, marked not-live; new crimson assertion is live; same node. Supersession is real:"
       (and (some? (assertion-occurrence-of history old-proposition))

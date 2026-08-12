@@ -1,9 +1,9 @@
 #lang beagle/clj
 (ns fc.rec2rec)
 (defrecord Point
-  [x: Int
-   y: Int])
+  [(x Int)
+   (y Int)])
 (defrecord Segment
-  [start: Point
-   end: Point])
-(defn seg-start [s: Segment] -> Point (segment-start s))
+  [(start Point)
+   (end Point)])
+(defn seg-start [(s Segment)] Point (segment-start s))

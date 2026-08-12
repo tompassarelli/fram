@@ -8,124 +8,124 @@
 
 (define-mode strict)
 
-(def ref-format: String "framref/v1")
-(def fork-marker-format: String "framfork/v1")
+(def ref-format String "framref/v1")
+(def fork-marker-format String "framfork/v1")
 ;; The unnamed tail at <log> keeps this spelling in <log>.refs/.
-(def default-branch: String "main")
-(def max-branch-name-length: Int 64)
-(def max-chain-length: Int 64)
+(def default-branch String "main")
+(def max-branch-name-length Int 64)
+(def max-chain-length Int 64)
 
 ;; start-sequence and end-sequence are 0 together when the segment holds no
 ;; transaction; the ref is the only cheap record of where a sealed chain ends
 ;; once the branch tail beside it is empty.
 (defrecord SegmentRecord
-  [sha256: String
-   start-sequence: Int
-   end-sequence: Int
-   byte-count: Int])
+  [(sha256 String)
+   (start-sequence Int)
+   (end-sequence Int)
+   (byte-count Int)])
 
 (defrecord RefDocument
-  [space-id: String
-   segments: (Vec SegmentRecord)])
+  [(space-id String)
+   (segments (Vec SegmentRecord))])
 
 ;; What a folded chain member turned out to be on disk, as the caller read it.
 (defrecord ChainMember
-  [start-sequence: Int
-   end-sequence: Int
-   byte-count: Int
-   continuation: Bool
-   space-id: String
-   torn: Bool])
+  [(start-sequence Int)
+   (end-sequence Int)
+   (byte-count Int)
+   (continuation Bool)
+   (space-id String)
+   (torn Bool)])
 
 (defrecord ForkPlan
-  [document: RefDocument
-   sealed: SegmentRecord
-   fork-sequence: Int])
+  [(document RefDocument)
+   (sealed SegmentRecord)
+   (fork-sequence Int)])
 
 ;; A fork prepares every file it installs before it writes this marker, so the
 ;; marker's presence means the remaining renames may be replayed as they stand.
 (defrecord ForkMarker
-  [parent: String
-   child: String
-   segment: String])
+  [(parent String)
+   (child String)
+   (segment String)])
 
-(defn- fail [message: String code: Keyword] -> Any
+(defn- fail [(message String) (code Keyword)] Any
   (throw (ex-info message {:type code :fram/code code})))
 
-(defn valid-segment-name? [value: String] -> Bool
+(defn valid-segment-name? [(value String)] Bool
   (some? (re-matches #"[0-9a-f]{64}" value)))
 
-(defn valid-branch-name? [value: String] -> Bool
+(defn valid-branch-name? [(value String)] Bool
   (and (pos? (count value))
        (<= (count value) max-branch-name-length)
        (some? (re-matches #"[A-Za-z0-9][A-Za-z0-9._-]*" value))
        (not (str/includes? value ".."))))
 
-(defn require-branch-name! [value: String] -> String
+(defn require-branch-name! [(value String)] String
   (if (valid-branch-name? value)
     value
     (fail (str "branch name is not a usable ref file name: " value)
           :invalid-branch-name)))
 
-(defn segments-directory [store-path: String] -> String
+(defn segments-directory [(store-path String)] String
   (str store-path ".segments"))
 
-(defn refs-directory [store-path: String] -> String
+(defn refs-directory [(store-path String)] String
   (str store-path ".refs"))
 
-(defn branches-directory [store-path: String] -> String
+(defn branches-directory [(store-path String)] String
   (str store-path ".branches"))
 
-(defn segment-path [store-path: String sha256: String] -> String
+(defn segment-path [(store-path String) (sha256 String)] String
   (if (valid-segment-name? sha256)
     (str (segments-directory store-path) "/" sha256)
     (fail (str "segment name is not a SHA-256 hex digest: " sha256)
           :invalid-segment-name)))
 
-(defn ref-path [store-path: String branch: String] -> String
+(defn ref-path [(store-path String) (branch String)] String
   (str (refs-directory store-path) "/" (require-branch-name! branch)))
 
-(defn branch-tail-path [store-path: String branch: String] -> String
+(defn branch-tail-path [(store-path String) (branch String)] String
   (if (= (require-branch-name! branch) default-branch)
     store-path
     (str (branches-directory store-path) "/" branch)))
 
-(defn snapshot-path [tail-path: String] -> String
+(defn snapshot-path [(tail-path String)] String
   (str tail-path ".snapshot"))
 
-(defn- crc32-of [text: String] -> Int
-  (let [digest: Any (CRC32.)]
+(defn- crc32-of [(text String)] Int
+  (let [(digest Any) (CRC32.)]
     (.update digest (.getBytes text StandardCharsets/UTF_8))
     (long (.getValue digest))))
 
-(defn- segment-line [segment: SegmentRecord] -> String
+(defn- segment-line [(segment SegmentRecord)] String
   (str "segment " (segmentrecord-sha256 segment) " "
        (segmentrecord-start-sequence segment) " "
        (segmentrecord-end-sequence segment) " "
        (segmentrecord-byte-count segment) "\n"))
 
-(defn print-ref [document: RefDocument] -> String
-  (let [body: String
+(defn print-ref [(document RefDocument)] String
+  (let [(body String)
         (str ref-format "\n"
              "space " (refdocument-space-id document) "\n"
              (apply str
-                    (mapv (fn [segment: SegmentRecord] -> String
+                    (mapv (fn [(segment SegmentRecord)] String
                             (segment-line segment))
                           (refdocument-segments document))))]
     (str body "crc " (format "%08x" (crc32-of body)) "\n")))
 
-(defn- parse-count [value: String label: String] -> Int
+(defn- parse-count [(value String) (label String)] Int
   (if (some? (re-matches #"(?:0|[1-9][0-9]{0,17})" value))
     (Long/parseLong value)
     (fail (str "branch ref " label " is not a decimal count: " value)
           :invalid-branch-ref)))
 
-(defn- parse-segment-line [line: String known: Any] -> SegmentRecord
-  (let [fields: (Vec String) (vec (str/split line #" "))]
+(defn- parse-segment-line [(line String) (known Any)] SegmentRecord
+  (let [(fields (Vec String)) (vec (str/split line #" "))]
     (if (not= 5 (count fields))
       (fail (str "branch ref segment line is malformed: " line)
             :invalid-branch-ref)
-      (let [sha256: String (nth fields 1)]
+      (let [(sha256 String) (nth fields 1)]
         (cond
           [(not (valid-segment-name? sha256))
            (fail (str "branch ref segment name is not a SHA-256 hex digest: "
@@ -135,9 +135,9 @@
            (fail (str "branch ref lists the same segment twice: " sha256)
                  :invalid-branch-ref)]
           [:else
-           (let [start: Int
+           (let [(start Int)
                  (parse-count (nth fields 2) "segment start sequence")
-                 end: Int (parse-count (nth fields 3) "segment end sequence")]
+                 (end Int) (parse-count (nth fields 3) "segment end sequence")]
              (if (< end start)
                (fail (str "branch ref segment ends before it begins: " sha256)
                      :invalid-branch-ref)
@@ -145,8 +145,8 @@
                                 (parse-count (nth fields 4)
                                              "segment byte count"))))])))))
 
-(defn parse-ref [text: String] -> RefDocument
-  (let [lines: (Vec String) (vec (str/split-lines text))]
+(defn parse-ref [(text String)] RefDocument
+  (let [(lines (Vec String)) (vec (str/split-lines text))]
     (cond
       [(< (count lines) 3)
        (fail "branch ref is missing its format, space, or CRC line"
@@ -159,30 +159,30 @@
       [(not (str/starts-with? (nth lines (dec (count lines))) "crc "))
        (fail "branch ref does not end with its CRC line" :invalid-branch-ref)]
       [:else
-       (let [space-id: String (subs (nth lines 1) 6)
-             body: String
+       (let [(space-id String) (subs (nth lines 1) 6)
+             (body String)
              (apply str
-                    (mapv (fn [line: String] -> String (str line "\n"))
+                    (mapv (fn [(line String)] String (str line "\n"))
                           (subvec lines 0 (dec (count lines)))))
-             stored: String (subs (nth lines (dec (count lines))) 4)]
+             (stored String) (subs (nth lines (dec (count lines))) 4)]
          (cond
            [(zero? (count space-id))
             (fail "branch ref SpaceId must be nonempty" :invalid-branch-ref)]
            [(not= stored (format "%08x" (crc32-of body)))
             (fail "branch ref CRC does not match" :invalid-branch-ref)]
            [:else
-            (let [segments: (Vec SegmentRecord)
-                  (loop [index: Int 2
-                         known: Any #{}
-                         acc: (Vec SegmentRecord) []]
+            (let [(segments (Vec SegmentRecord))
+                  (loop [(index Int) 2
+                         (known Any) #{}
+                         (acc (Vec SegmentRecord)) []]
                     (if (>= index (dec (count lines)))
                       acc
-                      (let [line: String (nth lines index)]
+                      (let [(line String) (nth lines index)]
                         (if (not (str/starts-with? line "segment "))
                           (fail (str "branch ref contains an unknown line: "
                                      line)
                                 :invalid-branch-ref)
-                          (let [segment: SegmentRecord
+                          (let [(segment SegmentRecord)
                                 (parse-segment-line line known)]
                             (recur (inc index)
                                    (conj known (segmentrecord-sha256 segment))
@@ -192,26 +192,26 @@
                       :invalid-branch-ref)
                 (->RefDocument space-id segments)))]))])))
 
-(defn empty-ref [space-id: String] -> RefDocument
+(defn empty-ref [(space-id String)] RefDocument
   (->RefDocument space-id []))
 
 ;; The last transaction the sealed chain names, or 0 when it names none.
-(defn chain-end-sequence [document: RefDocument] -> Int
-  (let [segments: (Vec SegmentRecord) (refdocument-segments document)]
+(defn chain-end-sequence [(document RefDocument)] Int
+  (let [(segments (Vec SegmentRecord)) (refdocument-segments document)]
     (if (zero? (count segments))
       0
       (segmentrecord-end-sequence (nth segments (dec (count segments)))))))
 
-(defn print-fork-marker [marker: ForkMarker] -> String
-  (let [body: String
+(defn print-fork-marker [(marker ForkMarker)] String
+  (let [(body String)
         (str fork-marker-format "\n"
              "parent " (forkmarker-parent marker) "\n"
              "child " (forkmarker-child marker) "\n"
              "segment " (forkmarker-segment marker) "\n")]
     (str body "crc " (format "%08x" (crc32-of body)) "\n")))
 
-(defn parse-fork-marker [text: String] -> ForkMarker
-  (let [lines: (Vec String) (vec (str/split-lines text))]
+(defn parse-fork-marker [(text String)] ForkMarker
+  (let [(lines (Vec String)) (vec (str/split-lines text))]
     (cond
       [(not= 5 (count lines))
        (fail "fork marker does not carry its three fields and CRC"
@@ -225,13 +225,13 @@
        (fail "fork marker does not name its parent, child, and segment"
              :invalid-fork-marker)]
       [:else
-       (let [body: String
+       (let [(body String)
              (apply str
-                    (mapv (fn [line: String] -> String (str line "\n"))
+                    (mapv (fn [(line String)] String (str line "\n"))
                           (subvec lines 0 4)))
-             parent: String (subs (nth lines 1) 7)
-             child: String (subs (nth lines 2) 6)
-             segment: String (subs (nth lines 3) 8)]
+             (parent String) (subs (nth lines 1) 7)
+             (child String) (subs (nth lines 2) 6)
+             (segment String) (subs (nth lines 3) 8)]
          (cond
            [(not= (nth lines 4) (str "crc " (format "%08x" (crc32-of body))))
             (fail "fork marker CRC does not match" :invalid-fork-marker)]
@@ -248,15 +248,15 @@
 ;; Fork appends one sealed segment to the parent chain; parent and child then
 ;; name the identical chain and diverge only in their tails.
 (defn fork-plan
-  [parent: RefDocument
-   sealed: SegmentRecord
-   fork-sequence: Int] -> ForkPlan
-  (let [segments: (Vec SegmentRecord) (refdocument-segments parent)]
+  [(parent RefDocument)
+   (sealed SegmentRecord)
+   (fork-sequence Int)] ForkPlan
+  (let [(segments (Vec SegmentRecord)) (refdocument-segments parent)]
     (cond
       [(not (valid-segment-name? (segmentrecord-sha256 sealed)))
        (fail "sealed segment name is not a SHA-256 hex digest"
              :invalid-segment-name)]
-      [(some (fn [segment: SegmentRecord] -> Bool
+      [(some (fn [(segment SegmentRecord)] Bool
                (= (segmentrecord-sha256 segment)
                   (segmentrecord-sha256 sealed)))
              segments)
@@ -274,11 +274,11 @@
                    fork-sequence)])))
 
 (defn- member-fault
-  [document: RefDocument
-   index: Int
-   member: ChainMember
-   expected-next: Int] -> String?
-  (let [segment: SegmentRecord (nth (refdocument-segments document) index)]
+  [(document RefDocument)
+   (index Int)
+   (member ChainMember)
+   (expected-next Int)] String?
+  (let [(segment SegmentRecord) (nth (refdocument-segments document) index)]
     (cond
       [(not= (refdocument-space-id document) (chainmember-space-id member))
        "FRAMLOG segment belongs to a different SpaceId"]
@@ -301,21 +301,21 @@
        "FRAMLOG chain segment does not continue the previous transaction sequence"]
       [:else nil])))
 
-(defn- next-after [member: ChainMember expected-next: Int] -> Int
+(defn- next-after [(member ChainMember) (expected-next Int)] Int
   (if (pos? (chainmember-end-sequence member))
     (inc (chainmember-end-sequence member))
     expected-next))
 
 ;; nil means the chain folds; any other result is the first fault, by position.
 (defn chain-fault
-  [document: RefDocument
-   members: (Vec ChainMember)
-   tail: ChainMember] -> String?
+  [(document RefDocument)
+   (members (Vec ChainMember))
+   (tail ChainMember)] String?
   (if (not= (count (refdocument-segments document)) (count members))
     "FRAMLOG branch ref does not name the segments that were read"
-    (loop [index: Int 0 expected-next: Int 1]
+    (loop [(index Int) 0 (expected-next Int) 1]
       (if (>= index (count members))
-        (let [continuation: Bool (chainmember-continuation tail)]
+        (let [(continuation Bool) (chainmember-continuation tail)]
           (cond
             [(not= (refdocument-space-id document) (chainmember-space-id tail))
              "FRAMLOG tail belongs to a different SpaceId"]
@@ -327,8 +327,8 @@
                   (not= expected-next (chainmember-start-sequence tail)))
              "FRAMLOG branch tail does not continue the sealed chain"]
             [:else nil]))
-        (let [member: ChainMember (nth members index)
-              fault: String? (member-fault document index member expected-next)]
+        (let [(member ChainMember) (nth members index)
+              (fault String?) (member-fault document index member expected-next)]
           (if (some? fault)
             fault
             (recur (inc index) (next-after member expected-next))))))))

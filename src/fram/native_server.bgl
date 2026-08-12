@@ -11,79 +11,79 @@
 
 (define-mode strict)
 
-(def server-abi: Int 4)
-(def status-ok: Int 0)
-(def status-fatal: Int 2)
-(def empty-bytes: (Vec Int) [])
+(def server-abi Int 4)
+(def status-ok Int 0)
+(def status-fatal Int 2)
+(def empty-bytes (Vec Int) [])
 
-(defrecord Status [code: Int error: String?])
+(defrecord Status [(code Int) (error String?)])
 
 ;; log-byte-count tracks the canonical FRAMLOG length this store has written,
 ;; which is the watermark a checkpoint image records.
 (defrecord Store
-  [canonical-log-path: String
-   session: schema/Session
-   log-byte-count: Int])
+  [(canonical-log-path String)
+   (session schema/Session)
+   (log-byte-count Int)])
 
-(defrecord Request [frame: t/RpcFrameV1])
-(defrecord Response [frame: t/RpcFrameV1])
+(defrecord Request [(frame t/RpcFrameV1)])
+(defrecord Response [(frame t/RpcFrameV1)])
 
 ;; Optional payloads and errors stay opaque; status and byte fields have fixed
 ;; positions because the C adapter consumes those fields directly.
 (defrecord StoreResult
-  [status: Int
-   store: Store?
-   error: String?
-   valid-log-bytes: Int
-   boot-append: (Vec Int)
-   snapshot-report: String])
+  [(status Int)
+   (store Store?)
+   (error String?)
+   (valid-log-bytes Int)
+   (boot-append (Vec Int))
+   (snapshot-report String)])
 
 (defrecord RequestResult
-  [status: Int
-   request: Request?
-   error: String?])
+  [(status Int)
+   (request Request?)
+   (error String?)])
 
 (defrecord ResponseResult
-  [status: Int
-   response: Response?
-   error: String?
-   append-bytes: (Vec Int)
-   next-store: StoreResult
-   state-changed: Bool
-   snapshot-bytes: (Vec Int)])
+  [(status Int)
+   (response Response?)
+   (error String?)
+   (append-bytes (Vec Int))
+   (next-store StoreResult)
+   (state-changed Bool)
+   (snapshot-bytes (Vec Int))])
 
-(defrecord BytesResult [status: Int bytes: (Vec Int)])
+(defrecord BytesResult [(status Int) (bytes (Vec Int))])
 
-(defn error-or [error: String? fallback: String] -> String
+(defn error-or [(error String?) (fallback String)] String
   (if error error fallback))
 
-(defn ok-status [] -> Status (->Status status-ok nil))
+(defn ok-status [] Status (->Status status-ok nil))
 
-(defn fatal-status [message: String] -> Status
+(defn fatal-status [(message String)] Status
   (->Status status-fatal message))
 
-(defn failed-store [message: String] -> StoreResult
+(defn failed-store [(message String)] StoreResult
   (->StoreResult status-fatal nil message 0 empty-bytes ""))
 
-(defn failed-request [message: String] -> RequestResult
+(defn failed-request [(message String)] RequestResult
   (->RequestResult status-fatal nil message))
 
 (defn failed-response
-  [message: String
-   store-result: StoreResult] -> ResponseResult
+  [(message String)
+   (store-result StoreResult)] ResponseResult
   (->ResponseResult
    status-fatal nil message empty-bytes store-result false empty-bytes))
 
-(defn next-store-result [prior: StoreResult store: Store] -> StoreResult
+(defn next-store-result [(prior StoreResult) (store Store)] StoreResult
   (->StoreResult
    status-ok store nil
    (storeresult-valid-log-bytes prior) empty-bytes ""))
 
 (defn- fold-store!
-  [canonical-log-path: String
-   space-id: String
-   log-bytes: ByteSource
-   report: String] -> StoreResult
+  [(canonical-log-path String)
+   (space-id String)
+   (log-bytes ByteSource)
+   (report String)] StoreResult
   ;; The whole log is already borrowed here; slicing it into chunks would copy
   ;; every byte again.
   (let [completed
@@ -110,22 +110,22 @@
 ;; An image that installs but whose tail does not continue is never an error:
 ;; the boot degrades to the full fold that the FRAMLOG alone always supports.
 (defn- snapshot-store!
-  [canonical-log-path: String
-   space-id: String
-   log-bytes: ByteSource
-   plan: snapshot/BootPlan] -> StoreResult
-  (let [image: snapshot/Image? (snapshot/bootplan-image plan)]
+  [(canonical-log-path String)
+   (space-id String)
+   (log-bytes ByteSource)
+   (plan snapshot/BootPlan)] StoreResult
+  (let [(image snapshot/Image?) (snapshot/bootplan-image plan)]
     (if (nil? image)
       (fold-store! canonical-log-path space-id log-bytes
                    "fram: snapshot boot degraded to full fold; reason :no-image")
-      (let [present: snapshot/Image image
-            sidecar: snapshot/Sidecar? (snapshot/image-sidecar present)]
+      (let [(present snapshot/Image) image
+            (sidecar snapshot/Sidecar?) (snapshot/image-sidecar present)]
         (if (nil? sidecar)
           (fold-store!
            canonical-log-path space-id log-bytes
            "fram: snapshot boot degraded to full fold; reason :no-sidecar")
           (let [watermark (snapshot/sidecar-watermark
-                           (let [known: snapshot/Sidecar sidecar] known))
+                           (let [(known snapshot/Sidecar) sidecar] known))
                 root (term-store/new-term-store
                       (snapshot/image-space-id present))
                 loaded (snapshot/install-image! present root)]
@@ -157,10 +157,10 @@
                      (snapshot/bootplan-report plan))))))))))))
 
 (defn boot-store!
-  [canonical-log-path: String
-   space-id: String
-   log-bytes: ByteSource
-   snapshot-bytes: ByteSource] -> StoreResult
+  [(canonical-log-path String)
+   (space-id String)
+   (log-bytes ByteSource)
+   (snapshot-bytes ByteSource)] StoreResult
   (let [plan (snapshot/plan-snapshot-boot! true snapshot-bytes log-bytes
                                            space-id)]
     (if (= :replay (snapshot/bootplan-route plan))
@@ -169,8 +169,8 @@
                    (snapshot/bootplan-report plan)))))
 
 (defn wrap-rpc-response
-  [request-frame: t/RpcFrameV1
-   rpc-response: t/RpcResponse] -> Response
+  [(request-frame t/RpcFrameV1)
+   (rpc-response t/RpcResponse)] Response
   (->Response
    (t/->RpcFrameV1 :response 0
                    (t/rpcframev1-request-id request-frame)
@@ -179,11 +179,11 @@
 ;; A checkpoint writes an image beside the log; the log itself is untouched, so
 ;; the operation appends nothing and changes no store state.
 (defn checkpoint-response!
-  [store-result: StoreResult
-   store: Store
-   frame: t/RpcFrameV1
-   request: t/RpcRequest
-   now-ms: Int] -> ResponseResult
+  [(store-result StoreResult)
+   (store Store)
+   (frame t/RpcFrameV1)
+   (request t/RpcRequest)
+   (now-ms Int)] ResponseResult
   (let [session (store-session store)
         root (schema/store-of session)
         served-version (term-store/current-sequence root)
@@ -245,14 +245,14 @@
             nil empty-bytes next-store false empty-bytes)))])))
 
 (defn dispatch-request!
-  [store-result: StoreResult
-   store: Store
-   request-value: Request
-   now-ms: Int] -> ResponseResult
+  [(store-result StoreResult)
+   (store Store)
+   (request-value Request)
+   (now-ms Int)] ResponseResult
   (let [frame (request-frame request-value)
         request (t/rpcframev1-request frame)]
     (if request
-      (let [present: t/RpcRequest request]
+      (let [(present t/RpcRequest) request]
         (if (= :rpc/checkpoint (t/rpcrequest-op present))
           (checkpoint-response! store-result store frame present now-ms)
           (let [session (store-session store)
@@ -287,7 +287,7 @@
       (failed-response
        "decoded request frame omitted RpcRequest" store-result))))
 
-(defn read-request! [request-bytes: ByteSource] -> RequestResult
+(defn read-request! [(request-bytes ByteSource)] RequestResult
   (let [decoded (native-wire/decode-request-bytes! request-bytes)
         frame (native-wire/decoderesult-frame decoded)
         error (native-wire/decoderesult-error decoded)]
@@ -296,7 +296,7 @@
       (failed-request
        (error-or error "native FRAMRPC request decode failed")))))
 
-(defn write-response! [response-value: Response] -> BytesResult
+(defn write-response! [(response-value Response)] BytesResult
   (let [encoded
         (native-wire/encode-response-bytes! (response-frame response-value))
         bytes (native-wire/encoderesult-bytes encoded)
@@ -307,19 +307,19 @@
 
 ;; These eight functions are the generated-module contract consumed by
 ;; fram:native/server_host.h. Keep their order and signatures stable.
-(defn server-generated-abi [] -> Int server-abi)
+(defn server-generated-abi [] Int server-abi)
 
 (defn server-store-boot!
-  [canonical-log-path: String
-   space-id: String
-   log-bytes: ByteSource
-   snapshot-bytes: ByteSource] -> StoreResult
+  [(canonical-log-path String)
+   (space-id String)
+   (log-bytes ByteSource)
+   (snapshot-bytes ByteSource)] StoreResult
   (boot-store! canonical-log-path space-id log-bytes snapshot-bytes))
 
 (defn server-store-dispatch!
-  [store-result: StoreResult
-   request-result: RequestResult
-   now-ms: Int] -> ResponseResult
+  [(store-result StoreResult)
+   (request-result RequestResult)
+   (now-ms Int)] ResponseResult
   (let [store (storeresult-store store-result)
         request-value (requestresult-request request-result)]
     (if (and (= status-ok (storeresult-status store-result))
@@ -334,26 +334,26 @@
                    "request decode failed"))
        store-result))))
 
-(defn server-store-shutdown [store-result: StoreResult] -> Status
+(defn server-store-shutdown [(store-result StoreResult)] Status
   (let [store (storeresult-store store-result)]
     (if (and (= status-ok (storeresult-status store-result)) store)
       (ok-status)
       (fatal-status
        (error-or (storeresult-error store-result) "store boot failed")))))
 
-(defn server-codec-read-request! [request-bytes: ByteSource] -> RequestResult
+(defn server-codec-read-request! [(request-bytes ByteSource)] RequestResult
   (read-request! request-bytes))
 
 (defn server-codec-write-response!
-  [response-result: ResponseResult] -> BytesResult
+  [(response-result ResponseResult)] BytesResult
   (let [response-value (responseresult-response response-result)]
     (if (and (= status-ok (responseresult-status response-result))
              response-value)
       (write-response! response-value)
       (->BytesResult status-fatal empty-bytes))))
 
-(defn server-codec-release-request [request-result: RequestResult] -> Nil nil)
+(defn server-codec-release-request [(request-result RequestResult)] Nil nil)
 
-(defn server-codec-release-response [response-result: ResponseResult] -> Nil nil)
+(defn server-codec-release-response [(response-result ResponseResult)] Nil nil)
 
-(defn main [] -> Int status-fatal)
+(defn main [] Int status-fatal)

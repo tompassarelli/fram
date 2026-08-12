@@ -19,17 +19,17 @@
 
 (require clojure.string :as str)
 
-(def space-id: String "codegraph")
+(def space-id String "codegraph")
 
 ;; The fact stream's own node ids are the store's node terms: the kernel accepts
 ;; any Atom, so nothing is minted and no id map stands between a projected line
 ;; and the node it names. An integer object is a node reference, anything else a
 ;; literal — the same split the emitter uses.
-(defn line->operation [line: String] -> Any
+(defn line->operation [(line String)] Any
   (let [trip (edn/read-string line)]
     (c/assert-operation (t/triple (nth trip 0) (nth trip 1) (nth trip 2)))))
 
-(defn dump-proposition! [proposition: Any] -> Nil
+(defn dump-proposition! [(proposition Any)] Nil
   (let [l (t/triple-t1 proposition)
         p (t/triple-t2 proposition)
         r (t/triple-t3 proposition)]
@@ -37,12 +37,12 @@
       (println (str "[" l " " (pr-str p) " " r "]"))
       (println (str "[" l " " (pr-str p) " " (pr-str r) "]")))))
 
-(defn -main [& args] -> Nil
-  (let [edn-path: String (str (nth (vec args) 0))
-        ctx: Any (c/new-term-store space-id)
-        lines: (Vec String) (str/split-lines (slurp edn-path))
-        operations: (Vec Any) (mapv (fn [line: String] -> Any (line->operation line))
-                                (filterv (fn [line: String] -> Bool (str/starts-with? line "["))
+(defn -main [& args] Nil
+  (let [(edn-path String) (str (nth (vec args) 0))
+        (ctx Any) (c/new-term-store space-id)
+        (lines (Vec String)) (str/split-lines (slurp edn-path))
+        (operations (Vec Any)) (mapv (fn [(line String)] Any (line->operation line))
+                                (filterv (fn [(line String)] Bool (str/starts-with? line "["))
                                   lines))]
     (when (pos? (count operations))
       (c/commit-transaction! ctx operations))

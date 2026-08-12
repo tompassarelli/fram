@@ -14,71 +14,71 @@
 (define-mode strict)
 
 (defn live-cids-lp
-  [ctx: (Atom fram.types/TermStore)
-   te: Int
-   pid: Int] -> (Vec Int)
+  [(ctx (Atom fram.types/TermStore))
+   (te Int)
+   (pid Int)] (Vec Int)
   (filterv
-    (fn [cid: Int] -> Bool (c/live? ctx cid))
+    (fn [(cid Int)] Bool (c/live? ctx cid))
     (c/raw-by-lp ctx te pid)))
 
-(defn seq-of [ctx: (Atom fram.types/TermStore) cid: Int] -> Int
+(defn seq-of [(ctx (Atom fram.types/TermStore)) (cid Int)] Int
   (let [txid (c/fact-tx ctx cid)] (if (nil? txid) 0 (c/tx-seq ctx txid))))
 
 (defn base-version
-  [ctx: (Atom fram.types/TermStore)
-   te: Int
-   pid: Int] -> Int
+  [(ctx (Atom fram.types/TermStore))
+   (te Int)
+   (pid Int)] Int
   (reduce max
     0
-    (map (fn [cid: Int] -> Int (seq-of ctx cid)) (live-cids-lp ctx te pid))))
+    (map (fn [(cid Int)] Int (seq-of ctx cid)) (live-cids-lp ctx te pid))))
 
-(defn current-seq [ctx: (Atom t/TermStore)] -> Int
+(defn current-seq [(ctx (Atom t/TermStore))] Int
   (c/current-sequence ctx))
 
-(defn agent-of [ctx: (Atom fram.types/TermStore) cid: Int] -> Any
+(defn agent-of [(ctx (Atom fram.types/TermStore)) (cid Int)] Any
   (let [txid (c/fact-tx ctx cid)] (if (nil? txid) nil (c/tx-agent ctx txid))))
 
-(defn observed-of [ctx: (Atom fram.types/TermStore) cid: Int] -> Int?
+(defn observed-of [(ctx (Atom fram.types/TermStore)) (cid Int)] Int?
   (let [txid (c/fact-tx ctx cid)] (if (nil? txid) nil (c/tx-observed ctx txid))))
 
-(defn ts-of [ctx: (Atom fram.types/TermStore) cid: Int] -> String?
+(defn ts-of [(ctx (Atom fram.types/TermStore)) (cid Int)] String?
   (let [txid (c/fact-tx ctx cid)] (if (nil? txid) nil (c/tx-ts ctx txid))))
 
-(defn causal-key [ctx: (Atom fram.types/TermStore) cid: Int] -> (Vec Any)
+(defn causal-key [(ctx (Atom fram.types/TermStore)) (cid Int)] (Vec Any)
   (let [obs (observed-of ctx cid)]
     [(if (nil? obs) (seq-of ctx cid) obs) cid (str (agent-of ctx cid))]))
 
-(defn superseded-as-of [ctx: (Atom fram.types/TermStore) s: Int] -> (Set Int)
+(defn superseded-as-of [(ctx (Atom fram.types/TermStore)) (s Int)] (Set Int)
   (let [sup (c/supersedes-pred ctx)]
-    (reduce (fn [acc: (Set Int) cid: Int] -> (Set Int) (let [p: Any (c/fact-p ctx cid) r: Any (c/fact-r ctx cid)] (if (and (= p sup) (<= (seq-of ctx cid) s) (int? r)) (conj acc r) acc)))
+    (reduce (fn [(acc (Set Int)) (cid Int)] (Set Int) (let [(p Any) (c/fact-p ctx cid) (r Any) (c/fact-r ctx cid)] (if (and (= p sup) (<= (seq-of ctx cid) s) (int? r)) (conj acc r) acc)))
       #{}
       (c/all-facts ctx))))
 
-(defn live-as-of [ctx: (Atom fram.types/TermStore) s: Int] -> (Set Int)
+(defn live-as-of [(ctx (Atom fram.types/TermStore)) (s Int)] (Set Int)
   (let [sup (c/supersedes-pred ctx) gone (superseded-as-of ctx s)]
-    (reduce (fn [acc: (Set Int) cid: Int] -> (Set Int) (let [p: Any (c/fact-p ctx cid)] (if (and (<= (seq-of ctx cid) s) (not= p sup) (not (contains? gone cid))) (conj acc cid) acc)))
+    (reduce (fn [(acc (Set Int)) (cid Int)] (Set Int) (let [(p Any) (c/fact-p ctx cid)] (if (and (<= (seq-of ctx cid) s) (not= p sup) (not (contains? gone cid))) (conj acc cid) acc)))
       #{}
       (c/all-facts ctx))))
 
 (defn live-as-of-lp
-  [ctx: (Atom fram.types/TermStore)
-   s: Int
-   te: Int
-   pid: Int] -> (Vec Int)
+  [(ctx (Atom fram.types/TermStore))
+   (s Int)
+   (te Int)
+   (pid Int)] (Vec Int)
   (let [all (live-as-of ctx s)]
-    (filterv (fn [cid: Int] -> Bool (and (= (c/fact-l ctx cid) te) (= (c/fact-p ctx cid) pid)))
+    (filterv (fn [(cid Int)] Bool (and (= (c/fact-l ctx cid) te) (= (c/fact-p ctx cid) pid)))
       all)))
 
 (defn live-r-on
-  [ctx: (Atom fram.types/TermStore)
-   cid: Int
-   pid: Int?] -> Int?
+  [(ctx (Atom fram.types/TermStore))
+   (cid Int)
+   (pid Int?)] Int?
   (if (nil? pid)
     nil
-    (let [fcid: Int? (first (live-cids-lp ctx cid pid)) f: Any (if (nil? fcid) nil (c/fact-of ctx fcid)) r: Any (if (nil? f) nil (get f :r))]
+    (let [(fcid Int?) (first (live-cids-lp ctx cid pid)) (f Any) (if (nil? fcid) nil (c/fact-of ctx fcid)) (r Any) (if (nil? f) nil (get f :r))]
       (if (int? r) r nil))))
 
-(defn withdrawal-of [ctx: (Atom fram.types/TermStore) cid: Int] -> Any
+(defn withdrawal-of [(ctx (Atom fram.types/TermStore)) (cid Int)] Any
   (let [session (s/session! ctx)
         wb (s/resolve-predicate session "withdrawn_by")
         by-id (live-r-on ctx cid wb)]
@@ -95,57 +95,57 @@
          :reason
          (if (nil? reason-id) nil (c/literal ctx reason-id))}))))
 
-(defn withdrawn? [ctx: (Atom fram.types/TermStore) cid: Int] -> Bool
+(defn withdrawn? [(ctx (Atom fram.types/TermStore)) (cid Int)] Bool
   (boolean (withdrawal-of ctx cid)))
 
 (defn live-members
-  [ctx: (Atom fram.types/TermStore)
-   te: Int
-   pid: Int
-   policy: Keyword] -> (Vec Int)
+  [(ctx (Atom fram.types/TermStore))
+   (te Int)
+   (pid Int)
+   (policy Keyword)] (Vec Int)
   (let [live (live-cids-lp ctx te pid)]
     (if (= policy :add-wins)
       (let [all (c/raw-by-lp ctx te pid) resurrected (filterv (fn
-                                                                [cid: Int] -> Bool (and (not (c/live? ctx cid)) (withdrawn? ctx cid))) all)]
+                                                                [(cid Int)] Bool (and (not (c/live? ctx cid)) (withdrawn? ctx cid))) all)]
         (vec (distinct (concat live resurrected))))
       live)))
 
 (defn view-selects
-  [ctx: (Atom fram.types/TermStore)
-   view: String] -> (U (Set Int) Nil)
+  [(ctx (Atom fram.types/TermStore))
+   (view String)] (U (Set Int) Nil)
   (let [session (s/session! ctx)
         ve (s/resolve-name session view)
         sel (s/resolve-predicate session "selects")]
     (if (or (nil? ve) (nil? sel))
       nil
-      (reduce (fn [acc: (Set Int) cid: Int] -> (Set Int) (let [f: Any (c/fact-of ctx cid) r: Any (if (nil? f) nil (get f :r))] (if (int? r) (conj acc r) acc)))
+      (reduce (fn [(acc (Set Int)) (cid Int)] (Set Int) (let [(f Any) (c/fact-of ctx cid) (r Any) (if (nil? f) nil (get f :r))] (if (int? r) (conj acc r) acc)))
         #{}
         (live-cids-lp ctx ve sel)))))
 
 (defn pool-of
-  [ctx: (Atom fram.types/TermStore)
-   view: String?
-   cids: (Vec Int)] -> (Vec Int)
+  [(ctx (Atom fram.types/TermStore))
+   (view String?)
+   (cids (Vec Int))] (Vec Int)
   (if (nil? view)
     cids
     (let [sel (view-selects ctx view)]
       (if (or (nil? sel) (empty? sel))
         cids
-        (let [in-view (filterv (fn [cid: Int] -> Bool (contains? sel cid)) cids)]
+        (let [in-view (filterv (fn [(cid Int)] Bool (contains? sel cid)) cids)]
           (if (empty? in-view) cids in-view))))))
 
 (defn elect
-  [ctx: (Atom fram.types/TermStore)
-   view: String?
-   cids: (Vec Int)] -> Int?
+  [(ctx (Atom fram.types/TermStore))
+   (view String?)
+   (cids (Vec Int))] Int?
   (if (empty? cids)
     nil
-    (first (sort-by (fn [cid: Int] -> (Vec Any) [cid (str (agent-of ctx cid))]) (pool-of ctx view cids)))))
+    (first (sort-by (fn [(cid Int)] (Vec Any) [cid (str (agent-of ctx cid))]) (pool-of ctx view cids)))))
 
 (defn elect-causal
-  [ctx: (Atom fram.types/TermStore)
-   view: String?
-   cids: (Vec Int)] -> Int?
+  [(ctx (Atom fram.types/TermStore))
+   (view String?)
+   (cids (Vec Int))] Int?
   (if (empty? cids)
     nil
-    (first (sort-by (fn [cid: Int] -> (Vec Any) (causal-key ctx cid)) (pool-of ctx view cids)))))
+    (first (sort-by (fn [(cid Int)] (Vec Any) (causal-key ctx cid)) (pool-of ctx view cids)))))

@@ -52,44 +52,44 @@
 
 (define-mode strict)
 
-(def FN-RE: Regex (re-pattern "f\\d+"))
+(def FN-RE Regex (re-pattern "f\\d+"))
 
 ;; The mint environment: the dynamic store state of resolve.clj, handed over
 ;; explicitly. `ents` is typed (Atom Any) because Beagle cannot name "a map from
 ;; src string to a vector of entity ids" more precisely than Any — the same
 ;; boundary Cut G's xres/tres/ares and Cut H's corpus tables sit on.
 (defrecord Mint
-  [ctx: ri/Graph
-   KIND: Any
-   Vp: Any
-   ents: (Atom Any)
-   view: Any
-   BOUND: Any
-   REFERS: Any
-   FIXED: Any])
+  [(ctx ri/Graph)
+   (KIND Any)
+   (Vp Any)
+   (ents (Atom Any))
+   (view Any)
+   (BOUND Any)
+   (REFERS Any)
+   (FIXED Any)])
 
 ;; -> [[N fact-id child-node] …]: one row per LIVE fN edge, in slot order.
 (defrecord FnEdge
-  [idx: Int
-   cid: Any
-   child: Any])
+  [(idx Int)
+   (cid Any)
+   (child Any)])
 
 (defn register!
-  [m: Mint
-   src: String
-   e: Any] -> Any
+  [(m Mint)
+   (src String)
+   (e Any)] Any
   (let [ents (:ents m)]
     (do
       (swap! ents
-        (fn [tbl: Any] -> Any (assoc tbl src (conj (get tbl src []) e))))
+        (fn [(tbl Any)] Any (assoc tbl src (conj (get tbl src []) e))))
       e)))
 
 (defn- mint-leaf-on!
-  [m: Mint
-   builder: Any
-   src: String
-   kind: Any
-   v: Any] -> Any
+  [(m Mint)
+   (builder Any)
+   (src String)
+   (kind Any)
+   (v Any)] Any
   (let [ctx (:ctx m) e (register! m src (ri/mint! ctx builder))]
     (do
       (ri/assert-on! builder e (:KIND m) (ri/literal! kind))
@@ -97,14 +97,14 @@
       e)))
 
 (defn mint-leaf!
-  [m: Mint
-   src: String
-   kind: Any
-   v: Any] -> Any
+  [(m Mint)
+   (src String)
+   (kind Any)
+   (v Any)] Any
   (let [ctx (:ctx m) builder (ri/open ctx) e (mint-leaf-on! m builder src kind v)]
     (do (ri/commit! ctx builder) e)))
 
-(defn- clj-meta->beagle-meta [mt: Any] -> Any
+(defn- clj-meta->beagle-meta [(mt Any)] Any
   (cond
     (and (= 1 (count mt)) (contains? mt :tag) (symbol? (get mt :tag)))
     (get mt :tag)
@@ -113,7 +113,7 @@
     :else
     mt))
 
-(defn- reader-meta [d: Any] -> Any
+(defn- reader-meta [(d Any)] Any
   (if (instance? clojure.lang.IObj d)
     (not-empty (apply dissoc (meta d) [:line :column :end-line :end-column :file]))
     nil))
@@ -135,10 +135,10 @@
 ;; and each child's slot value before the child itself, so entity ids come out in the
 ;; original's sequence and the goldens stay byte-identical.
 (defn- mint-datum-on!
-  [m: Mint
-   builder: Any
-   src: String
-   d: Any] -> Any
+  [(m Mint)
+   (builder Any)
+   (src String)
+   (d Any)] Any
   (let [mt (reader-meta d)]
     (if (some? mt)
       (mint-datum-on! m
@@ -164,10 +164,10 @@
             (number? d)
             (mint-leaf-on! m builder src "number" (str d))
             (or (list? d) (seq? d) (vector? d) (map? d))
-            (let [ctx: Any (:ctx m) head: Any (cond (vector? d) [(symbol "#%brackets")] (map? d) [(symbol "#%map")] :else []) elems: (Vec Any) (vec (concat head (if (map? d) (apply concat (seq d)) (seq d)))) e: Any (register! m src (ri/mint! ctx builder))]
+            (let [(ctx Any) (:ctx m) (head Any) (cond (vector? d) [(symbol "#%brackets")] (map? d) [(symbol "#%map")] :else []) (elems (Vec Any)) (vec (concat head (if (map? d) (apply concat (seq d)) (seq d)))) (e Any) (register! m src (ri/mint! ctx builder))]
               (do
                 (ri/assert-on! builder e (:KIND m) (ri/literal! "list"))
-                (doseq [i: Int (range (count elems))]
+                (doseq [(i Int) (range (count elems))]
                   (ri/assert-on! builder
                     e
                     (str "f" i)
@@ -183,22 +183,22 @@
 ;; ONE frame per minted subtree: every coordinate in it is durable on that
 ;; frame's own assertions, and a half-minted subtree can never be observed.
 (defn mint-datum!
-  [m: Mint
-   src: String
-   d: Any] -> Any
+  [(m Mint)
+   (src String)
+   (d Any)] Any
   (let [ctx (:ctx m) builder (ri/open ctx) root (mint-datum-on! m builder src d)]
     (do (ri/commit! ctx builder) root)))
 
-(defn fN-facts [m: Mint parent: Any] -> (Vec Any)
+(defn fN-facts [(m Mint) (parent Any)] (Vec Any)
   (let [ctx (:ctx m) rows (reduce (fn
-                                    [acc: (Vec FnEdge)
-                                     cid: Any] -> (Vec FnEdge) (let [p: Any (ri/predicate-at ctx cid) r: Any (ri/value-at ctx cid)] (if (and (string? p) (some? (re-matches FN-RE (str p)))) (let [n (parse-long (subs (str p) 1))] (if (nil? n) acc (conj acc (->FnEdge n cid r)))) acc))) [] (ri/by-subject ctx parent))]
-    (mapv (fn [e: FnEdge] -> Any [(:idx e) (:cid e) (:child e)])
-      (sort-by (fn [e: FnEdge] -> Int (:idx e)) rows))))
+                                    [(acc (Vec FnEdge))
+                                     (cid Any)] (Vec FnEdge) (let [(p Any) (ri/predicate-at ctx cid) (r Any) (ri/value-at ctx cid)] (if (and (string? p) (some? (re-matches FN-RE (str p)))) (let [n (parse-long (subs (str p) 1))] (if (nil? n) acc (conj acc (->FnEdge n cid r)))) acc))) [] (ri/by-subject ctx parent))]
+    (mapv (fn [(e FnEdge)] Any [(:idx e) (:cid e) (:child e)])
+      (sort-by (fn [(e FnEdge)] Int (:idx e)) rows))))
 
 ;; The supersedes edge is gone (ruling GAP 3): retiring an edge WITHDRAWS its
 ;; assertion, so the kernel's own retraction is the whole mechanism.
-(defn retire-fact! [m: Mint oldc: Any] -> Any
+(defn retire-fact! [(m Mint) (oldc Any)] Any
   (ri/retire! (:ctx m) oldc))
 
 ;; ---------------------------------------------------------------------------
@@ -218,99 +218,99 @@
 ;; (the original threaded a cons-list; resolve.clj's wrapper vecs it). `new` is
 ;; spelled `newnm` — Beagle reserves nothing, but `new` reads as host interop.
 ;; The Int-typing sentinel is gone with the widening: a node id is a Term.
-(defn- nn [e: Any] -> Any e)
+(defn- nn [(e Any)] Any e)
 
-(def COLON3: (Set String) #{":-" ":" ":raises"})
+(def COLON3 (Set String) #{":-" ":" ":raises"})
 
-(defn- push [frame: Any scope: (Vec Any)] -> (Vec Any) (into [frame] scope))
+(defn- push [(frame Any) (scope (Vec Any))] (Vec Any) (into [frame] scope))
 
 ;; a reference that will render the binding's CURRENT name: not :rename-fixed
 ;; (keeps its own spelling) and not x/qualified (renders alias/, so a bare local
 ;; cannot capture it).
-(defn- renders-as-tracked-name? [m: Mint node: Any] -> Bool
+(defn- renders-as-tracked-name? [(m Mint) (node Any)] Bool
   (and (empty? (ri/by-subject-predicate (:ctx m) (nn node) (:FIXED m)))
     (nil? (rr/pred-val (:ctx m) (:view m) node "qualifier"))))
 
 (defn capture-refs
-  [m: Mint
-   node: Any
-   scope: (Vec Any)
-   B: Any
-   newnm: Any] -> (Vec Any)
+  [(m Mint)
+   (node Any)
+   (scope (Vec Any))
+   (B Any)
+   (newnm Any)] (Vec Any)
   (let [ctx (:ctx m) view (:view m) BOUND (:BOUND m) REFERS (:REFERS m) k (rr/kind-of ctx view node)]
     (cond
       (= "symbol" k)
       (let [tgt (rr/refers-target ctx view BOUND REFERS node)]
         (if (and (some? tgt) (= B (rv/ultimate ctx view BOUND REFERS tgt)) (renders-as-tracked-name? m node) (some? (some (fn
-                                                                                                                            [fr: Any] -> Any (get fr newnm)) scope)))
+                                                                                                                            [(fr Any)] Any (get fr newnm)) scope)))
           [node]
           []))
       (= "list" k)
       (let [kids (rr/ordered-children ctx node) h (str (rr/head-sym ctx view node)) brk? (fn
-                                                                                           [e: Any] -> Bool (rb/brackets? ctx view e)) cap-arity (fn
-                                                                                                                                                     [forms: (Vec Any)] -> (Vec Any) (let [bi (loop [i 0] (if (>= i (count forms)) nil (if (brk? (nth forms i)) i (recur (inc i))))) pv (if (nil? bi) nil (nth forms bi)) frame (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv))) or-vals (if (nil? pv) [] (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                           [acc: (Vec Any)
-                                                                                                                                                                                                                                                                                                                                                                                                                                            kd: Any] -> (Vec Any) (into acc (rb/collect-or-vals ctx view kd))) [] (vec (rest (rr/ordered-children ctx pv))))) body (loop [xs: (Vec Any) (if (nil? bi) [] (vec (drop (+ bi 1) forms)))] (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))] (into (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         [acc: (Vec Any)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          o: Any] -> (Vec Any) (into acc (capture-refs m o scope B newnm))) [] or-vals) (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  [acc: (Vec Any)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   b: Any] -> (Vec Any) (into acc (capture-refs m b (push frame scope) B newnm))) [] body))))]
+                                                                                           [(e Any)] Bool (rb/brackets? ctx view e)) cap-arity (fn
+                                                                                                                                                     [(forms (Vec Any))] (Vec Any) (let [bi (loop [i 0] (if (>= i (count forms)) nil (if (brk? (nth forms i)) i (recur (inc i))))) pv (if (nil? bi) nil (nth forms bi)) frame (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv))) or-vals (if (nil? pv) [] (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                           [(acc (Vec Any))
+                                                                                                                                                                                                                                                                                                                                                                                                                                            (kd Any)] (Vec Any) (into acc (rb/collect-or-vals ctx view kd))) [] (vec (rest (rr/ordered-children ctx pv))))) body (loop [(xs (Vec Any)) (if (nil? bi) [] (vec (drop (+ bi 1) forms)))] (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))] (into (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         [(acc (Vec Any))
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          (o Any)] (Vec Any) (into acc (capture-refs m o scope B newnm))) [] or-vals) (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  [(acc (Vec Any))
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   (b Any)] (Vec Any) (into acc (capture-refs m b (push frame scope) B newnm))) [] body))))]
         (cond
           (contains? rc/PARAM-FORMS h)
           (let [after-name (if (contains? #{"defn" "defn-" "defmacro"} h) (vec (drop 2 kids)) (vec (rest kids)))]
-            (if (some? (some (fn [f: Any] -> Any (if (brk? f) true nil)) after-name))
+            (if (some? (some (fn [(f Any)] Any (if (brk? f) true nil)) after-name))
               (cap-arity after-name)
-              (reduce (fn [acc: (Vec Any) a: Any] -> (Vec Any) (if (and (= "list" (rr/kind-of ctx view a)) (brk? (nth (rr/ordered-children ctx a) 0 nil))) (into acc (cap-arity (rr/ordered-children ctx a))) acc))
+              (reduce (fn [(acc (Vec Any)) (a Any)] (Vec Any) (if (and (= "list" (rr/kind-of ctx view a)) (brk? (nth (rr/ordered-children ctx a) 0 nil))) (into acc (cap-arity (rr/ordered-children ctx a))) acc))
                 []
                 after-name)))
           (contains? rc/LET-FORMS h)
-          (let [bracket: Any (nth kids 1 nil) pairs: (Vec Any) (if (and (some? bracket) (brk? bracket)) (rb/let-bind-pairs ctx view bracket) []) acc0: (Vec Any) [scope []] st: (Vec Any) (reduce (fn
-                                                                                                                                                                         [a: (Vec Any)
-                                                                                                                                                                          p: Any] -> (Vec Any) (let [sc: (Vec Any) (nth a 0) caps: (Vec Any) (nth a 1) bsyms: Any (nth p 0) vnode: Any (nth p 1) orvals: Any (nth p 2) c1: (Vec Any) (reduce (fn
-                                                                                                                                                                                                                                                                                                                     [x: (Vec Any)
-                                                                                                                                                                                                                                                                                                                      o: Any] -> (Vec Any) (into x (capture-refs m o sc B newnm))) caps orvals) c2: (Vec Any) (if (some? vnode) (into c1 (capture-refs m vnode sc B newnm)) c1)] [(push (rb/frame-of ctx view bsyms) sc) c2])) acc0 pairs) final: (Vec Any) (nth st 0) vcaps: (Vec Any) (nth st 1)]
-            (reduce (fn [acc: (Vec Any) b: Any] -> (Vec Any) (into acc (capture-refs m b final B newnm)))
+          (let [(bracket Any) (nth kids 1 nil) (pairs (Vec Any)) (if (and (some? bracket) (brk? bracket)) (rb/let-bind-pairs ctx view bracket) []) (acc0 (Vec Any)) [scope []] (st (Vec Any)) (reduce (fn
+                                                                                                                                                                         [(a (Vec Any))
+                                                                                                                                                                          (p Any)] (Vec Any) (let [(sc (Vec Any)) (nth a 0) (caps (Vec Any)) (nth a 1) (bsyms Any) (nth p 0) (vnode Any) (nth p 1) (orvals Any) (nth p 2) (c1 (Vec Any)) (reduce (fn
+                                                                                                                                                                                                                                                                                                                     [(x (Vec Any))
+                                                                                                                                                                                                                                                                                                                      (o Any)] (Vec Any) (into x (capture-refs m o sc B newnm))) caps orvals) (c2 (Vec Any)) (if (some? vnode) (into c1 (capture-refs m vnode sc B newnm)) c1)] [(push (rb/frame-of ctx view bsyms) sc) c2])) acc0 pairs) (final (Vec Any)) (nth st 0) (vcaps (Vec Any)) (nth st 1)]
+            (reduce (fn [(acc (Vec Any)) (b Any)] (Vec Any) (into acc (capture-refs m b final B newnm)))
               vcaps
               (vec (drop 2 kids))))
           (contains? rc/FOR-FORMS h)
-          (let [bracket: Any (nth kids 1 nil) entries: (Vec Any) (if (and (some? bracket) (brk? bracket)) (rb/for-bind-pairs ctx view bracket) []) acc0: (Vec Any) [scope []] st: (Vec Any) (reduce (fn
-                                                                                                                                                                           [a: (Vec Any)
-                                                                                                                                                                            e: Any] -> (Vec Any) (let [sc: (Vec Any) (nth a 0) caps: (Vec Any) (nth a 1)] (if (= :expr (nth e 0)) [sc (into caps (capture-refs m (nth e 1) sc B newnm))] (let [bsyms (nth e 1) vnode (nth e 2) orvals (nth e 3) c1 (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                             [x: (Vec Any)
-                                                                                                                                                                                                                                                                                                                                                                                                              o: Any] -> (Vec Any) (into x (capture-refs m o sc B newnm))) caps orvals) c2 (if (some? vnode) (into c1 (capture-refs m vnode sc B newnm)) c1)] [(push (rb/frame-of ctx view bsyms) sc) c2])))) acc0 entries) final: (Vec Any) (nth st 0) vcaps: (Vec Any) (nth st 1)]
-            (reduce (fn [acc: (Vec Any) b: Any] -> (Vec Any) (into acc (capture-refs m b final B newnm)))
+          (let [(bracket Any) (nth kids 1 nil) (entries (Vec Any)) (if (and (some? bracket) (brk? bracket)) (rb/for-bind-pairs ctx view bracket) []) (acc0 (Vec Any)) [scope []] (st (Vec Any)) (reduce (fn
+                                                                                                                                                                           [(a (Vec Any))
+                                                                                                                                                                            (e Any)] (Vec Any) (let [(sc (Vec Any)) (nth a 0) (caps (Vec Any)) (nth a 1)] (if (= :expr (nth e 0)) [sc (into caps (capture-refs m (nth e 1) sc B newnm))] (let [bsyms (nth e 1) vnode (nth e 2) orvals (nth e 3) c1 (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                                                                             [(x (Vec Any))
+                                                                                                                                                                                                                                                                                                                                                                                                              (o Any)] (Vec Any) (into x (capture-refs m o sc B newnm))) caps orvals) c2 (if (some? vnode) (into c1 (capture-refs m vnode sc B newnm)) c1)] [(push (rb/frame-of ctx view bsyms) sc) c2])))) acc0 entries) (final (Vec Any)) (nth st 0) (vcaps (Vec Any)) (nth st 1)]
+            (reduce (fn [(acc (Vec Any)) (b Any)] (Vec Any) (into acc (capture-refs m b final B newnm)))
               vcaps
               (vec (drop 2 kids))))
           (contains? rc/MATCH-FORMS h)
-          (reduce (fn [acc: (Vec Any) clause: Any] -> (Vec Any) (if (brk? clause) (let [cc (vec (rest (rr/ordered-children ctx clause))) pat (nth cc 0 nil) body (vec (rest cc)) frame (rb/frame-of ctx view (rb/match-pat-binds ctx view pat))] (into (into acc (capture-refs m pat scope B newnm)) (reduce (fn
-                                                                                                                                                                                                                                                                                              [x: (Vec Any)
-                                                                                                                                                                                                                                                                                               b: Any] -> (Vec Any) (into x (capture-refs m b (push frame scope) B newnm))) [] body))) acc))
+          (reduce (fn [(acc (Vec Any)) (clause Any)] (Vec Any) (if (brk? clause) (let [cc (vec (rest (rr/ordered-children ctx clause))) pat (nth cc 0 nil) body (vec (rest cc)) frame (rb/frame-of ctx view (rb/match-pat-binds ctx view pat))] (into (into acc (capture-refs m pat scope B newnm)) (reduce (fn
+                                                                                                                                                                                                                                                                                              [(x (Vec Any))
+                                                                                                                                                                                                                                                                                               (b Any)] (Vec Any) (into x (capture-refs m b (push frame scope) B newnm))) [] body))) acc))
             (capture-refs m (nth kids 1 nil) scope B newnm)
             (vec (drop 2 kids)))
           (= "letfn" h)
           (let [bracket (nth kids 1 nil) fnlists (if (and (some? bracket) (brk? bracket)) (vec (filter (fn
-                                                                                                         [f: Any] -> Bool (= "list" (rr/kind-of ctx view f))) (vec (rest (rr/ordered-children ctx bracket))))) []) frame (rb/frame-of ctx view (vec (keep (fn
-                                                                                                                                                                                                                                                              [f: Any] -> Any (nth (rr/ordered-children ctx f) 0 nil)) fnlists))) bodyscope (push frame scope) cap-fn (fn
-                                                                                                                                                                                                                                                                                                                                                                          [forms: (Vec Any)] -> (Vec Any) (let [bi (loop [i 0] (if (>= i (count forms)) nil (if (brk? (nth forms i)) i (recur (inc i))))) pv (if (nil? bi) nil (nth forms bi)) pframe (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv))) fbody (loop [xs: (Vec Any) (if (nil? bi) [] (vec (drop (+ bi 1) forms)))] (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))] (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    [x: (Vec Any)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     b: Any] -> (Vec Any) (into x (capture-refs m b (push pframe bodyscope) B newnm))) [] fbody)))]
-            (into (reduce (fn [acc: (Vec Any) fl: Any] -> (Vec Any) (into acc (cap-fn (vec (rest (rr/ordered-children ctx fl)))))) [] fnlists)
-              (reduce (fn [acc: (Vec Any) b: Any] -> (Vec Any) (into acc (capture-refs m b bodyscope B newnm)))
+                                                                                                         [(f Any)] Bool (= "list" (rr/kind-of ctx view f))) (vec (rest (rr/ordered-children ctx bracket))))) []) frame (rb/frame-of ctx view (vec (keep (fn
+                                                                                                                                                                                                                                                              [(f Any)] Any (nth (rr/ordered-children ctx f) 0 nil)) fnlists))) bodyscope (push frame scope) cap-fn (fn
+                                                                                                                                                                                                                                                                                                                                                                          [(forms (Vec Any))] (Vec Any) (let [bi (loop [i 0] (if (>= i (count forms)) nil (if (brk? (nth forms i)) i (recur (inc i))))) pv (if (nil? bi) nil (nth forms bi)) pframe (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv))) fbody (loop [(xs (Vec Any)) (if (nil? bi) [] (vec (drop (+ bi 1) forms)))] (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))] (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    [(x (Vec Any))
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     (b Any)] (Vec Any) (into x (capture-refs m b (push pframe bodyscope) B newnm))) [] fbody)))]
+            (into (reduce (fn [(acc (Vec Any)) (fl Any)] (Vec Any) (into acc (cap-fn (vec (rest (rr/ordered-children ctx fl)))))) [] fnlists)
+              (reduce (fn [(acc (Vec Any)) (b Any)] (Vec Any) (into acc (capture-refs m b bodyscope B newnm)))
                 []
                 (vec (drop 2 kids)))))
           (contains? #{"extend-type" "extend-protocol"} h)
-          (reduce (fn [acc: (Vec Any) ch: Any] -> (Vec Any) (if (= "list" (rr/kind-of ctx view ch)) (let [ic (rr/ordered-children ctx ch) rest-ic (vec (rest ic)) bi (loop [i 0] (if (>= i (count rest-ic)) nil (if (brk? (nth rest-ic i)) i (recur (inc i))))) pv (if (nil? bi) nil (nth rest-ic bi)) pframe (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv))) fbody (loop [xs: (Vec Any) (if (nil? bi) [] (vec (drop (+ bi 1) rest-ic)))] (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))] (into (into acc (capture-refs m (nth ic 0 nil) scope B newnm)) (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          [x: (Vec Any)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           b: Any] -> (Vec Any) (into x (capture-refs m b (push pframe scope) B newnm))) [] fbody))) (into acc (capture-refs m ch scope B newnm))))
+          (reduce (fn [(acc (Vec Any)) (ch Any)] (Vec Any) (if (= "list" (rr/kind-of ctx view ch)) (let [ic (rr/ordered-children ctx ch) rest-ic (vec (rest ic)) bi (loop [i 0] (if (>= i (count rest-ic)) nil (if (brk? (nth rest-ic i)) i (recur (inc i))))) pv (if (nil? bi) nil (nth rest-ic bi)) pframe (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv))) fbody (loop [(xs (Vec Any)) (if (nil? bi) [] (vec (drop (+ bi 1) rest-ic)))] (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))] (into (into acc (capture-refs m (nth ic 0 nil) scope B newnm)) (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          [(x (Vec Any))
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           (b Any)] (Vec Any) (into x (capture-refs m b (push pframe scope) B newnm))) [] fbody))) (into acc (capture-refs m ch scope B newnm))))
             []
             (vec (rest kids)))
           (= "as->" h)
           (let [init (nth kids 1 nil) nmn (nth kids 2 nil) frame (rb/frame-of ctx view (if (some? (rr/sym-val ctx view nmn)) [(nn nmn)] [])) head (if (some? init) (capture-refs m init scope B newnm) [])]
-            (reduce (fn [acc: (Vec Any) b: Any] -> (Vec Any) (into acc (capture-refs m b (push frame scope) B newnm)))
+            (reduce (fn [(acc (Vec Any)) (b Any)] (Vec Any) (into acc (capture-refs m b (push frame scope) B newnm)))
               head
               (vec (drop 3 kids))))
           :else
-          (reduce (fn [acc: (Vec Any) b: Any] -> (Vec Any) (into acc (capture-refs m b scope B newnm)))
+          (reduce (fn [(acc (Vec Any)) (b Any)] (Vec Any) (into acc (capture-refs m b scope B newnm)))
             []
             kids)))
       :else
@@ -338,7 +338,7 @@
 ;;        edn-root may pick INSTEAD of the real wrapper (observed: a re-edited
 ;;        module rendered as just the orphaned old body). Skipped under the
 ;;        delete path, which has its own subtree machinery.
-(def INTERNAL-PREDS: (Set String)
+(def INTERNAL-PREDS (Set String)
   #{"supersedes"
     "refers_to"
     "keep_spelling"
@@ -351,23 +351,23 @@
 ;; read the same dynamic state and stayed in resolve.clj with the delete
 ;; machinery (Cut H's Verb record carries the identical pair).
 (defrecord Emit
-  [ctx: ri/Graph
-   view: Any
-   BOUND: Any
-   REFERS: Any
-   FIXED: Any
-   ents: Any
-   wrapper-of: Any
-   descendants: Any
-   deleted-forms: Any
-   deleted-subtree: Any])
+  [(ctx ri/Graph)
+   (view Any)
+   (BOUND Any)
+   (REFERS Any)
+   (FIXED Any)
+   (ents Any)
+   (wrapper-of Any)
+   (descendants Any)
+   (deleted-forms Any)
+   (deleted-subtree Any)])
 
 (defn- emit-line
-  [m: Emit
-   wrap: Any
-   e: Any
-   cid: Any] -> Any
-  (let [ctx: Any (:ctx m) view: Any (:view m) ps: Any (ri/predicate-at ctx cid) r: Any (ri/value-at ctx cid)]
+  [(m Emit)
+   (wrap Any)
+   (e Any)
+   (cid Any)] Any
+  (let [(ctx Any) (:ctx m) (view Any) (:view m) (ps Any) (ri/predicate-at ctx cid) (r Any) (ri/value-at ctx cid)]
     (cond
       (and (some? wrap) (= e wrap) (string? ps) (rc/ord-pos? ps) (not= ps "f0"))
       nil
@@ -386,14 +386,14 @@
       :else
       (str "[" (ri/ordinal ctx e) " " (pr-str ps) " " (ri/ordinal ctx r) "]"))))
 
-(defn extract-lines [m: Emit src: String] -> (Vec Any)
-  (let [ctx: Any (:ctx m) wrapf: Any (:wrapper-of m) desc: Any (:descendants m) dforms: Any (:deleted-forms m) dsub: Any (:deleted-subtree m) wrap: Any (wrapf src) root: Any (if (empty? dforms) (wrapf src) nil) live: Any (if (some? root) (desc root) nil) ents: (Vec Any) (vec (get (:ents m) src [])) rows: (Vec Any) (reduce (fn
-                                                                                                                                                                                                                                                                                  [acc: (Vec Any)
-                                                                                                                                                                                                                                                                                   e: Any] -> (Vec Any) (if (or (contains? dsub e) (and (some? live) (not (contains? live e)))) acc (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                              [a: (Vec Any)
-                                                                                                                                                                                                                                                                                                                                                                                               cid: Any] -> (Vec Any) (let [line: Any (emit-line m wrap e cid)] (if (nil? line) a (conj a line)))) acc (ri/by-subject ctx e)))) [] ents) forms: (Vec Any) (if (some? wrap) (vec (remove (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          [f: Any] -> Bool (contains? dforms f)) (vec (rest (rr/ordered-children ctx wrap))))) []) formlines: (Vec Any) (mapv (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       [i: Int] -> Any (str "[" (ri/ordinal ctx wrap) " \"f" (+ i 1) "\" " (ri/ordinal ctx (nth forms i)) "]")) (vec (range (count forms))))]
+(defn extract-lines [(m Emit) (src String)] (Vec Any)
+  (let [(ctx Any) (:ctx m) (wrapf Any) (:wrapper-of m) (desc Any) (:descendants m) (dforms Any) (:deleted-forms m) (dsub Any) (:deleted-subtree m) (wrap Any) (wrapf src) (root Any) (if (empty? dforms) (wrapf src) nil) (live Any) (if (some? root) (desc root) nil) (ents (Vec Any)) (vec (get (:ents m) src [])) (rows (Vec Any)) (reduce (fn
+                                                                                                                                                                                                                                                                                  [(acc (Vec Any))
+                                                                                                                                                                                                                                                                                   (e Any)] (Vec Any) (if (or (contains? dsub e) (and (some? live) (not (contains? live e)))) acc (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                                                              [(a (Vec Any))
+                                                                                                                                                                                                                                                                                                                                                                                               (cid Any)] (Vec Any) (let [(line Any) (emit-line m wrap e cid)] (if (nil? line) a (conj a line)))) acc (ri/by-subject ctx e)))) [] ents) (forms (Vec Any)) (if (some? wrap) (vec (remove (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          [(f Any)] Bool (contains? dforms f)) (vec (rest (rr/ordered-children ctx wrap))))) []) (formlines (Vec Any)) (mapv (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       [(i Int)] Any (str "[" (ri/ordinal ctx wrap) " \"f" (+ i 1) "\" " (ri/ordinal ctx (nth forms i)) "]")) (vec (range (count forms))))]
     (into (into [(str "@file " src)] rows) formlines)))
 
 ;; author-emit! — the stderr report of an authoring run. The `binding [*out* *err*]`
@@ -401,13 +401,13 @@
 ;; the LINES it printed, in order; `detail` rides through as a VALUE, never str'd, so
 ;; println renders it exactly as the original did (a map prints unreadably either way).
 (defn author-emit-lines
-  [op: Any
-   detail: Any
-   srcs: (Vec String)
-   outp: Any] -> (Vec Any)
+  [(op Any)
+   (detail Any)
+   (srcs (Vec String))
+   (outp Any)] (Vec Any)
   (let [f outp]
     (into [(str "================ authoring: " op " ================") detail]
-      (mapv (fn [s: String] -> Any (str "projected -> " (f s) "   <- " s))
+      (mapv (fn [(s String)] Any (str "projected -> " (f s) "   <- " s))
         srcs))))
 
 ;; re-resolve! — after a mint the module frame is stale (a new def, or a new body's
@@ -416,42 +416,42 @@
 ;; ports the portable half: the three per-src tables the re-walk reads. Idempotent —
 ;; bind! only adds an edge where one resolves.
 (defn re-resolve-frames
-  [srcs: (Vec String)
-   mdefs: Any
-   mtypes: Any
-   maccs: Any] -> (Map Keyword Any)
+  [(srcs (Vec String))
+   (mdefs Any)
+   (mtypes Any)
+   (maccs Any)] (Map Keyword Any)
   (let [fd mdefs ft mtypes fa maccs]
     {:modframe
-     (reduce (fn [acc: (Map Any Any) s: String] -> (Map Any Any) (assoc acc s (fd s)))
+     (reduce (fn [(acc (Map Any Any)) (s String)] (Map Any Any) (assoc acc s (fd s)))
        {}
        srcs)
      :typeframe
-     (reduce (fn [acc: (Map Any Any) s: String] -> (Map Any Any) (assoc acc s (ft s)))
+     (reduce (fn [(acc (Map Any Any)) (s String)] (Map Any Any) (assoc acc s (ft s)))
        {}
        srcs)
      :accessors
-     (reduce (fn [acc: (Map Any Any) s: String] -> (Map Any Any) (assoc acc s (fa s)))
+     (reduce (fn [(acc (Map Any Any)) (s String)] (Map Any Any) (assoc acc s (fa s)))
        {}
        srcs)}))
 
-(def STRUCTURAL-SEG-RE: Regex (re-pattern "seg\\d+"))
+(def STRUCTURAL-SEG-RE Regex (re-pattern "seg\\d+"))
 
-(def STRUCTURAL-COMMENT-RE: Regex (re-pattern "comment\\d+"))
+(def STRUCTURAL-COMMENT-RE Regex (re-pattern "comment\\d+"))
 
-(def PATH-SPLIT-RE: Regex (re-pattern "/"))
+(def PATH-SPLIT-RE Regex (re-pattern "/"))
 
 (defn wrapper-of
-  [ctx: ri/Graph
-   view: Any
-   ents: Any
-   src: String] -> Any
-  (some (fn [e: Any] -> Any (when (= "beagle-file" (rr/head-sym ctx view e)) e))
+  [(ctx ri/Graph)
+   (view Any)
+   (ents Any)
+   (src String)] Any
+  (some (fn [(e Any)] Any (when (= "beagle-file" (rr/head-sym ctx view e)) e))
     (vec (get ents src []))))
 
-(defn structural-kids [ctx: ri/Graph n: Any] -> (Vec Any)
-  (vec (keep (fn [cid: Any] -> Any (let [p (ri/predicate-at ctx cid) r (ri/target-at ctx cid)] (when (and (some? r) (string? p) (or (rc/ord-pos? p) (re-matches STRUCTURAL-SEG-RE p) (re-matches STRUCTURAL-COMMENT-RE p) (= p "tail"))) r))) (ri/by-subject ctx n))))
+(defn structural-kids [(ctx ri/Graph) (n Any)] (Vec Any)
+  (vec (keep (fn [(cid Any)] Any (let [p (ri/predicate-at ctx cid) r (ri/target-at ctx cid)] (when (and (some? r) (string? p) (or (rc/ord-pos? p) (re-matches STRUCTURAL-SEG-RE p) (re-matches STRUCTURAL-COMMENT-RE p) (= p "tail"))) r))) (ri/by-subject ctx n))))
 
-(defn structural-descendants [ctx: ri/Graph root: Any] -> (Set Any)
+(defn structural-descendants [(ctx ri/Graph) (root Any)] (Set Any)
   (loop [seen #{} stack [root]]
     (if (empty? stack)
       seen
@@ -461,85 +461,85 @@
           (recur (conj seen n) (into (pop stack) (structural-kids ctx n))))))))
 
 (defn form-for-victim
-  [ctx: ri/Graph
-   view: Any
-   ents: Any
-   unwrap-def: Any
-   src: String
-   victim: Any] -> Any
-  (some (fn [f: Any] -> Any (let [d (unwrap-def f) children (rr/ordered-children ctx d) name-index (rc/type-name-index (rr/head-sym ctx view d) (rr/sym-val ctx view (nth children 1 nil))) outer (rr/unwrap-meta ctx view (nth children name-index nil)) leaf (if (= "list" (rr/kind-of ctx view outer)) (first (rr/ordered-children ctx outer)) outer) logical (rr/unwrap-meta ctx view leaf)] (when (= victim logical) f)))
+  [(ctx ri/Graph)
+   (view Any)
+   (ents Any)
+   (unwrap-def Any)
+   (src String)
+   (victim Any)] Any
+  (some (fn [(f Any)] Any (let [d (unwrap-def f) children (rr/ordered-children ctx d) name-index (rc/type-name-index (rr/head-sym ctx view d) (rr/sym-val ctx view (nth children 1 nil))) outer (rr/unwrap-meta ctx view (nth children name-index nil)) leaf (if (= "list" (rr/kind-of ctx view outer)) (first (rr/ordered-children ctx outer)) outer) logical (rr/unwrap-meta ctx view leaf)] (when (= victim logical) f)))
     (rest (rr/ordered-children ctx (wrapper-of ctx view ents src)))))
 
 (defn emit-env
-  [ctx: ri/Graph
-   view: Any
-   BOUND: Any
-   REFERS: Any
-   FIXED: Any
-   ents: Any
-   unwrap-def: Any] -> Emit
+  [(ctx ri/Graph)
+   (view Any)
+   (BOUND Any)
+   (REFERS Any)
+   (FIXED Any)
+   (ents Any)
+   (unwrap-def Any)] Emit
   (->Emit ctx
     view
     BOUND
     REFERS
     FIXED
     ents
-    (fn [src: String] -> Any (wrapper-of ctx view ents src))
-    (fn [root: Any] -> (Set Any) (structural-descendants ctx root))
+    (fn [(src String)] Any (wrapper-of ctx view ents src))
+    (fn [(root Any)] (Set Any) (structural-descendants ctx root))
     #{}
     #{}))
 
 (defn extract-file!
-  [m: Emit
-   src: String
-   outp: String] -> Any
+  [(m Emit)
+   (src String)
+   (outp String)] Any
   (spit outp (str (str/join "\n" (extract-lines m src)) "\n")))
 
-(def DEFAULT-RESOLVE-OUT: Any nil)
+(def DEFAULT-RESOLVE-OUT Any nil)
 
-(defn out-path [src: String] -> String
+(defn out-path [(src String)] String
   (str (or DEFAULT-RESOLVE-OUT (System/getenv "RESOLVE_OUT") "/tmp")
     "/resolved-"
     (last (str/split src PATH-SPLIT-RE))
     ".edn"))
 
-(def DEFAULT-PROJECT-SRCS: Any nil)
+(def DEFAULT-PROJECT-SRCS Any nil)
 
-(defn emit-srcs [srcs: (Vec String)] -> (Vec String)
+(defn emit-srcs [(srcs (Vec String))] (Vec String)
   (if (nil? DEFAULT-PROJECT-SRCS) srcs (vec DEFAULT-PROJECT-SRCS)))
 
 (defn author-emit-scoped!
-  [m: Emit
-   srcs: (Vec String)
-   capture-only?: Bool
-   op: Any
-   detail: Any] -> Any
+  [(m Emit)
+   (srcs (Vec String))
+   (capture-only? Bool)
+   (op Any)
+   (detail Any)] Any
   (when-not capture-only?
-    (doseq [src: String srcs] (extract-file! m src (out-path src)))
+    (doseq [(src String) srcs] (extract-file! m src (out-path src)))
     (binding [*out* *err*]
       (println (str "================ authoring: " op " ================"))
       (println detail)
-      (doseq [src: String srcs]
+      (doseq [(src String) srcs]
         (println (str "projected -> " (out-path src) "   <- " src))))))
 
 (defn scope-match?
-  [module-name: Any
-   src: String
-   scope: String] -> Bool
-  (let [seg? (fn [m: Any] -> Bool (boolean (and m (or (= m scope) (str/ends-with? m (str "." scope))))))]
+  [(module-name Any)
+   (src String)
+   (scope String)] Bool
+  (let [seg? (fn [(m Any)] Bool (boolean (and m (or (= m scope) (str/ends-with? m (str "." scope))))))]
     (or (seg? src) (seg? (module-name src)))))
 
 (defn scope->srcs
-  [module-name: Any
-   srcs: (Vec String)
-   scope: String] -> (Vec String)
-  (vec (filter (fn [src: String] -> Bool (scope-match? module-name src scope)) srcs)))
+  [(module-name Any)
+   (srcs (Vec String))
+   (scope String)] (Vec String)
+  (vec (filter (fn [(src String)] Bool (scope-match? module-name src scope)) srcs)))
 
-(defn out-path-for [resolve-out: Any src: String] -> String
+(defn out-path-for [(resolve-out Any) (src String)] String
   (str (or resolve-out DEFAULT-RESOLVE-OUT (System/getenv "RESOLVE_OUT") "/tmp")
     "/resolved-"
     (last (str/split src PATH-SPLIT-RE))
     ".edn"))
 
-(defn emit-srcs-for [project-srcs: Any srcs: (Vec String)] -> (Vec String)
+(defn emit-srcs-for [(project-srcs Any) (srcs (Vec String))] (Vec String)
   (if (nil? project-srcs) (emit-srcs srcs) (vec project-srcs)))

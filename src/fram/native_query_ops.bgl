@@ -13,78 +13,78 @@
 
 (define-mode strict)
 
-(def max-list-values: Int 65536)
+(def max-list-values Int 65536)
 
-(def unpaged-occurrence-limit: Int limits/rpc-v1-max-unpaged-rows)
-(def default-query-timeout-ms: Int 5000)
-(def max-query-timeout-ms: Int 60000)
-(def query-step-limit: Int 10000000)
-(def result-cache-snapshot-limit: Int 4)
-(def result-cache-per-snapshot-limit: Int 8)
-(def result-cache-byte-limit: Int 67108864)
+(def unpaged-occurrence-limit Int limits/rpc-v1-max-unpaged-rows)
+(def default-query-timeout-ms Int 5000)
+(def max-query-timeout-ms Int 60000)
+(def query-step-limit Int 10000000)
+(def result-cache-snapshot-limit Int 4)
+(def result-cache-per-snapshot-limit Int 8)
+(def result-cache-byte-limit Int 67108864)
 
-(def occurrence-relations: (Set String) #{d/occurrence-relation})
+(def occurrence-relations (Set String) #{d/occurrence-relation})
 
-(defrecord OptionValue [present: Bool value: Any])
+(defrecord OptionValue [(present Bool) (value Any)])
 
 (defrecord QueryCursor
-  [snapshot-version: Int
-   digest: String
-   next-page-ordinal: Int
-   after-row: (Vec Any)])
+  [(snapshot-version Int)
+   (digest String)
+   (next-page-ordinal Int)
+   (after-row (Vec Any))])
 
-(defrecord QueryHead [relation: String terms: (Vec d/QueryTerm)])
+(defrecord QueryHead [(relation String) (terms (Vec d/QueryTerm))])
 
 (defrecord QueryView
-  [root: (Atom t/TermStore)
-   rotation: rot/Rotation
-   version: Int
-   lower-exclusive: Int])
+  [(root (Atom t/TermStore))
+   (rotation rot/Rotation)
+   (version Int)
+   (lower-exclusive Int)])
 
-(defrecord QueryBounds [version: Int lower-exclusive: Int])
+(defrecord QueryBounds [(version Int) (lower-exclusive Int)])
 
-(defrecord PageResult [payload: t/Triple page: t/RpcPageResponse?])
+(defrecord PageResult [(payload t/Triple) (page t/RpcPageResponse?)])
 
-(defrecord NativeReadResult [handled: Bool response: t/RpcResponse?])
+(defrecord NativeReadResult [(handled Bool) (response t/RpcResponse?)])
 
-(defrecord ReadError [code: Keyword message: String])
+(defrecord ReadError [(code Keyword) (message String)])
 
-(defrecord ReadContext [error: (Atom ReadError?)])
+(defrecord ReadContext [(error (Atom ReadError?))])
 
 (defrecord ResultCacheLookup
-  [found: Bool
-   query-rows: (Vec (Vec Any))
-   triple-rows: (Vec t/Triple)])
+  [(found Bool)
+   (query-rows (Vec (Vec Any)))
+   (triple-rows (Vec t/Triple))])
 
-(def retryable-error-codes: (Set Keyword)
+(def retryable-error-codes (Set Keyword)
   #{:rpc/conflict :rpc/cancelled :query-cancelled :query-time-limit
     :query-work-limit :query/archive-unavailable :durability-ambiguous})
 
-(def no-read-error: ReadError? nil)
-(def no-query-result-rows: (Vec (Vec Any)) [])
-(def no-triple-result-rows: (Vec t/Triple) [])
+(def no-read-error ReadError? nil)
+(def no-query-result-rows (Vec (Vec Any)) [])
+(def no-triple-result-rows (Vec t/Triple) [])
 
-(defn new-read-context [] -> ReadContext
+(defn new-read-context [] ReadContext
   (->ReadContext (atom no-read-error)))
 
 (defn record-read-error!
-  [context: ReadContext
-   code: Keyword
-   message: String] -> Nil
+  [(context ReadContext)
+   (code Keyword)
+   (message String)] Nil
   (compare-and-set! (readcontext-error context)
                     no-read-error
                     (->ReadError code message))
   nil)
 
-(defn read-context-error [context: ReadContext] -> ReadError?
+(defn read-context-error [(context ReadContext)] ReadError?
   (deref (readcontext-error context)))
 
-(defn read-context-ok? [context: ReadContext] -> Bool
+(defn read-context-ok? [(context ReadContext)] Bool
   (nil? (read-context-error context)))
 
 (defn result-snapshot-equal?
-  [left: schema/OrderedResultSnapshot
-   right: schema/OrderedResultSnapshot] -> Bool
+  [(left schema/OrderedResultSnapshot)
+   (right schema/OrderedResultSnapshot)] Bool
   (and (= (schema/orderedresultsnapshot-space left)
           (schema/orderedresultsnapshot-space right))
        (and (= (schema/orderedresultsnapshot-version left)
@@ -93,8 +93,8 @@
                (schema/orderedresultsnapshot-lower-exclusive right)))))
 
 (defn result-key-equal?
-  [left: schema/OrderedResultKey
-   right: schema/OrderedResultKey] -> Bool
+  [(left schema/OrderedResultKey)
+   (right schema/OrderedResultKey)] Bool
   (and (result-snapshot-equal?
         (schema/orderedresultkey-snapshot left)
         (schema/orderedresultkey-snapshot right))
@@ -104,23 +104,23 @@
                (schema/orderedresultkey-digest right)))))
 
 (defn remove-result-snapshot
-  [values: (Vec schema/OrderedResultSnapshot)
-   target: schema/OrderedResultSnapshot] -> (Vec schema/OrderedResultSnapshot)
-  (loop [index: Int 0
-         retained: (Vec schema/OrderedResultSnapshot) []]
+  [(values (Vec schema/OrderedResultSnapshot))
+   (target schema/OrderedResultSnapshot)] (Vec schema/OrderedResultSnapshot)
+  (loop [(index Int) 0
+         (retained (Vec schema/OrderedResultSnapshot)) []]
     (if (>= index (count values))
       retained
-      (let [value: schema/OrderedResultSnapshot (nth values index)]
+      (let [(value schema/OrderedResultSnapshot) (nth values index)]
         (recur (inc index)
                (if (result-snapshot-equal? value target)
                  retained
                  (conj retained value)))))))
 
 (defn remove-result-entry-at
-  [values: (Vec schema/OrderedResultEntry)
-   target-index: Int] -> (Vec schema/OrderedResultEntry)
-  (loop [index: Int 0
-         retained: (Vec schema/OrderedResultEntry) []]
+  [(values (Vec schema/OrderedResultEntry))
+   (target-index Int)] (Vec schema/OrderedResultEntry)
+  (loop [(index Int) 0
+         (retained (Vec schema/OrderedResultEntry)) []]
     (if (>= index (count values))
       retained
       (recur (inc index)
@@ -129,12 +129,12 @@
                (conj retained (nth values index)))))))
 
 (defn result-snapshot-present?
-  [entries: (Vec schema/OrderedResultEntry)
-   snapshot: schema/OrderedResultSnapshot] -> Bool
+  [(entries (Vec schema/OrderedResultEntry))
+   (snapshot schema/OrderedResultSnapshot)] Bool
   (loop [index 0]
     (if (>= index (count entries))
       false
-      (let [entry: schema/OrderedResultEntry (nth entries index)]
+      (let [(entry schema/OrderedResultEntry) (nth entries index)]
         (if (result-snapshot-equal?
              snapshot
              (schema/orderedresultkey-snapshot
@@ -143,8 +143,8 @@
           (recur (inc index)))))))
 
 (defn result-entry-index
-  [entries: (Vec schema/OrderedResultEntry)
-   key: schema/OrderedResultKey] -> Int
+  [(entries (Vec schema/OrderedResultEntry))
+   (key schema/OrderedResultKey)] Int
   (loop [index 0]
     (if (>= index (count entries))
       -1
@@ -154,13 +154,13 @@
         (recur (inc index))))))
 
 (defn snapshot-entry-count
-  [entries: (Vec schema/OrderedResultEntry)
-   snapshot: schema/OrderedResultSnapshot] -> Int
+  [(entries (Vec schema/OrderedResultEntry))
+   (snapshot schema/OrderedResultSnapshot)] Int
   (loop [index 0 total 0]
     (if (>= index (count entries))
       total
-      (let [entry: schema/OrderedResultEntry (nth entries index)
-            matches: Bool
+      (let [(entry schema/OrderedResultEntry) (nth entries index)
+            (matches Bool)
             (result-snapshot-equal?
              snapshot
              (schema/orderedresultkey-snapshot
@@ -168,12 +168,12 @@
         (recur (inc index) (if matches (inc total) total))))))
 
 (defn first-snapshot-entry-index
-  [entries: (Vec schema/OrderedResultEntry)
-   snapshot: schema/OrderedResultSnapshot] -> Int
+  [(entries (Vec schema/OrderedResultEntry))
+   (snapshot schema/OrderedResultSnapshot)] Int
   (loop [index 0]
     (if (>= index (count entries))
       -1
-      (let [entry: schema/OrderedResultEntry (nth entries index)]
+      (let [(entry schema/OrderedResultEntry) (nth entries index)]
         (if (result-snapshot-equal?
              snapshot
              (schema/orderedresultkey-snapshot
@@ -182,16 +182,16 @@
           (recur (inc index)))))))
 
 (defn remove-result-entry
-  [state: schema/OrderedResultCache
-   index: Int] -> schema/OrderedResultCache
-  (let [entries: (Vec schema/OrderedResultEntry) (schema/orderedresultcache-entries state)
-        entry: schema/OrderedResultEntry (nth entries index)
-        remaining: (Vec schema/OrderedResultEntry)
+  [(state schema/OrderedResultCache)
+   (index Int)] schema/OrderedResultCache
+  (let [(entries (Vec schema/OrderedResultEntry)) (schema/orderedresultcache-entries state)
+        (entry schema/OrderedResultEntry) (nth entries index)
+        (remaining (Vec schema/OrderedResultEntry))
         (remove-result-entry-at entries index)
-        snapshot: schema/OrderedResultSnapshot
+        (snapshot schema/OrderedResultSnapshot)
         (schema/orderedresultkey-snapshot
          (schema/orderedresultentry-key entry))
-        snapshots: (Vec schema/OrderedResultSnapshot)
+        (snapshots (Vec schema/OrderedResultSnapshot))
         (if (result-snapshot-present? remaining snapshot)
           (schema/orderedresultcache-snapshots state)
           (remove-result-snapshot
@@ -205,12 +205,12 @@
      (inc (schema/orderedresultcache-evictions state)))))
 
 (defn touch-result-entry
-  [state: schema/OrderedResultCache
-   index: Int] -> schema/OrderedResultCache
-  (let [entries: (Vec schema/OrderedResultEntry) (schema/orderedresultcache-entries state)
-        entry: schema/OrderedResultEntry (nth entries index)
-        key: schema/OrderedResultKey (schema/orderedresultentry-key entry)
-        snapshot: schema/OrderedResultSnapshot (schema/orderedresultkey-snapshot key)]
+  [(state schema/OrderedResultCache)
+   (index Int)] schema/OrderedResultCache
+  (let [(entries (Vec schema/OrderedResultEntry)) (schema/orderedresultcache-entries state)
+        (entry schema/OrderedResultEntry) (nth entries index)
+        (key schema/OrderedResultKey) (schema/orderedresultentry-key entry)
+        (snapshot schema/OrderedResultSnapshot) (schema/orderedresultkey-snapshot key)]
     (schema/->OrderedResultCache
      (conj (remove-result-entry-at entries index) entry)
      (conj (remove-result-snapshot
@@ -222,7 +222,7 @@
      (schema/orderedresultcache-evictions state))))
 
 (defn count-result-cache-hit
-  [state: schema/OrderedResultCache] -> schema/OrderedResultCache
+  [(state schema/OrderedResultCache)] schema/OrderedResultCache
   (schema/->OrderedResultCache
    (schema/orderedresultcache-entries state)
    (schema/orderedresultcache-snapshots state)
@@ -232,7 +232,7 @@
    (schema/orderedresultcache-evictions state)))
 
 (defn count-result-cache-miss
-  [state: schema/OrderedResultCache] -> schema/OrderedResultCache
+  [(state schema/OrderedResultCache)] schema/OrderedResultCache
   (schema/->OrderedResultCache
    (schema/orderedresultcache-entries state)
    (schema/orderedresultcache-snapshots state)
@@ -242,8 +242,8 @@
    (schema/orderedresultcache-evictions state)))
 
 (defn append-result-entry
-  [state: schema/OrderedResultCache
-   entry: schema/OrderedResultEntry] -> schema/OrderedResultCache
+  [(state schema/OrderedResultCache)
+   (entry schema/OrderedResultEntry)] schema/OrderedResultCache
   (let [snapshot
         (schema/orderedresultkey-snapshot
          (schema/orderedresultentry-key entry))]
@@ -259,8 +259,8 @@
      (schema/orderedresultcache-evictions state))))
 
 (defn enforce-result-entry-limit
-  [state: schema/OrderedResultCache
-   snapshot: schema/OrderedResultSnapshot] -> schema/OrderedResultCache
+  [(state schema/OrderedResultCache)
+   (snapshot schema/OrderedResultSnapshot)] schema/OrderedResultCache
   (loop [bounded state]
     (if (> (snapshot-entry-count
             (schema/orderedresultcache-entries bounded) snapshot)
@@ -273,8 +273,8 @@
       bounded)))
 
 (defn without-result-snapshot
-  [state: schema/OrderedResultCache
-   snapshot: schema/OrderedResultSnapshot] -> schema/OrderedResultCache
+  [(state schema/OrderedResultCache)
+   (snapshot schema/OrderedResultSnapshot)] schema/OrderedResultCache
   (schema/->OrderedResultCache
    (schema/orderedresultcache-entries state)
    (remove-result-snapshot
@@ -285,13 +285,13 @@
    (schema/orderedresultcache-evictions state)))
 
 (defn enforce-result-snapshot-limit
-  [state: schema/OrderedResultCache] -> schema/OrderedResultCache
+  [(state schema/OrderedResultCache)] schema/OrderedResultCache
   (loop [bounded state]
     (if (> (count (schema/orderedresultcache-snapshots bounded))
            result-cache-snapshot-limit)
-      (let [snapshot: schema/OrderedResultSnapshot
+      (let [(snapshot schema/OrderedResultSnapshot)
             (first (schema/orderedresultcache-snapshots bounded))
-            index: Int
+            (index Int)
             (first-snapshot-entry-index
              (schema/orderedresultcache-entries bounded) snapshot)]
         (recur
@@ -301,7 +301,7 @@
       bounded)))
 
 (defn enforce-result-byte-limit
-  [state: schema/OrderedResultCache] -> schema/OrderedResultCache
+  [(state schema/OrderedResultCache)] schema/OrderedResultCache
   (loop [bounded state]
     (if (and (> (schema/orderedresultcache-bytes bounded)
                 result-cache-byte-limit)
@@ -310,11 +310,11 @@
       bounded)))
 
 (defn result-cache-key
-  [session: schema/Session
-   version: Int
-   lower-exclusive: Int
-   operation: Keyword
-   digest: String] -> schema/OrderedResultKey
+  [(session schema/Session)
+   (version Int)
+   (lower-exclusive Int)
+   (operation Keyword)
+   (digest String)] schema/OrderedResultKey
   (schema/->OrderedResultKey
    (schema/->OrderedResultSnapshot
     (store/space-id (schema/store-of session)) version lower-exclusive)
@@ -323,8 +323,8 @@
 ;; Generated server dispatch is serialized. A concurrent host must add
 ;; single-flight before it may share this mutable Session cache.
 (defn result-cache-lookup!
-  [session: schema/Session
-   key: schema/OrderedResultKey] -> ResultCacheLookup
+  [(session schema/Session)
+   (key schema/OrderedResultKey)] ResultCacheLookup
   (let [cell (schema/ordered-results-of session)
         state (deref cell)
         index (result-entry-index
@@ -335,7 +335,7 @@
         (schema/mark-derived-change! session)
         (->ResultCacheLookup false no-query-result-rows
                              no-triple-result-rows))
-      (let [entry: schema/OrderedResultEntry
+      (let [(entry schema/OrderedResultEntry)
             (nth (schema/orderedresultcache-entries state) index)]
         (do
           (reset! cell
@@ -348,8 +348,8 @@
            (schema/orderedresultentry-triple-rows entry)))))))
 
 (defn retain-result-entry!
-  [session: schema/Session
-   entry: schema/OrderedResultEntry] -> Nil
+  [(session schema/Session)
+   (entry schema/OrderedResultEntry)] Nil
   (let [cell (schema/ordered-results-of session)
         snapshot
         (schema/orderedresultkey-snapshot
@@ -364,48 +364,48 @@
       (schema/mark-derived-change! session)
       nil)))
 
-(defn result-cache-stats [session: schema/Session] -> (Vec Int)
+(defn result-cache-stats [(session schema/Session)] (Vec Int)
   (let [state (deref (schema/ordered-results-of session))]
     [(schema/orderedresultcache-hits state)
      (schema/orderedresultcache-misses state)
      (schema/orderedresultcache-bytes state)
      (schema/orderedresultcache-evictions state)]))
 
-(defn field-value [fields: (Vec Any) position: Int] -> Any
+(defn field-value [(fields (Vec Any)) (position Int)] Any
   (if (and (>= position 0) (< position (count fields)))
     (nth fields position)
     nil))
 
-(defn rpc-list [values: (Vec Any)] -> Any
+(defn rpc-list [(values (Vec Any))] Any
   (reduce
-   (fn [tail: Any value: Any] -> Any
+   (fn [(tail Any) (value Any)] Any
      (t/triple :rpc/list value tail))
    :rpc/list-end
    (reverse values)))
 
-(defn rpc-record [tag: Keyword fields: (Vec Any)] -> t/Triple
+(defn rpc-record [(tag Keyword) (fields (Vec Any))] t/Triple
   (t/triple tag (rpc-list fields) :rpc/record))
 
-(defn rpc-query-row [values: (Vec Any)] -> t/Triple
+(defn rpc-query-row [(values (Vec Any))] t/Triple
   (rpc-record :query/row [(rpc-list values)]))
 
-(defn rpc-query-rows [rows: (Vec d/Tuple)] -> t/Triple
+(defn rpc-query-rows [(rows (Vec d/Tuple))] t/Triple
   (rpc-record :query/rows
               [(rpc-list
                 (mapv
-                 (fn [row: d/Tuple] -> Any (rpc-query-row row)) rows))]))
+                 (fn [(row d/Tuple)] Any (rpc-query-row row)) rows))]))
 
-(defn- rpc-nonempty-occurrence-list [values: (Vec t/Triple)] -> t/Triple
+(defn- rpc-nonempty-occurrence-list [(values (Vec t/Triple))] t/Triple
   (let [last-position (dec (count values))]
-    (loop [position: Int (dec last-position)
-           tail: t/Triple
+    (loop [(position Int) (dec last-position)
+           (tail t/Triple)
            (t/triple :rpc/list (nth values last-position) :rpc/list-end)]
       (if (< position 0)
         tail
         (recur (dec position)
                (t/triple :rpc/list (nth values position) tail))))))
 
-(defn rpc-occurrences [values: (Vec t/Triple)] -> t/Triple
+(defn rpc-occurrences [(values (Vec t/Triple))] t/Triple
   (t/triple :rpc/occurrences
             (if (empty? values)
               (t/triple :rpc/list :rpc/list-end :rpc/list-end)
@@ -414,7 +414,7 @@
                         :rpc/list-end))
             :rpc/record))
 
-(defn query-result-weight [rows: (Vec d/Tuple)] -> Int
+(defn query-result-weight [(rows (Vec d/Tuple))] Int
   (loop [index 0 total (+ 32 (* 8 (count rows)))]
     (if (>= index (count rows))
       total
@@ -424,7 +424,7 @@
           (native-wire/canonical-term-byte-count!
            (rpc-query-row (nth rows index))))))))
 
-(defn triple-result-weight [rows: (Vec t/Triple)] -> Int
+(defn triple-result-weight [(rows (Vec t/Triple))] Int
   (loop [index 0 total (+ 32 (* 8 (count rows)))]
     (if (>= index (count rows))
       total
@@ -434,44 +434,44 @@
           (native-wire/canonical-term-byte-count! (nth rows index)))))))
 
 (defn retain-query-result!
-  [session: schema/Session
-   key: schema/OrderedResultKey
-   rows: (Vec d/Tuple)] -> Nil
+  [(session schema/Session)
+   (key schema/OrderedResultKey)
+   (rows (Vec d/Tuple))] Nil
   (retain-result-entry!
    session
    (schema/->OrderedResultEntry
     key rows no-triple-result-rows (query-result-weight rows))))
 
 (defn retain-triple-result!
-  [session: schema/Session
-   key: schema/OrderedResultKey
-   rows: (Vec t/Triple)] -> Nil
+  [(session schema/Session)
+   (key schema/OrderedResultKey)
+   (rows (Vec t/Triple))] Nil
   (retain-result-entry!
    session
    (schema/->OrderedResultEntry
     key no-query-result-rows rows (triple-result-weight rows))))
 
-(defn rpc-violation [code: Keyword detail: Any] -> t/Triple
+(defn rpc-violation [(code Keyword) (detail Any)] t/Triple
   (rpc-record :rpc/violation [code detail]))
 
-(defn rpc-validation [valid: Bool violations: (Vec Any)] -> t/Triple
+(defn rpc-validation [(valid Bool) (violations (Vec Any))] t/Triple
   (rpc-record :rpc/validation [valid (rpc-list violations)]))
 
 (defn response
-  [request: t/RpcRequest
-   served-version: Int
-   page: t/RpcPageResponse?
-   payload: t/Triple] -> t/RpcResponse
-  (let [payload-term: t/Term payload]
+  [(request t/RpcRequest)
+   (served-version Int)
+   (page t/RpcPageResponse?)
+   (payload t/Triple)] t/RpcResponse
+  (let [(payload-term t/Term) payload]
     (t/->RpcResponse (t/rpcrequest-space request)
                      (t/rpcrequest-op request)
                      served-version page nil payload-term)))
 
 (defn error-response
-  [request: t/RpcRequest
-   served-version: Int
-   code: Keyword
-   message: String] -> t/RpcResponse
+  [(request t/RpcRequest)
+   (served-version Int)
+   (code Keyword)
+   (message String)] t/RpcResponse
   (t/->RpcResponse
    (t/rpcrequest-space request)
    (t/rpcrequest-op request)
@@ -479,8 +479,8 @@
    (t/->RpcError code (contains? retryable-error-codes code) message nil)
    nil))
 
-(defn read-list! [context: ReadContext value: Any] -> (Vec Any)
-  (loop [cursor: Any value values: (Vec Any) [] count-value: Int 0]
+(defn read-list! [(context ReadContext) (value Any)] (Vec Any)
+  (loop [(cursor Any) value (values (Vec Any)) [] (count-value Int) 0]
     (cond
       [(= cursor :rpc/list-end) values]
       [(>= count-value max-list-values)
@@ -500,14 +500,14 @@
          values)])))
 
 (defn read-record!
-  [context: ReadContext
-   value: Any
-   tag: Keyword
-   field-count: Int] -> (Vec Any)
+  [(context ReadContext)
+   (value Any)
+   (tag Keyword)
+   (field-count Int)] (Vec Any)
   (if (and (t/triple? value)
            (and (= tag (t/triple-t1 value))
                 (= :rpc/record (t/triple-t3 value))))
-    (let [fields: (Vec Any)
+    (let [(fields (Vec Any))
           (read-list! context (t/triple-t2 value))]
       (if (and (read-context-ok? context)
                (= field-count (count fields)))
@@ -524,7 +524,7 @@
        context :rpc-invalid-record "RPC record tag or marker is invalid")
       [])))
 
-(defn read-option! [context: ReadContext value: Any] -> OptionValue
+(defn read-option! [(context ReadContext) (value Any)] OptionValue
   (cond
     [(= value :rpc/none) (->OptionValue false nil)]
     [(and (t/triple? value)
@@ -539,9 +539,9 @@
        (->OptionValue false nil))]))
 
 (defn require-term!
-  [context: ReadContext
-   value: Any
-   label: String] -> Any
+  [(context ReadContext)
+   (value Any)
+   (label String)] Any
   (if (t/term? value)
     value
     (do
@@ -550,9 +550,9 @@
       :rpc/unit)))
 
 (defn require-string!
-  [context: ReadContext
-   value: Any
-   label: String] -> String
+  [(context ReadContext)
+   (value Any)
+   (label String)] String
   (if (string? value)
     value
     (do
@@ -561,9 +561,9 @@
       "")))
 
 (defn require-int!
-  [context: ReadContext
-   value: Any
-   label: String] -> Int
+  [(context ReadContext)
+   (value Any)
+   (label String)] Int
   (if (integer? value)
     value
     (do
@@ -572,9 +572,9 @@
       0)))
 
 (defn require-keyword!
-  [context: ReadContext
-   value: Any
-   label: String] -> Keyword
+  [(context ReadContext)
+   (value Any)
+   (label String)] Keyword
   (if (keyword? value)
     value
     (do
@@ -583,9 +583,9 @@
       :rpc/invalid)))
 
 (defn require-bool!
-  [context: ReadContext
-   value: Any
-   label: String] -> Bool
+  [(context ReadContext)
+   (value Any)
+   (label String)] Bool
   (if (boolean? value)
     value
     (do
@@ -593,34 +593,34 @@
        context :rpc-invalid-payload (str label " must be a Bool"))
       false)))
 
-(defn require-unit! [context: ReadContext value: Any] -> Nil
+(defn require-unit! [(context ReadContext) (value Any)] Nil
   (if (= value :rpc/unit)
     nil
     (record-read-error!
      context :rpc-invalid-payload
      "operation payload must be :rpc/unit")))
 
-(defn query-record-tag [value: Any] -> Keyword?
+(defn query-record-tag [(value Any)] Keyword?
   (if (and (t/triple? value)
            (and (keyword? (t/triple-t1 value))
                 (= :rpc/record (t/triple-t3 value))))
     (t/triple-t1 value)
     nil))
 
-(defn fallback-query-term [] -> d/QueryTerm
+(defn fallback-query-term [] d/QueryTerm
   (d/constant :rpc/unit))
 
-(defn fallback-query-literal [] -> d/Literal
+(defn fallback-query-literal [] d/Literal
   (d/relation-literal "__invalid__" []))
 
-(defn fallback-find-spec [] -> query/FindSpec
+(defn fallback-find-spec [] query/FindSpec
   (query/relation-find "__invalid__"))
 
-(defn parse-query-term! [context: ReadContext value: Any] -> d/QueryTerm
+(defn parse-query-term! [(context ReadContext) (value Any)] d/QueryTerm
   (match (query-record-tag value)
     [:query/var
-    (let [fields: (Vec Any) (read-record! context value :query/var 1)
-          name: String (require-string!
+    (let [(fields (Vec Any)) (read-record! context value :query/var 1)
+          (name String) (require-string!
                 context (field-value fields 0) "query variable")]
       (if (and (read-context-ok? context) (pos? (count name)))
         (d/variable name)
@@ -633,7 +633,7 @@
           (fallback-query-term))))]
 
     [:query/const
-    (let [fields: (Vec Any) (read-record! context value :query/const 1)]
+    (let [(fields (Vec Any)) (read-record! context value :query/const 1)]
       (d/constant
        (require-term! context (field-value fields 0) "query constant")))]
 
@@ -643,29 +643,29 @@
           "query term must be query/var or query/const")
          (fallback-query-term))]))
 
-(defn parse-query-terms! [context: ReadContext value: Any] -> (Vec d/QueryTerm)
+(defn parse-query-terms! [(context ReadContext) (value Any)] (Vec d/QueryTerm)
   (mapv
-   (fn [term: Any] -> d/QueryTerm (parse-query-term! context term))
+   (fn [(term Any)] d/QueryTerm (parse-query-term! context term))
    (read-list! context value)))
 
-(defn parse-query-head! [context: ReadContext value: Any] -> QueryHead
-  (let [fields: (Vec Any) (read-record! context value :query/head 2)]
+(defn parse-query-head! [(context ReadContext) (value Any)] QueryHead
+  (let [(fields (Vec Any)) (read-record! context value :query/head 2)]
     (->QueryHead
      (require-string!
       context (field-value fields 0) "query head relation")
      (parse-query-terms! context (field-value fields 1)))))
 
-(defn parse-query-clause! [context: ReadContext value: Any] -> d/Literal
+(defn parse-query-clause! [(context ReadContext) (value Any)] d/Literal
   (match (query-record-tag value)
     [:query/relation
-    (let [fields: (Vec Any)
+    (let [(fields (Vec Any))
           (read-record! context value :query/relation 3)
-          relation: String
+          (relation String)
           (require-string!
            context (field-value fields 0) "query relation")
-          terms: (Vec d/QueryTerm)
+          (terms (Vec d/QueryTerm))
           (parse-query-terms! context (field-value fields 1))
-          negated: Bool
+          (negated Bool)
           (require-bool!
            context (field-value fields 2) "query negation")]
       (if negated
@@ -673,9 +673,9 @@
         (d/relation-literal relation terms)))]
 
     [:query/predicate
-    (let [fields: (Vec Any)
+    (let [(fields (Vec Any))
           (read-record! context value :query/predicate 3)
-          operation: Keyword
+          (operation Keyword)
           (require-keyword!
            context (field-value fields 0) "query predicate")]
       (if (contains? d/comparison-operators operation)
@@ -690,9 +690,9 @@
           (fallback-query-literal))))]
 
     [:query/function
-    (let [fields: (Vec Any)
+    (let [(fields (Vec Any))
           (read-record! context value :query/function 3)
-          operation: Keyword
+          (operation Keyword)
           (require-keyword!
            context (field-value fields 0) "query function")]
       (if (contains? d/builtin-operators operation)
@@ -713,33 +713,33 @@
           "query clause record is unsupported")
          (fallback-query-literal))]))
 
-(defn parse-query-rule! [context: ReadContext value: Any] -> d/Rule
-  (let [fields: (Vec Any) (read-record! context value :query/rule 2)
-        head: QueryHead
+(defn parse-query-rule! [(context ReadContext) (value Any)] d/Rule
+  (let [(fields (Vec Any)) (read-record! context value :query/rule 2)
+        (head QueryHead)
         (parse-query-head! context (field-value fields 0))]
     (d/rule
      (queryhead-relation head)
      (queryhead-terms head)
      (mapv
-      (fn [clause: Any] -> d/Literal
+      (fn [(clause Any)] d/Literal
         (parse-query-clause! context clause))
       (read-list! context (field-value fields 1))))))
 
-(defn parse-query-stratum! [context: ReadContext value: Any] -> (Vec d/Rule)
-  (let [fields: (Vec Any) (read-record! context value :query/stratum 1)]
+(defn parse-query-stratum! [(context ReadContext) (value Any)] (Vec d/Rule)
+  (let [(fields (Vec Any)) (read-record! context value :query/stratum 1)]
     (mapv
-     (fn [rule: Any] -> d/Rule (parse-query-rule! context rule))
+     (fn [(rule Any)] d/Rule (parse-query-rule! context rule))
      (read-list! context (field-value fields 0)))))
 
 (defn parse-query-aggregate!
-  [context: ReadContext
-   value: Any] -> query/AggregateSpec
-  (let [fields: (Vec Any)
+  [(context ReadContext)
+   (value Any)] query/AggregateSpec
+  (let [(fields (Vec Any))
         (read-record! context value :query/aggregate 2)
-        operation: Keyword
+        (operation Keyword)
         (require-keyword!
          context (field-value fields 0) "query aggregate")
-        argument: OptionValue
+        (argument OptionValue)
         (read-option! context (field-value fields 1))]
     (if (contains? query/aggregate-operators operation)
       (query/aggregate-spec
@@ -755,10 +755,10 @@
         (query/aggregate-spec :count nil)))))
 
 (defn parse-query-having!
-  [context: ReadContext
-   value: Any] -> query/HavingClause
-  (let [fields: (Vec Any) (read-record! context value :query/having 3)
-        comparison: Keyword
+  [(context ReadContext)
+   (value Any)] query/HavingClause
+  (let [(fields (Vec Any)) (read-record! context value :query/having 3)
+        (comparison Keyword)
         (require-keyword!
          context (field-value fields 0) "having comparison")]
     (if (contains? d/comparison-operators comparison)
@@ -773,31 +773,31 @@
          "having comparison operation is unsupported")
         (query/having-clause :eq 0 :rpc/unit)))))
 
-(defn parse-query-find! [context: ReadContext value: Any] -> query/FindSpec
+(defn parse-query-find! [(context ReadContext) (value Any)] query/FindSpec
   (match (query-record-tag value)
     [:query/find-relation
-    (let [fields: (Vec Any)
+    (let [(fields (Vec Any))
           (read-record! context value :query/find-relation 1)]
       (query/relation-find
        (require-string!
         context (field-value fields 0) "find relation")))]
 
     [:query/find-aggregate
-    (let [fields: (Vec Any)
+    (let [(fields (Vec Any))
           (read-record! context value :query/find-aggregate 4)]
       (query/aggregate-find
        (require-string!
         context (field-value fields 0) "aggregate find relation")
        (mapv
-        (fn [position: Any] -> Int
+        (fn [(position Any)] Int
           (require-int! context position "aggregate grouping index"))
         (read-list! context (field-value fields 1)))
        (mapv
-        (fn [aggregate: Any] -> query/AggregateSpec
+        (fn [(aggregate Any)] query/AggregateSpec
           (parse-query-aggregate! context aggregate))
         (read-list! context (field-value fields 2)))
        (mapv
-        (fn [clause: Any] -> query/HavingClause
+        (fn [(clause Any)] query/HavingClause
           (parse-query-having! context clause))
         (read-list! context (field-value fields 3)))))]
 
@@ -807,26 +807,26 @@
           "query find record is unsupported")
          (fallback-find-spec))]))
 
-(defn parse-query-order! [context: ReadContext value: Any] -> query/OrderClause
-  (let [fields: (Vec Any) (read-record! context value :query/order 2)]
+(defn parse-query-order! [(context ReadContext) (value Any)] query/OrderClause
+  (let [(fields (Vec Any)) (read-record! context value :query/order 2)]
     (query/order-clause
      (require-int! context (field-value fields 0) "query order column")
      (require-keyword!
       context (field-value fields 1) "query order direction"))))
 
-(defn parse-query-plan! [context: ReadContext value: Any] -> query/QueryPlan
-  (let [fields: (Vec Any) (read-record! context value :query/plan 4)
-        limit-option: OptionValue
+(defn parse-query-plan! [(context ReadContext) (value Any)] query/QueryPlan
+  (let [(fields (Vec Any)) (read-record! context value :query/plan 4)
+        (limit-option OptionValue)
         (read-option! context (field-value fields 3))
-        plan: query/QueryPlan
+        (plan query/QueryPlan)
         (query/ordered-query-plan
          (parse-query-find! context (field-value fields 0))
          (mapv
-          (fn [stratum: Any] -> (Vec d/Rule)
+          (fn [(stratum Any)] (Vec d/Rule)
             (parse-query-stratum! context stratum))
           (read-list! context (field-value fields 1)))
          (mapv
-          (fn [clause: Any] -> query/OrderClause
+          (fn [(clause Any)] query/OrderClause
             (parse-query-order! context clause))
           (read-list! context (field-value fields 2)))
          (if (optionvalue-present limit-option)
@@ -834,29 +834,29 @@
             context (optionvalue-value limit-option) "query limit")
            nil))]
     (if (read-context-ok? context)
-      (let [errors: (Vec query/QueryError) (query/validate-plan plan)]
+      (let [(errors (Vec query/QueryError)) (query/validate-plan plan)]
         (if (empty? errors)
           plan
-          (let [error: query/QueryError (nth errors 0)]
+          (let [(error query/QueryError) (nth errors 0)]
             (do
               (record-read-error!
                context (query/error-code error) (query/error-message error))
               plan))))
       plan)))
 
-(defn parse-query-row! [context: ReadContext value: Any] -> (Vec Any)
-  (let [fields: (Vec Any) (read-record! context value :query/row 1)]
+(defn parse-query-row! [(context ReadContext) (value Any)] (Vec Any)
+  (let [(fields (Vec Any)) (read-record! context value :query/row 1)]
     (mapv
-     (fn [entry: Any] -> Any
+     (fn [(entry Any)] Any
        (require-term! context entry "query row value"))
      (read-list! context (field-value fields 0)))))
 
-(defn parse-query-cursor! [context: ReadContext value: Any] -> QueryCursor
-  (let [fields: (Vec Any) (read-record! context value :query/cursor 4)
-        snapshot-version: Int
+(defn parse-query-cursor! [(context ReadContext) (value Any)] QueryCursor
+  (let [(fields (Vec Any)) (read-record! context value :query/cursor 4)
+        (snapshot-version Int)
         (require-int!
          context (field-value fields 0) "cursor snapshot version")
-        ordinal: Int
+        (ordinal Int)
         (require-int! context (field-value fields 2) "cursor page ordinal")]
     (if (or (< snapshot-version 0) (< ordinal 0))
       (do
@@ -872,8 +872,8 @@
        (parse-query-row! context (field-value fields 3))))))
 
 (defn request-cursor!
-  [context: ReadContext
-   request: t/RpcRequest] -> QueryCursor?
+  [(context ReadContext)
+   (request t/RpcRequest)] QueryCursor?
   (let [page (t/rpcrequest-page request)]
     (if (some? page)
       (let [cursor (t/rpc-page-request-cursor-value page)]
@@ -881,15 +881,15 @@
       nil)))
 
 (defn upper-snapshot-version!
-  [context: ReadContext
-   snapshot: Any
-   cursor: QueryCursor?
-   head: Int] -> Int
+  [(context ReadContext)
+   (snapshot Any)
+   (cursor QueryCursor?)
+   (head Int)] Int
   (cond
     [(= snapshot :query/current)
      (if (some? cursor) (querycursor-snapshot-version cursor) head)]
     [(= :query/as-of (query-record-tag snapshot))
-     (let [fields: (Vec Any)
+     (let [(fields (Vec Any))
            (read-record! context snapshot :query/as-of 1)]
        (require-int!
         context (field-value fields 0) "query snapshot version"))]
@@ -901,9 +901,9 @@
        head)]))
 
 (defn snapshot-root!
-  [context: ReadContext
-   root: (Atom t/TermStore)
-   version: Int] -> (Atom t/TermStore)
+  [(context ReadContext)
+   (root (Atom t/TermStore))
+   (version Int)] (Atom t/TermStore)
   (let [head (store/current-sequence root)]
     (if (or (< version 0) (> version head))
       (do
@@ -913,10 +913,10 @@
         root)
       (if (= version head)
         root
-        (let [frames-result: store/TransactionFramesResult
+        (let [(frames-result store/TransactionFramesResult)
               (store/transaction-frames-between-result
                (deref root) -1 version)
-              frames-code: Keyword? (store/transactionframesresult-code frames-result)]
+              (frames-code Keyword?) (store/transactionframesresult-code frames-result)]
           (if (not (store/transactionframesresult-ok frames-result))
             (do
               (record-read-error!
@@ -925,16 +925,16 @@
                  frames-code :rpc/native-query-failed)
                "native read operation failed")
               root)
-            (let [copy: (Atom t/TermStore) (store/new-term-store (store/space-id root))
-                  frames: (Vec t/TransactionFrame)
+            (let [(copy (Atom t/TermStore)) (store/new-term-store (store/space-id root))
+                  (frames (Vec t/TransactionFrame))
                   (store/transactionframesresult-frames frames-result)]
               (loop [remaining frames]
                 (if (empty? remaining)
                   copy
-                  (let [replay-result: store/TransactionReplayResult
+                  (let [(replay-result store/TransactionReplayResult)
                         (store/replay-transaction-result!
                          copy (first remaining))
-                        replay-code: Keyword?
+                        (replay-code Keyword?)
                         (store/transactionreplayresult-code replay-result)]
                     (if (store/transactionreplayresult-ok replay-result)
                       (recur (rest remaining))
@@ -947,18 +947,18 @@
                         root))))))))))))
 
 (defn requested-query-bounds!
-  [context: ReadContext
-   root: (Atom t/TermStore)
-   snapshot: Any
-   cursor: QueryCursor?] -> QueryBounds
+  [(context ReadContext)
+   (root (Atom t/TermStore))
+   (snapshot Any)
+   (cursor QueryCursor?)] QueryBounds
   (let [head (store/current-sequence root)]
     (if (not (read-context-ok? context))
       (->QueryBounds head -1)
-      (let [lower-and-upper: (Vec Int)
+      (let [(lower-and-upper (Vec Int))
             (if (= :query/since (query-record-tag snapshot))
-              (let [fields: (Vec Any)
+              (let [(fields (Vec Any))
                     (read-record! context snapshot :query/since 2)
-                    lower: Int
+                    (lower Int)
                     (require-int!
                      context (field-value fields 0)
                      "query since lower bound")]
@@ -972,8 +972,8 @@
                    (upper-snapshot-version!
                     context (field-value fields 1) cursor head)]))
               [-1 (upper-snapshot-version! context snapshot cursor head)])
-            lower: Int (nth lower-and-upper 0)
-            upper: Int (nth lower-and-upper 1)]
+            (lower Int) (nth lower-and-upper 0)
+            (upper Int) (nth lower-and-upper 1)]
         (cond
           [(not (read-context-ok? context))
            (->QueryBounds head -1)]
@@ -993,9 +993,9 @@
           [:else (->QueryBounds upper lower)])))))
 
 (defn query-view!
-  [context: ReadContext
-   session: schema/Session
-   bounds: QueryBounds] -> QueryView
+  [(context ReadContext)
+   (session schema/Session)
+   (bounds QueryBounds)] QueryView
   (let [root (schema/store-of session)
         head (store/current-sequence root)
         selected-root
@@ -1009,10 +1009,10 @@
                    (querybounds-lower-exclusive bounds))
       (->QueryView root (schema/view session) head -1))))
 
-(defn- rule-uses-any-relation? [rule: d/Rule relations: (Set String)] -> Bool
+(defn- rule-uses-any-relation? [(rule d/Rule) (relations (Set String))] Bool
   (if (contains? relations (d/rule-head-relation rule))
     true
-    (let [body: (Vec d/Literal) (d/rule-body rule)]
+    (let [(body (Vec d/Literal)) (d/rule-body rule)]
       (loop [position 0]
         (if (>= position (count body))
           false
@@ -1022,8 +1022,8 @@
             (recur (inc position))))))))
 
 (defn- stratum-uses-any-relation?
-  [rules: (Vec d/Rule)
-   relations: (Set String)] -> Bool
+  [(rules (Vec d/Rule))
+   (relations (Set String))] Bool
   (loop [position 0]
     (if (>= position (count rules))
       false
@@ -1032,12 +1032,12 @@
         (recur (inc position))))))
 
 (defn- plan-uses-any-relation?
-  [plan: query/QueryPlan
-   relations: (Set String)] -> Bool
+  [(plan query/QueryPlan)
+   (relations (Set String))] Bool
   (if (contains? relations
                  (query/findspec-relation (query/queryplan-find plan)))
     true
-    (let [strata: (Vec (Vec d/Rule)) (query/queryplan-strata plan)]
+    (let [(strata (Vec (Vec d/Rule))) (query/queryplan-strata plan)]
       (loop [stratum-position 0]
         (if (>= stratum-position (count strata))
           false
@@ -1047,43 +1047,43 @@
             (recur (inc stratum-position))))))))
 
 (defn query-rows!
-  [view: QueryView
-   plan: query/QueryPlan
-   timeout-ms: Int] -> query/QueryExecutionResult
-  (let [rotation: rot/Rotation (queryview-rotation view)
-        root: t/TermStore (deref (queryview-root view))
-        triple-candidate: d/CandidateSource
+  [(view QueryView)
+   (plan query/QueryPlan)
+   (timeout-ms Int)] query/QueryExecutionResult
+  (let [(rotation rot/Rotation) (queryview-rotation view)
+        (root t/TermStore) (deref (queryview-root view))
+        (triple-candidate d/CandidateSource)
         (d/rotation-candidate-source
          rotation (queryview-lower-exclusive view))
-        occurrence-candidate: d/CandidateSource?
+        (occurrence-candidate d/CandidateSource?)
         (if (plan-uses-any-relation? plan occurrence-relations)
           (d/occurrence-candidate-source
            root (queryview-lower-exclusive view) (queryview-version view))
           nil)
-        text-result: d/CandidateSourcesResult
+        (text-result d/CandidateSourcesResult)
         (if (plan-uses-any-relation? plan d/text-relations)
-          (let [propositions: (Vec t/Triple)
+          (let [(propositions (Vec t/Triple))
                 (rot/propositions
                  (d/events-after-sequence
                   (rot/all-occurrences rotation)
                   (queryview-lower-exclusive view)))
-                attributes: query/TextAttributeScope
+                (attributes query/TextAttributeScope)
                 (query/plan-text-attribute-scope plan)]
             (if (some? attributes)
-              (let [scope: (Set Any) attributes]
+              (let [(scope (Set Any)) attributes]
                 (d/build-text-candidates-for-attributes-result
                  propositions scope))
               (d/build-text-candidates-result propositions)))
           (d/->CandidateSourcesResult {} nil))
-        error-value: d/QueryEvaluationError? (d/candidatesourcesresult-error text-result)
-        control: d/QueryControl (d/query-control query-step-limit timeout-ms)]
+        (error-value d/QueryEvaluationError?) (d/candidatesourcesresult-error text-result)
+        (control d/QueryControl) (d/query-control query-step-limit timeout-ms)]
     (if (some? error-value)
       (query/->QueryExecutionResult nil error-value)
-      (let [text-candidates: d/CandidateSources
+      (let [(text-candidates d/CandidateSources)
             (d/candidatesourcesresult-sources text-result)
-            triple-candidates: d/CandidateSources
+            (triple-candidates d/CandidateSources)
             (assoc text-candidates d/triple-relation triple-candidate)
-            candidates: d/CandidateSources
+            (candidates d/CandidateSources)
             (if (some? occurrence-candidate)
               (assoc triple-candidates
                      d/occurrence-relation occurrence-candidate)
@@ -1092,9 +1092,9 @@
          (query/project-with-candidates [] candidates) plan control)))))
 
 (defn query-row-position!
-  [context: ReadContext
-   rows: (Vec d/Tuple)
-   after-row: (Vec Any)] -> Int
+  [(context ReadContext)
+   (rows (Vec d/Tuple))
+   (after-row (Vec Any))] Int
   (loop [position 0]
     (if (>= position (count rows))
       (do
@@ -1107,15 +1107,15 @@
         (recur (inc position))))))
 
 (defn occurrence-position!
-  [context: ReadContext
-   rows: (Vec t/Triple)
-   after-row: (Vec Any)] -> Int
+  [(context ReadContext)
+   (rows (Vec t/Triple))
+   (after-row (Vec Any))] Int
   (if (= 2 (count after-row))
     (let [position-value (nth after-row 0)
           expected (nth after-row 1)]
       (if (and (integer? position-value) (t/triple? expected))
-        (let [position: Int position-value
-              expected-value: t/Triple expected]
+        (let [(position Int) position-value
+              (expected-value t/Triple) expected]
           (if (and (>= position 0)
                    (and (< position (count rows))
                         (= expected-value (nth rows position))))
@@ -1136,7 +1136,7 @@
        "page cursor row is absent from its snapshot")
       0)))
 
-(defn page-request-limit! [context: ReadContext page: t/RpcPageRequest] -> Int
+(defn page-request-limit! [(context ReadContext) (page t/RpcPageRequest)] Int
   (let [limit (t/rpcpagerequest-limit page)]
     (if (and (>= limit 1) (<= limit query/max-page-limit))
       limit
@@ -1147,27 +1147,27 @@
         1))))
 
 (defn rpc-query-cursor
-  [snapshot-version: Int
-   digest: String
-   next-page-ordinal: Int
-   after-row: (Vec Any)] -> t/Triple
+  [(snapshot-version Int)
+   (digest String)
+   (next-page-ordinal Int)
+   (after-row (Vec Any))] t/Triple
   (rpc-record
    :query/cursor
    [snapshot-version digest next-page-ordinal (rpc-query-row after-row)]))
 
-(defn empty-query-page-result [] -> PageResult
+(defn empty-query-page-result [] PageResult
   (->PageResult (rpc-query-rows []) nil))
 
-(defn empty-occurrence-page-result [] -> PageResult
+(defn empty-occurrence-page-result [] PageResult
   (->PageResult (rpc-occurrences []) nil))
 
 (defn slice-query-page!
-  [context: ReadContext
-   rows: (Vec d/Tuple)
-   page: t/RpcPageRequest?
-   cursor: QueryCursor?
-   snapshot-version: Int
-   digest: String] -> PageResult
+  [(context ReadContext)
+   (rows (Vec d/Tuple))
+   (page t/RpcPageRequest?)
+   (cursor QueryCursor?)
+   (snapshot-version Int)
+   (digest String)] PageResult
   (if (nil? page)
     ;; An unpaged answer nests one Term node per row, so it is bounded by the
     ;; same codec budget the occurrence path takes; say so here instead of
@@ -1196,14 +1196,14 @@
                             context rows (querycursor-after-row cursor))) 0)]
           (if (not (read-context-ok? context))
             (empty-query-page-result)
-            (let [selected: (Vec d/Tuple)
+            (let [(selected (Vec d/Tuple))
                   (vec (take limit (drop start rows)))
-                  next-position: Int (+ start (count selected))
-                  done: Bool (>= next-position (count rows))
-                  next-cursor: t/Term?
+                  (next-position Int) (+ start (count selected))
+                  (done Bool) (>= next-position (count rows))
+                  (next-cursor t/Term?)
                   (if done
                     nil
-                    (let [cursor-term: t/Term
+                    (let [(cursor-term t/Term)
                           (rpc-query-cursor
                            snapshot-version digest (inc ordinal)
                            (nth selected (dec (count selected))))]
@@ -1213,12 +1213,12 @@
                (t/->RpcPageResponse ordinal next-cursor done)))))]))))
 
 (defn slice-occurrence-page!
-  [context: ReadContext
-   rows: (Vec t/Triple)
-   page: t/RpcPageRequest?
-   cursor: QueryCursor?
-   snapshot-version: Int
-   digest: String] -> PageResult
+  [(context ReadContext)
+   (rows (Vec t/Triple))
+   (page t/RpcPageRequest?)
+   (cursor QueryCursor?)
+   (snapshot-version Int)
+   (digest String)] PageResult
   (if (nil? page)
     (->PageResult
      (rpc-occurrences (vec (take unpaged-occurrence-limit rows))) nil)
@@ -1239,14 +1239,14 @@
                             context rows (querycursor-after-row cursor))) 0)]
           (if (not (read-context-ok? context))
             (empty-occurrence-page-result)
-            (let [selected: (Vec t/Triple)
+            (let [(selected (Vec t/Triple))
                   (vec (take limit (drop start rows)))
-                  next-position: Int (+ start (count selected))
-                  done: Bool (>= next-position (count rows))
-                  next-cursor: t/Term?
+                  (next-position Int) (+ start (count selected))
+                  (done Bool) (>= next-position (count rows))
+                  (next-cursor t/Term?)
                   (if done
                     nil
-                    (let [cursor-term: t/Term
+                    (let [(cursor-term t/Term)
                           (rpc-query-cursor
                            snapshot-version digest (inc ordinal)
                            [(dec next-position)
@@ -1256,8 +1256,8 @@
                (rpc-occurrences selected)
                (t/->RpcPageResponse ordinal next-cursor done)))))]))))
 
-(defn read-digest! [context: ReadContext term: Any] -> String
-  (let [result: native-wire/TermDigestResult
+(defn read-digest! [(context ReadContext) (term Any)] String
+  (let [(result native-wire/TermDigestResult)
         (native-wire/canonical-term-sha256-result! term)]
     (if (native-wire/termdigestresult-ok result)
       (native-wire/termdigestresult-digest result)
@@ -1269,18 +1269,18 @@
         ""))))
 
 (defn placeholder-error-response
-  [request: t/RpcRequest
-   served-version: Int] -> t/RpcResponse
+  [(request t/RpcRequest)
+   (served-version Int)] t/RpcResponse
   (error-response request served-version
                   :rpc/native-query-failed
                   "native read operation failed"))
 
 (defn query-evaluation-error-response!
-  [context: ReadContext
-   request: t/RpcRequest
-   served-version: Int
-   view-version: Int
-   error-value: d/QueryEvaluationError] -> t/RpcResponse
+  [(context ReadContext)
+   (request t/RpcRequest)
+   (served-version Int)
+   (view-version Int)
+   (error-value d/QueryEvaluationError)] t/RpcResponse
   (if (= :fram-query-abort
          (d/query-evaluation-error-type error-value))
     (error-response
@@ -1295,14 +1295,14 @@
       (placeholder-error-response request served-version))))
 
 (defn query-rows-response!
-  [context: ReadContext
-   request: t/RpcRequest
-   head: Int
-   version: Int
-   digest: String
-   cursor: QueryCursor?
-   rows: (Vec d/Tuple)] -> t/RpcResponse
-  (let [page-result: PageResult
+  [(context ReadContext)
+   (request t/RpcRequest)
+   (head Int)
+   (version Int)
+   (digest String)
+   (cursor QueryCursor?)
+   (rows (Vec d/Tuple))] t/RpcResponse
+  (let [(page-result PageResult)
         (slice-query-page!
          context rows (t/rpcrequest-page request) cursor version digest)]
     (if (read-context-ok? context)
@@ -1312,18 +1312,18 @@
       (placeholder-error-response request head))))
 
 (defn query-response!
-  [context: ReadContext
-   session: schema/Session
-   request: t/RpcRequest] -> t/RpcResponse
-  (let [root: (Atom t/TermStore) (schema/store-of session)
-        head: Int (store/current-sequence root)
-        request-fields: (Vec Any)
+  [(context ReadContext)
+   (session schema/Session)
+   (request t/RpcRequest)] t/RpcResponse
+  (let [(root (Atom t/TermStore)) (schema/store-of session)
+        (head Int) (store/current-sequence root)
+        (request-fields (Vec Any))
         (read-record!
          context (t/rpc-request-payload-value request) :query/request 2)
-        plan-term: Any (field-value request-fields 0)
-        plan: query/QueryPlan (parse-query-plan! context plan-term)
-        cursor: QueryCursor? (request-cursor! context request)
-        bounds: QueryBounds
+        (plan-term Any) (field-value request-fields 0)
+        (plan query/QueryPlan) (parse-query-plan! context plan-term)
+        (cursor QueryCursor?) (request-cursor! context request)
+        (bounds QueryBounds)
         (requested-query-bounds!
          context root (field-value request-fields 1) cursor)]
     (if (not (read-context-ok? context))
@@ -1336,34 +1336,34 @@
                        (querybounds-version bounds)))]
         (if (not (read-context-ok? context))
           (placeholder-error-response request head)
-          (let [requested-timeout: Int? (t/rpcrequest-timeout-ms request)
-                timeout-value: Int
+          (let [(requested-timeout Int?) (t/rpcrequest-timeout-ms request)
+                (timeout-value Int)
                 (if (some? requested-timeout)
-                  (let [present-timeout: Int requested-timeout]
+                  (let [(present-timeout Int) requested-timeout]
                     present-timeout)
                   default-query-timeout-ms)
-                timeout-ms: Int (min max-query-timeout-ms timeout-value)]
+                (timeout-ms Int) (min max-query-timeout-ms timeout-value)]
             (if (< timeout-ms 0)
               (error-response request (querybounds-version bounds)
                               :rpc-invalid-payload
                               "query timeout-ms must be non-negative")
-              (let [key: schema/OrderedResultKey
+              (let [(key schema/OrderedResultKey)
                     (result-cache-key
                      session (querybounds-version bounds)
                      (querybounds-lower-exclusive bounds) :rpc/query digest)
-                    cached: ResultCacheLookup
+                    (cached ResultCacheLookup)
                     (result-cache-lookup! session key)]
                 (if (resultcachelookup-found cached)
                   (query-rows-response!
                    context request head (querybounds-version bounds) digest
                    cursor (resultcachelookup-query-rows cached))
-                  (let [view: QueryView (query-view! context session bounds)]
+                  (let [(view QueryView) (query-view! context session bounds)]
                     (if (not (read-context-ok? context))
                       (placeholder-error-response request head)
-                      (let [execution: query/QueryExecutionResult
+                      (let [(execution query/QueryExecutionResult)
                             (query-rows! view plan timeout-ms)
-                            error-value: d/QueryEvaluationError? (query/execution-error execution)
-                            result: query/QueryResult? (query/execution-query-result execution)]
+                            (error-value d/QueryEvaluationError?) (query/execution-error execution)
+                            (result query/QueryResult?) (query/execution-query-result execution)]
                         (cond
                           [(some? error-value)
                            (query-evaluation-error-response!
@@ -1376,15 +1376,15 @@
                               "native read operation failed")
                              (placeholder-error-response request head))]
                           [:else
-                           (let [errors: (Vec query/QueryError)
+                           (let [(errors (Vec query/QueryError))
                                  (query/result-errors result)]
                              (if (not (empty? errors))
-                               (let [error: query/QueryError (nth errors 0)]
+                               (let [(error query/QueryError) (nth errors 0)]
                                  (error-response
                                   request (queryview-version view)
                                   (query/error-code error)
                                   (query/error-message error)))
-                               (let [rows: (Vec d/Tuple)
+                               (let [(rows (Vec d/Tuple))
                                      (query/result-rows result)]
                                  (do
                                    (retain-query-result! session key rows)
@@ -1394,14 +1394,14 @@
                                     rows)))))])))))))))))))
 
 (defn occurrence-rows-response!
-  [context: ReadContext
-   request: t/RpcRequest
-   head: Int
-   version: Int
-   digest: String
-   cursor: QueryCursor?
-   rows: (Vec t/Triple)] -> t/RpcResponse
-  (let [page-result: PageResult
+  [(context ReadContext)
+   (request t/RpcRequest)
+   (head Int)
+   (version Int)
+   (digest String)
+   (cursor QueryCursor?)
+   (rows (Vec t/Triple))] t/RpcResponse
+  (let [(page-result PageResult)
         (slice-occurrence-page!
          context rows (t/rpcrequest-page request) cursor version digest)]
     (if (read-context-ok? context)
@@ -1411,27 +1411,27 @@
       (placeholder-error-response request head))))
 
 (defn occurrences-response!
-  [context: ReadContext
-   session: schema/Session
-   request: t/RpcRequest] -> t/RpcResponse
+  [(context ReadContext)
+   (session schema/Session)
+   (request t/RpcRequest)] t/RpcResponse
   (let [root (schema/store-of session)
         head (store/current-sequence root)]
     (do
       (require-unit! context (t/rpc-request-payload-value request))
       (if (not (read-context-ok? context))
         (placeholder-error-response request head)
-        (let [cursor: QueryCursor? (request-cursor! context request)
-              version: Int (if (some? cursor)
+        (let [(cursor QueryCursor?) (request-cursor! context request)
+              (version Int) (if (some? cursor)
                         (querycursor-snapshot-version cursor) head)
-              digest: String (read-digest! context :rpc/unit)]
+              (digest String) (read-digest! context :rpc/unit)]
           (if (not (read-context-ok? context))
             (placeholder-error-response request head)
             (let [page (t/rpcrequest-page request)]
               (if (some? page)
-                (let [key: schema/OrderedResultKey
+                (let [(key schema/OrderedResultKey)
                       (result-cache-key
                        session version -1 :rpc/occurrences digest)
-                      cached: ResultCacheLookup
+                      (cached ResultCacheLookup)
                       (result-cache-lookup! session key)]
                   (if (resultcachelookup-found cached)
                     (occurrence-rows-response!
@@ -1440,7 +1440,7 @@
                     (let [snapshot (snapshot-root! context root version)]
                       (if (not (read-context-ok? context))
                         (placeholder-error-response request head)
-                        (let [rows: (Vec t/Triple)
+                        (let [(rows (Vec t/Triple))
                               (store/operation-occurrences snapshot)]
                           (do
                             (retain-triple-result! session key rows)
@@ -1454,20 +1454,20 @@
                      context request head version digest cursor
                      (store/operation-occurrences snapshot))))))))))))
 
-(defn validation-payload! [root: (Atom t/TermStore)] -> t/Triple
-  (let [snapshot: t/TermStore (deref root)
-        copy: (Atom t/TermStore) (atom snapshot)
-        loaded: store/TermStoreLoadResult
+(defn validation-payload! [(root (Atom t/TermStore))] t/Triple
+  (let [(snapshot t/TermStore) (deref root)
+        (copy (Atom t/TermStore)) (atom snapshot)
+        (loaded store/TermStoreLoadResult)
         (store/load-term-store-result! copy (store/dump-term-store copy))]
     (if (store/termstoreloadresult-ok loaded)
-      (let [space-id: String (store/space-id copy)
-            propositions: (Vec t/Triple) (store/live-propositions copy)
-            violations: (Vec t/Triple)
+      (let [(space-id String) (store/space-id copy)
+            (propositions (Vec t/Triple)) (store/live-propositions copy)
+            (violations (Vec t/Triple))
             (kernel/lint-declared-profile propositions space-id)]
         (rpc-validation
          true
          (mapv
-          (fn [violation: t/Triple] -> Any
+          (fn [(violation t/Triple)] Any
             (rpc-violation :rpc/profile-violation violation))
           violations)))
       (let [code-value (store/termstoreloadresult-code loaded)
@@ -1475,9 +1475,9 @@
         (rpc-validation false [(rpc-violation code "validation failed")])))))
 
 (defn validate-response!
-  [context: ReadContext
-   session: schema/Session
-   request: t/RpcRequest] -> t/RpcResponse
+  [(context ReadContext)
+   (session schema/Session)
+   (request t/RpcRequest)] t/RpcResponse
   (let [served-version (store/current-sequence (schema/store-of session))]
     (do
       (require-unit! context (t/rpc-request-payload-value request))
@@ -1487,13 +1487,13 @@
         (placeholder-error-response request served-version)))))
 
 (defn dispatch-read!
-  [session: schema/Session
-   request: t/RpcRequest] -> NativeReadResult
-  (let [operation: Keyword (t/rpcrequest-op request)
-        served-version: Int (store/current-sequence (schema/store-of session))
-        context: ReadContext (new-read-context)]
+  [(session schema/Session)
+   (request t/RpcRequest)] NativeReadResult
+  (let [(operation Keyword) (t/rpcrequest-op request)
+        (served-version Int) (store/current-sequence (schema/store-of session))
+        (context ReadContext) (new-read-context)]
     (if (contains? #{:rpc/query :rpc/occurrences :rpc/validate} operation)
-      (let [selected: t/RpcResponse
+      (let [(selected t/RpcResponse)
             (cond
               [(and (not= operation :rpc/query)
                     (some? (t/rpcrequest-timeout-ms request)))
@@ -1510,7 +1510,7 @@
               [(= operation :rpc/occurrences)
                (occurrences-response! context session request)]
               [:else (validate-response! context session request)])
-            read-error: ReadError? (read-context-error context)]
+            (read-error ReadError?) (read-context-error context)]
         (if read-error
           (->NativeReadResult
            true
