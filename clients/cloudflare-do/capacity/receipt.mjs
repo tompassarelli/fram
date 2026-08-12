@@ -15,6 +15,11 @@ export const COMPRESSED_LIMIT_BYTES = Object.freeze({
   paid: 10 * 1024 * 1024,
 });
 export const ISOLATE_MEMORY_LIMIT_BYTES = 128 * 1024 * 1024;
+export const REQUIRED_VERIFY_RESPONSE_FILENAMES = Object.freeze([
+  "verify-title.bin",
+  "verify-ordered-title.bin",
+  "verify-bound-title-text.bin",
+]);
 export const REQUIRED_CORPUS_PROFILE = Object.freeze({
   schema: "fram-wiki-capacity-corpus/v1",
   profile: "wiki-shaped-256x3-2k-v1",
@@ -29,7 +34,7 @@ export const REQUIRED_CORPUS_PROFILE = Object.freeze({
   spaceId: "fram-wiki-capacity-v1",
   batches: 29,
   loadFrames: 29,
-  verifyFrames: 2,
+  verifyFrames: 4,
 });
 
 export function canonicalJson(value) {
@@ -149,6 +154,26 @@ function bundleExecutionMatches(measured, executed) {
   );
 }
 
+function exactVerificationResponsesMatch(responses) {
+  if (responses === null || typeof responses !== "object") return false;
+  const names = Object.keys(responses).sort();
+  if (
+    canonicalJson(names) !==
+    canonicalJson([...REQUIRED_VERIFY_RESPONSE_FILENAMES].sort())
+  ) {
+    return false;
+  }
+  return REQUIRED_VERIFY_RESPONSE_FILENAMES.every((filename) => {
+    const response = responses[filename];
+    return (
+      response !== null &&
+      typeof response === "object" &&
+      /^[0-9a-f]{64}$/.test(response.expectedSha256) &&
+      response.observedSha256 === response.expectedSha256
+    );
+  });
+}
+
 export function makeReceipt({
   plan,
   bundle,
@@ -245,6 +270,10 @@ export function makeReceipt({
     Number.isSafeInteger(functional.storageCommits) &&
     functional.storageCommits >= REQUIRED_CORPUS_PROFILE.loadFrames &&
     /^[0-9a-f]{64}$/.test(functional.reopenedTitleResponseSha256);
+  const querySemanticsVerifiedAfterReopen =
+    exactVerificationResponsesMatch(functional.reopenedVerificationResponses) &&
+    functional.reopenedVerificationResponses["verify-title.bin"]
+      .observedSha256 === functional.reopenedTitleResponseSha256;
   const checks = {
     cgroupLimitIs128MiB: memoryMaxBytes === ISOLATE_MEMORY_LIMIT_BYTES,
     memoryScopeIsWorkerdProcessTreeOnly:
@@ -261,6 +290,7 @@ export function makeReceipt({
     fixedCorpusProfileObserved,
     fullCorpusExecutionPassed,
     durableRecycleReopenVerified,
+    querySemanticsVerifiedAfterReopen,
     runtimeConfigurationObserved,
     currentSourceArtifact,
     guestLinearMemoryMeasured,
@@ -323,6 +353,8 @@ export function makeReceipt({
       durableImageBytes: functional.durableImageBytes,
       storageCommits: functional.storageCommits,
       reopenedTitleResponseSha256: functional.reopenedTitleResponseSha256,
+      reopenedVerificationResponses:
+        functional.reopenedVerificationResponses ?? null,
       failure: functional.failure ?? null,
     },
     memory: {

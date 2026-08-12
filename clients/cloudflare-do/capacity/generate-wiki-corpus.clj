@@ -14,6 +14,7 @@
 (def profile (json/parse-string (slurp profile-file) true))
 (def space "fram-wiki-capacity-v1")
 (def request-id (atom 0))
+(def expected-verify-responses (atom (sorted-map)))
 
 (defn fail! [message]
   (binding [*out* *err*] (println (str "generate-wiki-corpus: " message)))
@@ -88,6 +89,16 @@
            (str entry " " filename " " (alength bytes) " " digest " " operation))
     id))
 
+(defn expect-response! [filename request-id operation served-version payload]
+  (let [response
+        (wire/encode-rpc-frame-v1!
+         (wire/rpc-response-frame
+          request-id
+          (wire/rpc-response!
+           space operation served-version nil nil payload)))]
+    (swap! expected-verify-responses assoc filename
+           (hex (sha256-bytes response)))))
+
 (.mkdirs output-directory)
 (let [actions (fact-actions)
       expected (:expectedFacts profile)]
@@ -114,11 +125,68 @@
              (wire/rpc-triples!
               [(t/triple title-subject :wiki/title title-value)]))))]
       (spit (io/file output-directory "expected-title-response.sha256")
-            (str (hex (sha256-bytes expected-title-response)) "\n")))
+            (str (hex (sha256-bytes expected-title-response)) "\n"))
+      (swap! expected-verify-responses assoc "verify-title.bin"
+             (hex (sha256-bytes expected-title-response))))
+    (let [entity (wire/rpc-query-variable! "entity")
+          title (wire/rpc-query-variable! "title")
+          ordered-title-plan
+          (wire/rpc-ordered-query-plan!
+           (wire/rpc-query-find-relation! "ordered-title")
+           [(wire/rpc-query-stratum!
+             [(wire/rpc-query-rule!
+               (wire/rpc-query-head! "ordered-title" [entity title])
+               [(wire/rpc-query-relation!
+                 "triple"
+                 [entity (wire/rpc-query-constant! :wiki/title) title]
+                 false)])])]
+           [(wire/rpc-query-order! 1 :desc)
+            (wire/rpc-query-order! 0 :asc)]
+           2)
+          filename "verify-ordered-title.bin"
+          ordered-request-id
+          (emit! verify-manifest "verify-ordered-title" "q" :rpc/query
+                 (wire/rpc-query-request! ordered-title-plan wire/query-current))
+          last-article (dec (:articles profile))
+          rows
+          (mapv (fn [article]
+                  (wire/rpc-query-row!
+                   [(article-id article)
+                    (format "Capacity article %04d" article)]))
+                [last-article (dec last-article)])]
+      (expect-response! filename ordered-request-id :rpc/query (count batches)
+                        (wire/rpc-query-rows! rows)))
+    (let [entity (wire/rpc-query-variable! "entity")
+          bound-text-plan
+          (wire/rpc-ordered-query-plan!
+           (wire/rpc-query-find-relation! "title-hit")
+           [(wire/rpc-query-stratum!
+             [(wire/rpc-query-rule!
+               (wire/rpc-query-head! "title-hit" [entity])
+               [(wire/rpc-query-relation!
+                 "text-match"
+                 [entity
+                  (wire/rpc-query-constant! :wiki/title)
+                  (wire/rpc-query-constant! "article")]
+                 false)])])]
+           [(wire/rpc-query-order! 0 :asc)]
+           2)
+          filename "verify-bound-title-text.bin"
+          bound-text-request-id
+          (emit! verify-manifest "verify-bound-title-text" "q" :rpc/query
+                 (wire/rpc-query-request! bound-text-plan wire/query-current))
+          rows
+          [(wire/rpc-query-row! [(article-id 0)])
+           (wire/rpc-query-row! [(article-id 1)])]]
+      (expect-response! filename bound-text-request-id :rpc/query (count batches)
+                        (wire/rpc-query-rows! rows)))
     (spit (io/file output-directory "manifest-load.txt")
           (str (str/join "\n" @load-manifest) "\n"))
     (spit (io/file output-directory "manifest-verify.txt")
           (str (str/join "\n" @verify-manifest) "\n"))
+    (spit (io/file output-directory "expected-verify-responses.json")
+          (str (json/generate-string @expected-verify-responses {:pretty true})
+               "\n"))
     (spit (io/file output-directory "profile.json")
           (str (json/generate-string
                 (assoc profile

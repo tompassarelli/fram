@@ -57,6 +57,8 @@ writeFileSync(
     durableImageBytes: 0,
     storageCommits: 0,
     reopenedFromDurableStorage: false,
+    reopenedTitleResponseSha256: null,
+    reopenedVerificationResponses: null,
     failure: {
       memoryResult: properties.MemoryResult,
       controllerExitStatus: Number(properties.ControllerExitStatus),

@@ -13,7 +13,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { CAPACITY_RUNTIME_CONFIGURATION } from "./config.mjs";
-import { canonicalJson, measureBundle } from "./receipt.mjs";
+import {
+  REQUIRED_VERIFY_RESPONSE_FILENAMES,
+  canonicalJson,
+  measureBundle,
+} from "./receipt.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [bundleArgument, corpusArgument, outputArgument, progressArgument] =
@@ -89,6 +93,17 @@ function processTreeMemory() {
 
 const load = manifest("manifest-load.txt");
 const verify = manifest("manifest-verify.txt");
+const expectedVerifyResponses = JSON.parse(
+  readFileSync(`${corpus}/expected-verify-responses.json`, "utf8"),
+);
+for (const filename of REQUIRED_VERIFY_RESPONSE_FILENAMES) {
+  if (!verify.some((row) => row.filename === filename)) {
+    throw new Error(`verification manifest omitted ${filename}`);
+  }
+  if (typeof expectedVerifyResponses[filename] !== "string") {
+    throw new Error(`expected response map omitted ${filename}`);
+  }
+}
 let progress = {
   schema: "fram-cloudflare-workerd-progress/v1",
   phase: "starting",
@@ -205,10 +220,24 @@ try {
   }
   recordProgress({ phase: "recycled", lastCompletedPhase: "recycled" });
   let titleResponseSha256 = null;
+  const reopenedVerificationResponses = {};
   for (const [index, row] of verify.entries()) {
     recordProgress({ phase: "reopen-in-flight" });
     const result = await exchange(mf, row);
     responseBytes += result.bytes;
+    const expectedSha256 = expectedVerifyResponses[row.filename];
+    if (expectedSha256 && result.sha256 !== expectedSha256) {
+      throw new Error(
+        `${row.filename}: expected response sha256 ${expectedSha256}, ` +
+          `got ${result.sha256}`,
+      );
+    }
+    if (expectedSha256) {
+      reopenedVerificationResponses[row.filename] = {
+        expectedSha256,
+        observedSha256: result.sha256,
+      };
+    }
     if (row.filename === "verify-title.bin") titleResponseSha256 = result.sha256;
     recordProgress({
       phase: "reopen-verify",
@@ -287,6 +316,7 @@ try {
     storageCommits: loaded.storage.commits,
     reopenedFromDurableStorage: true,
     reopenedTitleResponseSha256: titleResponseSha256,
+    reopenedVerificationResponses,
   };
   mkdirSync(dirname(output), { recursive: true });
   writeFileSync(output, canonicalJson(result));

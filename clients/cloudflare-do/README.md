@@ -265,5 +265,8 @@ three revisions per article, 2,048-byte deterministic bodies, four links per
 revision, and 6,912 facts total. Each article contributes three article facts
 plus `3 × (4 revision facts + 4 link facts)`, or 27 facts. The full profile is
 deliberate: if it exceeds 128 MiB, the gate fails instead of silently shrinking
-the workload. Change `capacity/corpus.json` only with the profile contract test
-and an explicit capacity decision.
+the workload. After recycling the engine, the gate also compares exact response
+bytes for a durable title scan, ordered top-K query, and bound-attribute text
+query; the text corpus deliberately puts the same token in an unrelated
+attribute. Change `capacity/corpus.json` only with the profile contract test and
+an explicit capacity decision.

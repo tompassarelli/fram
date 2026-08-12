@@ -44,7 +44,7 @@ function fixture(overrides = {}) {
       corpus: { ...REQUIRED_CORPUS_PROFILE },
       deploymentBundle: structuredClone(bundle),
       loadFrames: 29,
-      verifyFrames: 2,
+      verifyFrames: 4,
       responseBytes: 3,
       runtimeConfiguration: {
         ...CAPACITY_RUNTIME_CONFIGURATION,
@@ -55,6 +55,20 @@ function fixture(overrides = {}) {
       durableImageBytes: 0,
       storageCommits: 29,
       reopenedTitleResponseSha256: "2".repeat(64),
+      reopenedVerificationResponses: {
+        "verify-title.bin": {
+          expectedSha256: "2".repeat(64),
+          observedSha256: "2".repeat(64),
+        },
+        "verify-ordered-title.bin": {
+          expectedSha256: "4".repeat(64),
+          observedSha256: "4".repeat(64),
+        },
+        "verify-bound-title-text.bin": {
+          expectedSha256: "5".repeat(64),
+          observedSha256: "5".repeat(64),
+        },
+      },
       guestLinearMemoryHighWaterBytes: 4 * 1024 * 1024,
       loadedGuestLinearMemoryBytes: 4 * 1024 * 1024,
       reopenedGuestLinearMemoryBytes: 3 * 1024 * 1024,
@@ -174,6 +188,16 @@ describe("Cloudflare capacity receipt", () => {
     const receipt = makeReceipt(input);
     expect(receipt.pass).toBe(false);
     expect(receipt.checks.durableRecycleReopenVerified).toBe(false);
+  });
+
+  test("fails when a post-reopen query response differs from its exact oracle", () => {
+    const input = fixture();
+    input.functional.reopenedVerificationResponses[
+      "verify-ordered-title.bin"
+    ].observedSha256 = "6".repeat(64);
+    const receipt = makeReceipt(input);
+    expect(receipt.pass).toBe(false);
+    expect(receipt.checks.querySemanticsVerifiedAfterReopen).toBe(false);
   });
 
   test("fails when phase-level process-tree peaks are absent", () => {

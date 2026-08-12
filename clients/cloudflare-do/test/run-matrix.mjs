@@ -7,7 +7,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Miniflare } from "miniflare";
+import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import {
   framClient,
   keywordTerm,
@@ -26,7 +26,7 @@ const watchdog = setTimeout(() => {
   process.exit(3);
 }, budgetMs);
 
-const mf = new Miniflare({
+const mf = new Miniflare(convertV4MiniflareOptions({
   modulesRoot: root,
   modules: [
     { type: "ESModule", path: `${root}/test/worker/worker.mjs` },
@@ -51,7 +51,7 @@ const mf = new Miniflare({
     FRAM_RACE: { className: "FramRace", useSQLite: true },
     FRAM_CLIENT: { className: "FramClient", useSQLite: true },
   },
-});
+}));
 
 const failures = [];
 const notes = [];
