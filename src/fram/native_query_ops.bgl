@@ -807,15 +807,32 @@
           "query find record is unsupported")
          (fallback-find-spec))]))
 
+(defn parse-query-order! [context: ReadContext value: Any] -> query/OrderClause
+  (let [fields: (Vec Any) (read-record! context value :query/order 2)]
+    (query/order-clause
+     (require-int! context (field-value fields 0) "query order column")
+     (require-keyword!
+      context (field-value fields 1) "query order direction"))))
+
 (defn parse-query-plan! [context: ReadContext value: Any] -> query/QueryPlan
-  (let [fields: (Vec Any) (read-record! context value :query/plan 2)
+  (let [fields: (Vec Any) (read-record! context value :query/plan 4)
+        limit-option: OptionValue
+        (read-option! context (field-value fields 3))
         plan: query/QueryPlan
-        (query/query-plan
+        (query/ordered-query-plan
          (parse-query-find! context (field-value fields 0))
          (mapv
           (fn [stratum: Any] -> (Vec d/Rule)
             (parse-query-stratum! context stratum))
-          (read-list! context (field-value fields 1))))]
+          (read-list! context (field-value fields 1)))
+         (mapv
+          (fn [clause: Any] -> query/OrderClause
+            (parse-query-order! context clause))
+          (read-list! context (field-value fields 2)))
+         (if (optionvalue-present limit-option)
+           (require-int!
+            context (optionvalue-value limit-option) "query limit")
+           nil))]
     (if (read-context-ok? context)
       (let [errors: (Vec query/QueryError) (query/validate-plan plan)]
         (if (empty? errors)

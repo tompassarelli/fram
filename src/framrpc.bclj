@@ -1087,8 +1087,20 @@
                [relation (rpc-list! grouping) (rpc-list! aggregates)
                 (rpc-list! having)]))
 
+(defn rpc-query-order! [column: Int direction: Keyword] -> t/Triple
+  (rpc-record! :query/order [column direction]))
+
+(defn rpc-ordered-query-plan!
+  [find: t/Triple
+   strata: (Vec Any)
+   order: (Vec Any)
+   limit: Any] -> t/Triple
+  (rpc-record! :query/plan
+               [find (rpc-list! strata) (rpc-list! order)
+                (rpc-option! limit)]))
+
 (defn rpc-query-plan! [find: t/Triple strata: (Vec Any)] -> t/Triple
-  (rpc-record! :query/plan [find (rpc-list! strata)]))
+  (rpc-ordered-query-plan! find strata [] nil))
 
 (defn rpc-query-as-of! [version: Int] -> t/Triple
   (rpc-record! :query/as-of [version]))

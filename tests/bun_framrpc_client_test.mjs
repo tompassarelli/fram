@@ -264,6 +264,21 @@ async function exerciseClient(fram) {
     assert.equal(events.result.length, 3);
   });
 
+  await check('structured query order and top-K are evaluated by FRAM', async () => {
+    const ranked = await fram.query({
+      ...titleQuery,
+      orderBy: [
+        { column: 1, direction: 'desc' },
+        { column: 0, direction: 'asc' },
+      ],
+      limit: 2,
+    });
+    assert.deepEqual(ranked.result, [
+      [stringTerm('@doc-a'), stringTerm('Running with Wolves')],
+      [stringTerm('@doc-b'), stringTerm('Runner Notes')],
+    ]);
+  });
+
   await check('text-match runs through the same direct query operation', async () => {
     const response = await fram.query({
       find: 'matches',

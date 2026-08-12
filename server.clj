@@ -691,11 +691,22 @@
 
     (server-fail! :query-invalid-find "query find record is unsupported" {})))
 
+(defn- parse-query-order! [value]
+  (let [[column direction] (record-fields! value :query/order 2)]
+    (query/order-clause
+     (require-int! column "query order column")
+     (require-keyword! direction "query order direction"))))
+
 (defn- parse-query-plan! [value]
-  (let [[find strata] (record-fields! value :query/plan 2)
-        plan (query/query-plan
+  (let [[find strata order limit-option]
+        (record-fields! value :query/plan 4)
+        [limit-present limit] (option-value! limit-option)
+        plan (query/ordered-query-plan
               (parse-query-find! find)
-              (mapv parse-query-stratum! (list-values! strata)))
+              (mapv parse-query-stratum! (list-values! strata))
+              (mapv parse-query-order! (list-values! order))
+              (when limit-present
+                (require-int! limit "query limit")))
         errors (query/validate-plan plan)]
     (when-let [error (first errors)]
       (server-fail! (query/error-code error) (query/error-message error) {}))
@@ -955,6 +966,8 @@
         arguments (when literal (datalog/literal-arguments literal))]
     (when (and (some? rule)
                (some? literal)
+               (empty? (query/queryplan-order plan))
+               (nil? (query/queryplan-limit plan))
                (not (query/aggregate-find? find))
                (= (query/findspec-relation find)
                   (datalog/rule-head-relation rule))
@@ -1469,23 +1482,13 @@
     (server-fail! (query/error-code error) (query/error-message error) {}))
   (query/result-rows result))
 
-;; rows come from a Set (no duplicates), ordered by query/row-key: locate by
-;; binary search on that key instead of a linear scan.
+;; Query plans may carry a custom order, so the cursor row is located by exact
+;; equality rather than assuming canonical row-key order.
 (defn- query-cursor-position! [rows after-row]
-  (let [target (query/row-key after-row)
-        n (count rows)
-        lo (loop [lo 0 hi n]
-             (if (>= lo hi)
-               lo
-               (let [mid (quot (+ lo hi) 2)]
-                 (if (neg? (compare (query/row-key (nth rows mid)) target))
-                   (recur (inc mid) hi)
-                   (recur lo mid)))))
-        position (loop [index lo]
-                   (when (and (< index n) (= (query/row-key (nth rows index)) target))
-                     (if (= (nth rows index) after-row)
-                       index
-                       (recur (inc index)))))]
+  (let [position (first (keep-indexed
+                         (fn [index row]
+                           (when (= row after-row) index))
+                         rows))]
     (when (nil? position)
       (server-fail! :query-cursor-mismatch
                     "query cursor row is absent from its snapshot" {}))

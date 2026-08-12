@@ -70,12 +70,21 @@ export interface StructuredQueryRules {
   find: string | QueryAggregateFind;
   rules: QueryRule[];
   strata?: never;
+  orderBy?: QueryOrderClause[];
+  limit?: IntegerInput;
 }
 
 export interface StructuredQueryStrata {
   find: string | QueryAggregateFind;
   strata: QueryRule[][];
   rules?: never;
+  orderBy?: QueryOrderClause[];
+  limit?: IntegerInput;
+}
+
+export interface QueryOrderClause {
+  column: IntegerInput;
+  direction: 'asc' | 'desc';
 }
 
 export type StructuredQuery = StructuredQueryRules | StructuredQueryStrata;

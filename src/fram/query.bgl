@@ -17,7 +17,12 @@
    grouping: (Vec Int)
    aggregates: (Vec AggregateSpec)
    having: (Vec HavingClause)])
-(defrecord QueryPlan [find: FindSpec strata: (Vec (Vec d/Rule))])
+(defrecord OrderClause [column: Int direction: Keyword])
+(defrecord QueryPlan
+  [find: FindSpec
+   strata: (Vec (Vec d/Rule))
+   order: (Vec OrderClause)
+   limit: Int?])
 (defrecord Projection [edb: d/Db candidates: d/CandidateSources])
 (defrecord ProjectionResult
   [projection: Projection?
@@ -84,13 +89,31 @@
    having: (Vec HavingClause)] -> FindSpec
   (->FindSpec relation grouping aggregates having))
 
+(defn order-clause [column: Int direction: Keyword] -> OrderClause
+  (->OrderClause column direction))
+
+(defn ordered-query-plan
+  [find: FindSpec
+   strata: (Vec (Vec d/Rule))
+   order: (Vec OrderClause)
+   limit: Int?] -> QueryPlan
+  (->QueryPlan find strata order limit))
+
 (defn query-plan [find: FindSpec strata: (Vec (Vec d/Rule))] -> QueryPlan
-  (->QueryPlan find strata))
+  (ordered-query-plan find strata [] nil))
 
 (defn query-plan? [value: Any] -> Bool (instance? QueryPlan value))
 (defn projection? [value: Any] -> Bool (instance? Projection value))
 (defn aggregate-find? [find: FindSpec] -> Bool
   (not (empty? (findspec-aggregates find))))
+
+(def max-results: Int
+  (let [raw: Any (System/getenv "FRAM_MAX_RESULTS")
+        parsed: (U Int Nil)
+        (if (and (string? raw) (not (= raw "")))
+          (let [text: String raw] (parse-long text))
+          nil)]
+    (if (and (some? parsed) (> parsed 0)) parsed 100000)))
 
 (defn compile-ok? [result: CompileResult] -> Bool
   (empty? (compileresult-errors result)))
@@ -578,6 +601,51 @@
             (empty-query-errors)))]
     (vec (concat relation-errors aggregate-errors))))
 
+(defn- result-arity [find: FindSpec arities: (Map String Int)] -> Int?
+  (if (aggregate-find? find)
+    (+ (count (findspec-grouping find))
+       (count (findspec-aggregates find)))
+    (get arities (findspec-relation find))))
+
+(defn- order-errors
+  [plan: QueryPlan
+   arities: (Map String Int)] -> (Vec QueryError)
+  (let [arity (result-arity (queryplan-find plan) arities)
+        clause-errors
+        (loop [remaining: (Vec OrderClause) (queryplan-order plan)
+               seen: (Set Int) #{}
+               errors: (Vec QueryError) []]
+          (if (empty? remaining)
+            errors
+            (let [clause (first remaining)
+                  column (orderclause-column clause)
+                  direction (orderclause-direction clause)
+                  errors2
+                  (cond
+                    [(not (contains? #{:asc :desc} direction))
+                     (conj errors
+                           (query-error :query-invalid-order
+                                        "query order direction must be :asc or :desc"))]
+                    [(or (< column 0)
+                         (and (some? arity) (>= column arity)))
+                     (conj errors
+                           (query-error :query-invalid-order
+                                        "query order column is out of range"))]
+                    [(contains? seen column)
+                     (conj errors
+                           (query-error :query-invalid-order
+                                        "query order columns must be unique"))]
+                    [:else errors])]
+              (recur (rest remaining) (conj seen column) errors2))))
+        limit (queryplan-limit plan)
+        limit-errors
+        (if (and (some? limit)
+                 (or (< limit 1) (> limit max-results)))
+          [(query-error :query-invalid-limit
+                        (str "query limit must be from 1 through " max-results))]
+          [])]
+    (vec (concat clause-errors limit-errors))))
+
 (defn validate-plan [plan: QueryPlan] -> (Vec QueryError)
   (let [strata (queryplan-strata plan)
         rules (reduce (fn
@@ -606,8 +674,10 @@
                                  (concat (recursive-builtin-errors rules)
                                          (concat (forward-errors strata derived)
                                                  (concat strata-errors
-                                                         (find-errors (queryplan-find plan)
-                                                                      derived arities))))))))))
+                                                         (concat
+                                                          (find-errors (queryplan-find plan)
+                                                                       derived arities)
+                                                          (order-errors plan arities)))))))))))
 
 ;; --- syntax adapter ---------------------------------------------------------
 (defn- variable-form? [value: Any] -> Bool
@@ -737,6 +807,21 @@
              [(query-error :query-invalid-syntax "aggregate :having must be a vector")])]
        (vec (concat base-errors (concat spec-errors having-errors))))]))
 
+(defn- syntax-order-errors [value: Any] -> (Vec QueryError)
+  (if (or (nil? value) (vector? value))
+    (reduce
+     (fn [errors: (Vec QueryError) clause: Any] -> (Vec QueryError)
+       (if (and (map? clause)
+                (and (integer? (:column clause))
+                     (contains? #{:asc :desc} (:direction clause))))
+         errors
+         (conj errors
+               (query-error :query-invalid-syntax
+                            "query :order-by requires :column and :direction"))))
+     [] (or value []))
+    [(query-error :query-invalid-syntax
+                  "query :order-by must be a vector")]))
+
 (defn- syntax-errors [form: Any] -> (Vec QueryError)
   (cond
     [(not (map? form)) [(query-error :query-invalid-syntax "query must be a map")]]
@@ -754,7 +839,17 @@
            (reduce (fn [acc: (Vec QueryError) rule: Any] -> (Vec QueryError)
                      (vec (concat acc (syntax-rule-errors rule))))
                    [] rules)]
-       (vec (concat (syntax-find-errors (:find form)) rule-errors)))]))
+       (vec
+        (concat
+         (syntax-find-errors (:find form))
+         (concat
+          (syntax-order-errors (:order-by form))
+          (concat
+           (if (or (nil? (:limit form)) (integer? (:limit form)))
+             []
+             [(query-error :query-invalid-syntax
+                           "query :limit must be an integer")])
+           rule-errors)))))]))
 
 (defn- compile-term-form [value: Any] -> d/QueryTerm
   (if (variable-form? value) (d/variable (:var value)) (d/constant value)))
@@ -804,7 +899,14 @@
               (mapv (fn [stratum: (Vec Any)] -> (Vec d/Rule)
                       (mapv (fn [rule: Any] -> d/Rule (compile-rule-form rule)) stratum))
                     (raw-strata form))
-              plan (query-plan (compile-find-form (:find form)) strata)
+              plan
+              (ordered-query-plan
+               (compile-find-form (:find form))
+               strata
+               (mapv (fn [clause: Any] -> OrderClause
+                       (order-clause (:column clause) (:direction clause)))
+                     (or (:order-by form) []))
+               (:limit form))
               validation-errors (validate-plan plan)]
           (if (empty? validation-errors)
             (->CompileResult plan [])
@@ -867,13 +969,88 @@
 (defn- ordered-rows [rows: (Set d/Tuple)] -> (Vec d/Tuple)
   (order-row-vector (vec rows)))
 
-(def max-results: Int
-  (let [raw: Any (System/getenv "FRAM_MAX_RESULTS")
-        parsed: (U Int Nil)
-        (if (and (string? raw) (not (= raw "")))
-          (let [text: String raw] (parse-long text))
-          nil)]
-    (if (and (some? parsed) (> parsed 0)) parsed 100000)))
+(defn- term-rank [value: Any] -> Int
+  (cond
+    [(boolean? value) 0]
+    [(number? value) 1]
+    [(string? value) 2]
+    [(keyword? value) 3]
+    [(t/instant? value) 4]
+    [(t/triple? value) 5]
+    [:else 6]))
+
+(defn term-compare [left: Any right: Any] -> Int
+  (let [left-rank (term-rank left)
+        right-rank (term-rank right)
+        rank-order (compare left-rank right-rank)]
+    (if (not (zero? rank-order))
+      rank-order
+      (cond
+        [(boolean? left) (compare left right)]
+        [(number? left) (compare (double left) (double right))]
+        [(string? left) (compare left right)]
+        [(keyword? left) (compare (str left) (str right))]
+        [(t/instant? left)
+         (let [left-instant: t/Instant left
+               right-instant: t/Instant right
+               seconds-order: Int
+               (compare (t/instant-epoch-seconds left-instant)
+                        (t/instant-epoch-seconds right-instant))]
+           (if (zero? seconds-order)
+             (compare (t/instant-nanos left-instant)
+                      (t/instant-nanos right-instant))
+             seconds-order))]
+        [(t/triple? left)
+         (let [left-triple: t/Triple left
+               right-triple: t/Triple right
+               first-order: Int
+               (term-compare (t/triple-t1 left-triple)
+                             (t/triple-t1 right-triple))
+               second-order: Int
+               (if (zero? first-order)
+                 (term-compare (t/triple-t2 left-triple)
+                               (t/triple-t2 right-triple))
+                 first-order)]
+           (if (zero? second-order)
+             (term-compare (t/triple-t3 left-triple)
+                           (t/triple-t3 right-triple))
+             second-order))]
+        [:else (compare (term-key left) (term-key right))]))))
+
+(defn- ordered-row-compare
+  [order: (Vec OrderClause)
+   left: d/Tuple
+   right: d/Tuple] -> Int
+  (loop [remaining order]
+    (if (empty? remaining)
+      (compare (row-key left) (row-key right))
+      (let [clause (first remaining)
+            column-order
+            (term-compare (nth left (orderclause-column clause))
+                          (nth right (orderclause-column clause)))
+            directed-order
+            (if (= :desc (orderclause-direction clause))
+              (- 0 column-order)
+              column-order)]
+        (if (zero? directed-order)
+          (recur (rest remaining))
+          directed-order)))))
+
+(defn ordered-plan-rows [plan: QueryPlan rows: (Vec d/Tuple)] -> (Vec d/Tuple)
+  (let [order (queryplan-order plan)
+        ordered
+        (if (empty? order)
+          (order-row-vector rows)
+          (vec
+           (sort-by
+            (fn [row: d/Tuple] -> d/Tuple row)
+            (fn [left: d/Tuple right: d/Tuple] -> Int
+              (ordered-row-compare order left right))
+            rows)))
+        limit (queryplan-limit plan)]
+    (if (some? limit)
+      (vec (take limit ordered))
+      ordered)))
 
 (defn- evaluate-plan-result!
   [projection: Projection
@@ -1070,8 +1247,9 @@
       (required-number (havingclause-value clause))))
    clauses))
 
-(defn- aggregate-result [db: d/Db find: FindSpec] -> QueryResult
-  (let [rows (vec (get db (findspec-relation find) #{}))]
+(defn- aggregate-result [db: d/Db plan: QueryPlan] -> QueryResult
+  (let [find (queryplan-find plan)
+        rows (vec (get db (findspec-relation find) #{}))]
     (if (empty? rows)
       (success-result [])
       (let [numeric-error (numeric-column-error rows find)]
@@ -1097,13 +1275,14 @@
                                            (findspec-having find)))
                          aggregated)
                 count-value (count survivors)]
-            (if (> count-value max-results)
+            (if (and (nil? (queryplan-limit plan))
+                     (> count-value max-results))
               (limited-result
                (query-error :query-result-limit
                             (str "aggregate result has " count-value
                                  " groups, over limit " max-results))
                count-value max-results)
-              (success-result (order-row-vector survivors)))))))))
+              (success-result (ordered-plan-rows plan survivors)))))))))
 
 (defn run-plan-projected-result!
   [projection: Projection
@@ -1120,16 +1299,17 @@
                 find (queryplan-find plan)
                 result
           (if (aggregate-find? find)
-            (aggregate-result db find)
+            (aggregate-result db plan)
             (let [rows (get db (findspec-relation find) #{})
                   count-value (count rows)]
-              (if (> count-value max-results)
+              (if (and (nil? (queryplan-limit plan))
+                       (> count-value max-results))
                 (limited-result
                  (query-error :query-result-limit
                               (str "result has " count-value
                                    " rows, over limit " max-results))
                  count-value max-results)
-                (success-result (ordered-rows rows)))))]
+                (success-result (ordered-plan-rows plan (vec rows))))))]
             (->QueryExecutionResult result nil)))))))
 
 (defn run-plan-with-occurrences-result!
@@ -1270,6 +1450,14 @@
                    (d/query-evaluation-error-message error-value))])
     (d/raise-query-evaluation-error! error-value)))
 
+(defn- rows-after-key [rows: (Vec d/Tuple) after-key: String] -> (Vec d/Tuple)
+  (loop [position: Int 0]
+    (cond
+      [(>= position (count rows)) []]
+      [(= after-key (row-key (nth rows position)))
+       (vec (drop (inc position) rows))]
+      [:else (recur (inc position))])))
+
 (defn run-page-plan-projected!
   [projection: Projection
    plan: QueryPlan
@@ -1303,13 +1491,11 @@
                  (let [db (d/query-evaluation-db evaluation)
                        relation
                        (get db (findspec-relation (queryplan-find plan)) #{})
-                       ordered (ordered-rows relation)
+                       ordered (ordered-plan-rows plan (vec relation))
                        after-key (cursorresult-key decoded)
                        eligible
                        (if (some? after-key)
-                         (filterv (fn [row: d/Tuple] -> Bool
-                                    (pos? (compare (row-key row) after-key)))
-                                  ordered)
+                         (rows-after-key ordered after-key)
                          ordered)
                        window (vec (take (+ limit 1) eligible))
                        wanted (min limit (count window))]

@@ -1485,14 +1485,24 @@
     (when (= rules? strata?)
       (throw (ex-info "query requires exactly one of rules or strata"
                       {:type :query-invalid-syntax})))
-    (framrpc/rpc-query-plan!
+    (framrpc/rpc-ordered-query-plan!
      (lower-query-find! (require-query-field! value :find))
      (mapv (fn [rules]
              (framrpc/rpc-query-stratum!
               (mapv lower-query-rule! rules)))
            (if rules?
              [(require-query-field! value :rules)]
-             (require-query-field! value :strata))))))
+             (require-query-field! value :strata)))
+     (mapv
+      (fn [clause]
+        (framrpc/rpc-query-order!
+         (long (require-query-field! clause :column))
+         (query-operation!
+          (require-query-field! clause :direction)
+          "query order direction")))
+      (or (query-field value :order-by) []))
+     (when (query-has? value :limit)
+       (long (query-field value :limit))))))
 
 (defn native-query-payload!
   ([query] (native-query-payload! query nil))

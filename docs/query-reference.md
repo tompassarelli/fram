@@ -34,6 +34,14 @@ This query derives every email relation:
 
 `:find` names a derived relation. Supply exactly one of `:rules` (one stratum) or `:strata` (ordered strata). Each rule has one head and an ordered body; the evaluator does not reorder clauses.
 
+The optional `:order-by` vector applies stable result ordering by zero-based
+output column. Each clause is `{:column N :direction :asc|:desc}`. Values use
+natural order within their Term kind (including numeric score order), clauses
+are applied left to right, and the canonical full-row key is the final tie
+breaker. Optional `:limit` (1 through 100000) is applied after that global
+ordering, so it is a deterministic top-K rather than a page-local truncation.
+The Bun spelling is `orderBy: [{ column: N, direction: 'asc'|'desc' }]`.
+
 Triple constants match in every position. Multiple rules with the same head recurse by semi-naive fixpoint:
 
 ```edn
@@ -107,7 +115,7 @@ Supported aggregates are `:count`, `:count-distinct`, `:sum`, `:avg`, `:min`, an
 
 Compilation rejects malformed Terms, unknown relations, arity disagreement, undefined derived relations, unbound variables, invalid strata, recursive arithmetic, and invalid text-match use. Execution enforces step, time, result-count, and wire-byte budgets.
 
-Nonaggregate rows have deterministic Term ordering. An opaque page cursor binds the last row, resolved upper sequence, and lower-exclusive occurrence bound. Continuations stay on the same immutable snapshot.
+Without `:order-by`, rows retain deterministic canonical Term ordering. An opaque page cursor binds the last row, resolved upper sequence, and lower-exclusive occurrence bound. Continuations stay on the same immutable snapshot and preserve the plan's requested order.
 
 An unpaged reply is capped at 248 rows, derived from the codec's 256-deep Term budget less the response envelope, and refuses typed `:term-depth-exceeded` rather than building a response the encoder cannot represent. Paging is the escape and answers the same relation; page well under that bound.
 

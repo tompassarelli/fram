@@ -113,6 +113,21 @@
         [[(rule "all-live" [(v "a") (v "b") (v "c")]
                 [(rel "triple" [(v "a") (v "b") (v "c")])])]]))
 
+(let [ranked [(t/triple "c" :score 3)
+              (t/triple "a" :score 10)
+              (t/triple "b" :score 10)
+              (t/triple "d" :score 2)]
+      ranked-rules
+      [[(rule "ranked" [(v "entity") (v "score")]
+              [(rel "triple" [(v "entity") (c :score) (v "score")])])]]
+      ranked-plan
+      (q/ordered-query-plan
+       (q/relation-find "ranked") ranked-rules
+       [(q/order-clause 1 :desc) (q/order-clause 0 :asc)] 2)
+      result (q/run! ranked ranked-plan)]
+  (check! "ordered query applies natural numeric order, stable ties, and top-K"
+          (= [["a" 10] ["b" 10]] (q/result-rows result))))
+
 (loop [after nil collected []]
   (let [page (q/run-page! live all-live-plan 1 after)
         collected2 (vec (concat collected (q/page-rows page)))]

@@ -754,8 +754,14 @@
 (defn rpc-query-find-aggregate! [^String relation grouping aggregates having]
   (rpc-record! :query/find-aggregate [relation (rpc-list! grouping) (rpc-list! aggregates) (rpc-list! having)]))
 
+(defn rpc-query-order! [column direction]
+  (rpc-record! :query/order [column direction]))
+
+(defn rpc-ordered-query-plan! [find strata order limit]
+  (rpc-record! :query/plan [find (rpc-list! strata) (rpc-list! order) (rpc-option! limit)]))
+
 (defn rpc-query-plan! [find strata]
-  (rpc-record! :query/plan [find (rpc-list! strata)]))
+  (rpc-ordered-query-plan! find strata [] nil))
 
 (defn rpc-query-as-of! [version]
   (rpc-record! :query/as-of [version]))

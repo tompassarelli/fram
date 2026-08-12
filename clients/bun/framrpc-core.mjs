@@ -854,9 +854,27 @@ export function lowerQueryPlan(value) {
   if (!Array.isArray(strata) || !strata.every(Array.isArray)) {
     fail('query strata must be arrays of rules', 'client/query-syntax');
   }
+  const orderBy = own(value, 'orderBy') ? value.orderBy : [];
+  if (!Array.isArray(orderBy)) fail('query.orderBy must be an array', 'client/query-syntax');
+  const order = orderBy.map(clause => {
+    exactKeys(clause, ['column', 'direction'], 'query order clause');
+    const column = integerBigInt(required(clause, 'column', 'query order clause'), {
+      label: 'query order column', min: 0n,
+    });
+    const direction = required(clause, 'direction', 'query order clause');
+    if (direction !== 'asc' && direction !== 'desc') {
+      fail('query order direction must be asc or desc', 'client/query-syntax');
+    }
+    return rpcRecord('query/order', [integerTerm(column), keywordTerm(direction)]);
+  });
+  const limit = own(value, 'limit')
+    ? integerBigInt(value.limit, { label: 'query limit', min: 1n, max: 100000n })
+    : null;
   return rpcRecord('query/plan', [
     queryFind(required(value, 'find')),
     rpcList(strata.map(rules => rpcRecord('query/stratum', [rpcList(rules.map(queryRule))]))),
+    rpcList(order),
+    rpcOption(limit),
   ]);
 }
 
@@ -879,7 +897,12 @@ export function tripleQuery(pattern = {}) {
   const relation = rpcRecord('query/relation', [stringTerm('triple'), rpcList(args), booleanTerm(false)]);
   const rule = rpcRecord('query/rule', [head, rpcList([relation])]);
   const stratum = rpcRecord('query/stratum', [rpcList([rule])]);
-  return rpcRecord('query/plan', [rpcRecord('query/find-relation', [stringTerm('out')]), rpcList([stratum])]);
+  return rpcRecord('query/plan', [
+    rpcRecord('query/find-relation', [stringTerm('out')]),
+    rpcList([stratum]),
+    rpcList([]),
+    rpcOption(null),
+  ]);
 }
 
 function querySnapshot(options) {
@@ -1239,7 +1262,7 @@ export function framClient({
     },
     query: (query, options = {}) => {
       const plan = Array.isArray(query) ? term(query) : lowerQueryPlan(query);
-      rawRecordFields(plan, 'query/plan', 2);
+      rawRecordFields(plan, 'query/plan', 4);
       return call('rpc/query', rpcRecord('query/request', [plan, querySnapshot(options)]), options);
     },
     assert: (t1, t2, t3, options = {}) => call(
