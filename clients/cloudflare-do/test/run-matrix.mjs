@@ -324,7 +324,16 @@ try {
     `every racer answered a status frame: ${raced.statuses.join(",")}`,
   );
 
-  // 5. The official client semantics over a non-TCP Worker/DO transport.
+  const deleted = await call("/delete-batches", "race", "&chunks=130");
+  check(
+    deleted.before === 131 &&
+      deleted.after === 1 &&
+      deleted.deleteCalls === 2 &&
+      deleted.reread === 0,
+    `workerd deleted 130 stale chunks in ${deleted.deleteCalls} calls`,
+  );
+
+  // 6. The official client semantics over a non-TCP Worker/DO transport.
   const entries = [];
   const space = "fram-wasm-embed";
   const transport = async ({ frame, entry, space: requestSpace }) => {

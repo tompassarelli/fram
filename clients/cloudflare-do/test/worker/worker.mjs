@@ -95,6 +95,7 @@ class FramHarness {
       if (url.pathname === "/dump") return await this.dump(url);
       if (url.pathname === "/grow") return await this.grow(url);
       if (url.pathname === "/keys") return await this.keys(url);
+      if (url.pathname === "/delete-batches") return await this.deleteBatches(url);
       if (url.pathname === "/concurrent-boot") return await this.race(url);
       if (url.pathname === "/ready") return json({ ready: true });
     } catch (error) {
@@ -207,6 +208,35 @@ class FramHarness {
       prefix,
       keys: [...listed.keys()].sort(),
       meta: meta ?? null,
+    });
+  }
+
+  /** Exercise a stale range larger than one DurableObjectStorage batch. */
+  async deleteBatches(url) {
+    const chunks = Number(url.searchParams.get("chunks") ?? 130);
+    const range = new ChunkedRange(this.state.storage, {
+      prefix: "delete-batch/",
+      chunkBytes: 1,
+      batchKeys: 256,
+    });
+    await range.load();
+    const bytes = new Uint8Array(chunks).fill(11);
+    let plan = range.plan(bytes, bytes.length, 0);
+    await this.state.storage.transaction((txn) => range.applyTo(txn, plan));
+    range.settle(plan);
+    const before = await this.state.storage.list({ prefix: "delete-batch/" });
+
+    plan = range.plan(bytes, 0, 0);
+    await this.state.storage.transaction((txn) => range.applyTo(txn, plan));
+    range.settle(plan);
+    const after = await this.state.storage.list({ prefix: "delete-batch/" });
+    const reread = await range.load();
+    return json({
+      chunks,
+      before: before.size,
+      after: after.size,
+      deleteCalls: range.deletes,
+      reread: reread.length,
     });
   }
 

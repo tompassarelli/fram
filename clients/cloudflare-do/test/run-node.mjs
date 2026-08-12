@@ -450,6 +450,58 @@ class FailPostPublishStorage extends MemoryStorage {
     `one transaction published both ranges (${both.stats().log.chunks} log ` +
       `chunks, ${both.stats().image.chunks} image chunk)`,
   );
+
+  // Cloudflare accepts at most 128 keys in one delete call. Exercise more
+  // than one full batch against a storage double that enforces that bound.
+  const boundedStorage = new MemoryStorage();
+  const deleteBatches = [];
+  const transaction = boundedStorage.transaction.bind(boundedStorage);
+  boundedStorage.transaction = (body) => transaction(async (txn) => {
+    const remove = txn.delete.bind(txn);
+    txn.delete = async (keys) => {
+      const count = Array.isArray(keys) ? keys.length : 1;
+      deleteBatches.push(count);
+      if (count > 128) throw new Error(`delete batch has ${count} keys`);
+      return remove(keys);
+    };
+    return body(txn);
+  });
+  const bounded = new DurableFramStore(boundedStorage, {
+    chunkBytes: 1,
+  });
+  await bounded.load("log");
+  const many = new Uint8Array(130).fill(11);
+  await bounded.commit([
+    { which: "log", bytes: many, length: many.length, lowWater: 0 },
+  ]);
+  await bounded.commit([
+    { which: "log", bytes: many, length: 0, lowWater: 0 },
+  ]);
+  check(
+    deleteBatches.join(",") === "100,30",
+    `130 stale chunks were deleted in bounded batches: ${deleteBatches.join(",")}`,
+  );
+  check(
+    (await durableLog(boundedStorage)).length === 0,
+    "the multi-batch shrink reads back as an empty range",
+  );
+
+  const foreignStorage = new MemoryStorage(
+    new Map([["framimage/not-a-chunk", new Uint8Array([1])]]),
+  );
+  let foreignKey = null;
+  try {
+    await new ChunkedRange(foreignStorage, {
+      prefix: "framimage/",
+    }).clearPlan();
+  } catch (error) {
+    foreignKey = error;
+  }
+  check(
+    /unrecognised storage key/.test(foreignKey?.message) &&
+      foreignStorage.map.has("framimage/not-a-chunk"),
+    "a range clear refuses an unrecognised key without deleting it",
+  );
 }
 
 // -- 6. portable FRAMLOG export -> empty restore -> semantic equivalence -----
@@ -700,6 +752,92 @@ class FailPostPublishStorage extends MemoryStorage {
     sourceAnswer.status === targetAnswer.status &&
       sameBytes(sourceAnswer.response, targetAnswer.response),
     "replacement reopens with the source semantics",
+  );
+
+  const missingStorage = new MemoryStorage();
+  const missingImageTarget = new FramDurableObjectBase(
+    objectState(missingStorage),
+    {},
+    module,
+    {
+      spaceId: SPACE,
+      instance: { nowMs: () => 1700000000000, arena: { initialPages: 8 } },
+    },
+  );
+  await missingImageTarget.transact(frame("04-batch-mixed.bin"));
+  await missingImageTarget.checkpoint(frame("27-checkpoint.bin"));
+  const missingCurrent = await missingImageTarget.exportFramlog();
+  const missingChunk = [...missingStorage.map.keys()].find((key) =>
+    /^framimage\/[0-9]{8}$/.test(key)
+  );
+  missingStorage.map.delete(missingChunk);
+  let tornImage = null;
+  try {
+    await durableImage(missingStorage);
+  } catch (error) {
+    tornImage = error;
+  }
+  check(
+    missingChunk !== undefined && /chunk .* missing/.test(tornImage?.message),
+    "the replacement target begins with a missing derived-image chunk",
+  );
+  await missingImageTarget.restoreFramlog(backup, {
+    replace: true,
+    expectedCurrent: {
+      byteLength: missingCurrent.byteLength,
+      sha256: missingCurrent.sha256,
+    },
+  });
+  check(
+    sameBytes(await durableLog(missingStorage), backup.bytes) &&
+      ![...missingStorage.map.keys()].some((key) =>
+        key.startsWith("framimage/")
+      ) &&
+      !missingStorage.map.has("framrestore/pending"),
+    "replacement recovers a missing image chunk and removes its whole range",
+  );
+
+  const corruptStorage = new MemoryStorage();
+  const corruptImageTarget = new FramDurableObjectBase(
+    objectState(corruptStorage),
+    {},
+    module,
+    {
+      spaceId: SPACE,
+      instance: { nowMs: () => 1700000000000, arena: { initialPages: 8 } },
+    },
+  );
+  await corruptImageTarget.transact(frame("04-batch-mixed.bin"));
+  await corruptImageTarget.checkpoint(frame("27-checkpoint.bin"));
+  const corruptCurrent = await corruptImageTarget.exportFramlog();
+  corruptStorage.map.set("framimage/meta", {
+    length: 1n,
+    chunkBytes: 64 * 1024,
+  });
+  let corruptImage = null;
+  try {
+    await durableImage(corruptStorage);
+  } catch (error) {
+    corruptImage = error;
+  }
+  check(
+    corruptImage instanceof TypeError,
+    "the replacement target begins with corrupt derived-image metadata",
+  );
+  await corruptImageTarget.restoreFramlog(backup, {
+    replace: true,
+    expectedCurrent: {
+      byteLength: corruptCurrent.byteLength,
+      sha256: corruptCurrent.sha256,
+    },
+  });
+  check(
+    sameBytes(await durableLog(corruptStorage), backup.bytes) &&
+      ![...corruptStorage.map.keys()].some((key) =>
+        key.startsWith("framimage/")
+      ) &&
+      !corruptStorage.map.has("framrestore/pending"),
+    "replacement ignores corrupt image metadata and removes its whole range",
   );
 }
 

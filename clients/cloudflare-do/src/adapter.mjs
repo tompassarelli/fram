@@ -566,7 +566,7 @@ export class ChunkedRange {
     this.storage = storage;
     this.prefix = options.prefix ?? "framlog/";
     this.chunkBytes = options.chunkBytes ?? 64 * 1024;
-    this.batchKeys = options.batchKeys ?? 100;
+    this.batchKeys = Math.min(options.batchKeys ?? 100, 128);
     this.metaKey = `${this.prefix}meta`;
     this.chunkCount = null; // unknown until load()
     this.puts = 0;
@@ -641,7 +641,49 @@ export class ChunkedRange {
     }
     const stale = [];
     for (let i = chunks; i < this.chunkCount; i++) stale.push(this.#chunkKey(i));
-    return { writes, stale, chunks, length };
+    return { writes, stale, chunks, length, publishMeta: true };
+  }
+
+  /**
+   * Inventory this range without interpreting its meta or payload values.
+   * Restore may discard a derived image even when those values are torn, but
+   * it must not turn a broad prefix delete into authority over unknown keys.
+   */
+  async clearPlan() {
+    const stale = [];
+    let startAfter;
+    for (;;) {
+      const options = { prefix: this.prefix, limit: this.batchKeys };
+      if (startAfter !== undefined) options.startAfter = startAfter;
+      const listed = await this.storage.list(options);
+      if (!(listed instanceof Map)) {
+        throw new Error(`${this.prefix} key inventory is not a Map`);
+      }
+      const keys = [...listed.keys()].sort();
+      for (const key of keys) {
+        const suffix = typeof key === "string" && key.startsWith(this.prefix)
+          ? key.slice(this.prefix.length)
+          : "";
+        if (suffix !== "meta" && !/^[0-9]{8}$/.test(suffix)) {
+          throw new Error(
+            `${this.prefix} contains an unrecognised storage key: ${String(key)}`,
+          );
+        }
+        if (startAfter !== undefined && key <= startAfter) {
+          throw new Error(`${this.prefix} key inventory did not advance`);
+        }
+        stale.push(key);
+      }
+      if (keys.length < this.batchKeys) break;
+      startAfter = keys[keys.length - 1];
+    }
+    return {
+      writes: [],
+      stale,
+      chunks: 0,
+      length: 0,
+      publishMeta: false,
+    };
   }
 
   async applyTo(txn, plan) {
@@ -651,15 +693,17 @@ export class ChunkedRange {
       this.puts += 1;
       for (const [, value] of batch) this.bytesWritten += value.length;
     }
-    if (plan.stale.length) {
-      await txn.delete(plan.stale);
+    for (let base = 0; base < plan.stale.length; base += this.batchKeys) {
+      await txn.delete(plan.stale.slice(base, base + this.batchKeys));
       this.deletes += 1;
     }
-    await txn.put(this.metaKey, {
-      length: plan.length,
-      chunkBytes: this.chunkBytes,
-    });
-    this.puts += 1;
+    if (plan.publishMeta) {
+      await txn.put(this.metaKey, {
+        length: plan.length,
+        chunkBytes: this.chunkBytes,
+      });
+      this.puts += 1;
+    }
   }
 
   /** Adopt the plan's chunk count; only a landed transaction may call this. */
@@ -700,6 +744,10 @@ export class DurableFramStore {
     return this.ranges[which].load();
   }
 
+  clearPlan(which) {
+    return this.ranges[which].clearPlan();
+  }
+
   /** parts: [{ which, bytes, length, lowWater }] */
   commit(parts) {
     const staged = parts.map(({ which, bytes, length, lowWater }) => {
@@ -721,11 +769,11 @@ export class DurableFramStore {
     return result;
   }
 
-  /** Publish replacement bytes and their fail-closed marker atomically. */
+  /** Publish replacement bytes, preplanned clears, and a marker atomically. */
   replace(parts, marker) {
-    const staged = parts.map(({ which, bytes, length, lowWater }) => {
+    const staged = parts.map(({ which, bytes, length, lowWater, plan }) => {
       const range = this.ranges[which];
-      return { range, plan: range.plan(bytes, length, lowWater) };
+      return { range, plan: plan ?? range.plan(bytes, length, lowWater) };
     });
     const run = async () => {
       await this.storage.transaction(async (txn) => {
@@ -788,6 +836,22 @@ export class MemoryStorage {
       return out;
     }
     return this.map.get(keyOrKeys);
+  }
+
+  async list(options = {}) {
+    await this.#tick();
+    const prefix = options.prefix ?? "";
+    const startAfter = options.startAfter;
+    const limit = options.limit ?? Infinity;
+    const keys = [...this.map.keys()]
+      .filter(
+        (key) =>
+          key.startsWith(prefix) &&
+          (startAfter === undefined || key > startAfter),
+      )
+      .sort()
+      .slice(0, limit);
+    return new Map(keys.map((key) => [key, this.map.get(key)]));
   }
 
   async put(keyOrEntries, value) {
@@ -1701,7 +1765,7 @@ export class FramDurableObjectBase {
         const peek = await this.#loadTarget("inspect the restore target");
         if (
           peek.log.length !== 0 ||
-          peek.image.length !== 0 ||
+          peek.imageOccupied ||
           peek.pending !== undefined
         ) {
           backupFailure(
@@ -1718,7 +1782,7 @@ export class FramDurableObjectBase {
         target = await this.#loadTarget("load the restore target");
         const occupied =
           target.log.length !== 0 ||
-          target.image.length !== 0 ||
+          target.imageOccupied ||
           target.pending !== undefined;
         if (occupied && !restore.replace) {
           backupFailure(
@@ -1756,9 +1820,7 @@ export class FramDurableObjectBase {
           },
           {
             which: "image",
-            bytes: new Uint8Array(0),
-            length: 0,
-            lowWater: 0,
+            plan: target.imageClearPlan,
           },
         ], {
           format: FRAMLOG_RESTORE_FORMAT,
@@ -1839,7 +1901,7 @@ export class FramDurableObjectBase {
         sha256: verified.digest,
         replaced:
           target.log.length !== 0 ||
-          target.image.length !== 0 ||
+          target.imageOccupied ||
           target.pending !== undefined,
       });
     });
@@ -1925,9 +1987,15 @@ export class FramDurableObjectBase {
     const store = new DurableFramStore(this.state.storage, this.storeOptions);
     try {
       const log = await store.load("log");
-      const image = await store.load("image");
+      const imageClearPlan = await store.clearPlan("image");
       const pending = await this.state.storage.get(FRAMLOG_RESTORE_KEY);
-      return { store, log, image, pending };
+      return {
+        store,
+        log,
+        imageClearPlan,
+        imageOccupied: imageClearPlan.stale.length !== 0,
+        pending,
+      };
     } catch (error) {
       backupFailure("storage", `cannot ${action}: ${error.message}`, {
         cause: error,
