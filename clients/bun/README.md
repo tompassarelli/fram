@@ -8,7 +8,21 @@ Use this client for application and builder traffic that needs exact recursive
 Terms, atomic batches, optimistic versions, occurrence replay, or pinned
 pagination. `fram-mcp` remains the narrower agent-facing JSON-RPC surface.
 
-## Install from a Fram checkout
+## Install
+
+Every tagged Fram release attaches a reproducible
+`tompassarelli-framrpc-<package-version>.tgz` and its
+`fram-bun-release-receipt/v1` file. The receipt binds the tarball hash and
+declared package version to the exact Fram release tag and source commit. Once
+the tarball is downloaded, installation needs no registry or network access:
+
+```console
+$ bun add --offline /path/to/tompassarelli-framrpc-0.3.0.tgz
+```
+
+The client package version is independent of the containing Fram release tag;
+use the receipt when provenance matters. A checkout remains directly
+installable for development:
 
 ```console
 $ bun add /path/to/fram/clients/bun
