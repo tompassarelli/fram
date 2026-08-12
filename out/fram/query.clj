@@ -601,7 +601,9 @@
    rank-order (compare left-rank right-rank)]
   (if (not (zero? rank-order)) rank-order (cond
   (boolean? left) (compare left right)
-  (number? left) (compare (double left) (double right))
+  (number? left) (if (and (integer? left) (integer? right)) (let [left-int left
+   right-int right]
+  (compare left-int right-int)) (compare (double left) (double right)))
   (string? left) (compare left right)
   (keyword? left) (compare (str left) (str right))
   (t/instant? left) (let [left-instant left

@@ -128,6 +128,22 @@
   (check! "ordered query applies natural numeric order, stable ties, and top-K"
           (= [["a" 10] ["b" 10]] (q/result-rows result))))
 
+(let [lower Long/MIN_VALUE
+      higher (inc lower)
+      ranked [(t/triple "lower" :score lower)
+              (t/triple "higher" :score higher)]
+      ranked-rules
+      [[(rule "ranked-i64" [(v "entity") (v "score")]
+              [(rel "triple" [(v "entity") (c :score) (v "score")])])]]
+      ranked-plan
+      (q/ordered-query-plan
+       (q/relation-find "ranked-i64") ranked-rules
+       [(q/order-clause 1 :asc)] nil)
+      result (q/run! ranked ranked-plan)]
+  (check! "ordered query preserves exact adjacent i64 order"
+          (= [["lower" lower] ["higher" higher]]
+             (q/result-rows result))))
+
 (loop [after nil collected []]
   (let [page (q/run-page! live all-live-plan 1 after)
         collected2 (vec (concat collected (q/page-rows page)))]

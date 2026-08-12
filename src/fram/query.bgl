@@ -1018,7 +1018,12 @@
       rank-order
       (cond
         [(boolean? left) (compare left right)]
-        [(number? left) (compare (double left) (double right))]
+        [(number? left)
+         (if (and (integer? left) (integer? right))
+           (let [left-int: Int left
+                 right-int: Int right]
+             (compare left-int right-int))
+           (compare (double left) (double right)))]
         [(string? left) (compare left right)]
         [(keyword? left) (compare (str left) (str right))]
         [(t/instant? left)
