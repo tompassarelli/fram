@@ -2,15 +2,35 @@
   (:require [fram.types :as t]
             [fram.store :as store]))
 
-(defrecord Bucket [width keys events slots])
+(defrecord KeyOne [a])
+
+(defn keyone-a [r] (:a r))
+
+(defrecord KeyTwo [a b])
+
+(defn keytwo-a [r] (:a r))
+
+(defn keytwo-b [r] (:b r))
+
+(defrecord Bucket [width codes events heads chain])
 
 (defn bucket-width [r] (:width r))
 
-(defn bucket-keys [r] (:keys r))
+(defn bucket-codes [r] (:codes r))
 
 (defn bucket-events [r] (:events r))
 
-(defn bucket-slots [r] (:slots r))
+(defn bucket-heads [r] (:heads r))
+
+(defn bucket-chain [r] (:chain r))
+
+(defrecord OccurrenceIndex [width heads chain])
+
+(defn occurrenceindex-width [r] (:width r))
+
+(defn occurrenceindex-heads [r] (:heads r))
+
+(defn occurrenceindex-chain [r] (:chain r))
 
 (defrecord PendingOp [action proposition event])
 
@@ -40,13 +60,9 @@
 
 (def empty-events [])
 
-(def empty-keys [])
-
 (def empty-event-lists [])
 
-(def empty-positions [])
-
-(def empty-slot-rows [])
+(def empty-ints [])
 
 (def no-pending [])
 
@@ -56,22 +72,17 @@
 
 (def pending-fold-cap 512)
 
-(defn- bucket-slot [key width]
-  (mod (hash key) width))
+(def shape-t1 0)
 
-(defn- bucket-entry [^Bucket bucket key]
-  (let [keys (bucket-keys bucket)
-   positions (nth (bucket-slots bucket) (bucket-slot key (bucket-width bucket)))]
-  (loop [offset 0]
-  (if (>= offset (count positions)) -1 (let [position (nth positions offset)]
-  (if (= (nth keys position) key) position (recur (inc offset))))))))
+(def shape-t12 1)
 
-(defn- bucket-get [^Bucket bucket key]
-  (let [position (bucket-entry bucket key)]
-  (if (>= position 0) (nth (bucket-events bucket) position) empty-events)))
+(def shape-t2 2)
 
-(defn- occurrence-key [occurrence]
-  [occurrence])
+(def shape-t3 3)
+
+(def shape-mask 3)
+
+(def shape-bits 2)
 
 (defn occurrence-of [event]
   (t/triple-t1 event))
@@ -82,11 +93,79 @@
 (defn ^Boolean assertion-occurrence? [event]
   (and (t/triple? event) (and (= t/asserts (t/triple-t2 event)) (and (t/occurrence-coordinate? (t/triple-t1 event)) (t/triple? (t/triple-t3 event))))))
 
+(defn- hash-one [a]
+  (hash (->KeyOne a)))
+
+(defn- hash-two [a b]
+  (hash (->KeyTwo a b)))
+
+(defn- shape-hash [shape event]
+  (let [proposition (t/triple-t3 event)]
+  (cond
+  (= shape shape-t1) (hash-one (t/triple-t1 proposition))
+  (= shape shape-t12) (hash-two (t/triple-t1 proposition) (t/triple-t2 proposition))
+  (= shape shape-t2) (hash-one (t/triple-t2 proposition))
+  :else (hash-one (t/triple-t3 proposition)))))
+
+(defn- ^Boolean same-shape-key? [shape left right]
+  (let [lp (t/triple-t3 left)
+   rp (t/triple-t3 right)]
+  (cond
+  (= shape shape-t1) (= (t/triple-t1 lp) (t/triple-t1 rp))
+  (= shape shape-t12) (and (= (t/triple-t1 lp) (t/triple-t1 rp)) (= (t/triple-t2 lp) (t/triple-t2 rp)))
+  (= shape shape-t2) (= (t/triple-t2 lp) (t/triple-t2 rp))
+  :else (= (t/triple-t3 lp) (t/triple-t3 rp)))))
+
+(defn- key-code [position shape]
+  (bit-or (bit-shift-left position shape-bits) shape))
+
+(defn- code-position [code]
+  (unsigned-bit-shift-right code shape-bits))
+
+(defn- code-shape [code]
+  (bit-and code shape-mask))
+
+(defn- shape-term [shape event]
+  (let [proposition (t/triple-t3 event)]
+  (cond
+  (= shape shape-t1) (t/triple-t1 proposition)
+  (= shape shape-t2) (t/triple-t2 proposition)
+  :else (t/triple-t3 proposition))))
+
+(defn- bucket-leaf-one [^Bucket bucket source shape a]
+  (let [codes (bucket-codes bucket)
+   chain (bucket-chain bucket)]
+  (loop [key (nth (bucket-heads bucket) (mod (hash-one a) (bucket-width bucket)))]
+  (if (< key 0) empty-events (let [code (nth codes key)]
+  (if (and (= shape (code-shape code)) (= a (shape-term shape (nth source (code-position code))))) (nth (bucket-events bucket) key) (recur (nth chain key))))))))
+
+(defn- bucket-leaf-two [^Bucket bucket source a b]
+  (let [codes (bucket-codes bucket)
+   chain (bucket-chain bucket)]
+  (loop [key (nth (bucket-heads bucket) (mod (hash-two a b) (bucket-width bucket)))]
+  (if (< key 0) empty-events (let [code (nth codes key)]
+  (if (and (= shape-t12 (code-shape code)) (let [proposition (t/triple-t3 (nth source (code-position code)))]
+  (and (= a (t/triple-t1 proposition)) (= b (t/triple-t2 proposition))))) (nth (bucket-events bucket) key) (recur (nth chain key))))))))
+
+(defn- occurrence-event [^OccurrenceIndex index source occurrence]
+  (let [chain (occurrenceindex-chain index)]
+  (loop [position (nth (occurrenceindex-heads index) (mod (hash-one occurrence) (occurrenceindex-width index)))]
+  (if (< position 0) nil (let [event (nth source position)]
+  (if (= occurrence (t/triple-t1 event)) event (recur (nth chain position))))))))
+
 (defn- ^Boolean slot-matches? [pattern term]
   (or (nil? pattern) (= pattern term)))
 
 (defn- ^Boolean pattern-match? [proposition t1 t2 t3]
   (and (slot-matches? t1 (t/triple-t1 proposition)) (and (slot-matches? t2 (t/triple-t2 proposition)) (slot-matches? t3 (t/triple-t3 proposition)))))
+
+(defn- narrowed [base t1 t2 t3]
+  (let [kept (loop [position 0
+   total 0]
+  (if (>= position (count base)) total (recur (inc position) (if (pattern-match? (t/triple-t3 (nth base position)) t1 t2 t3) (inc total) total))))]
+  (if (= kept (count base)) base (loop [built empty-events
+   position 0]
+  (if (>= position (count base)) built (recur (if (pattern-match? (t/triple-t3 (nth base position)) t1 t2 t3) (conj built (nth base position)) built) (inc position)))))))
 
 (defn- without-newest-of [events proposition]
   (let [at (loop [position (dec (count events))]
@@ -115,25 +194,25 @@
   (count (all-occurrences rotation)))
 
 (defn by-t1 [^Rotation rotation t1]
-  (merged-matching (bucket-get (rotation-spo rotation) [t1]) (rotation-pending rotation) t1 nil nil))
+  (merged-matching (bucket-leaf-one (rotation-spo rotation) (rotation-events rotation) shape-t1 t1) (rotation-pending rotation) t1 nil nil))
 
 (defn by-t12 [^Rotation rotation t1 t2]
-  (merged-matching (bucket-get (rotation-spo rotation) [t1 t2]) (rotation-pending rotation) t1 t2 nil))
+  (merged-matching (bucket-leaf-two (rotation-spo rotation) (rotation-events rotation) t1 t2) (rotation-pending rotation) t1 t2 nil))
 
 (defn by-t2 [^Rotation rotation t2]
-  (merged-matching (bucket-get (rotation-pos rotation) [t2]) (rotation-pending rotation) nil t2 nil))
+  (merged-matching (bucket-leaf-one (rotation-pos rotation) (rotation-events rotation) shape-t2 t2) (rotation-pending rotation) nil t2 nil))
 
 (defn by-t23 [^Rotation rotation t2 t3]
-  (merged-matching (bucket-get (rotation-pos rotation) [t2 t3]) (rotation-pending rotation) nil t2 t3))
+  (merged-matching (narrowed (bucket-leaf-one (rotation-osp rotation) (rotation-events rotation) shape-t3 t3) nil t2 nil) (rotation-pending rotation) nil t2 t3))
 
 (defn by-t3 [^Rotation rotation t3]
-  (merged-matching (bucket-get (rotation-osp rotation) [t3]) (rotation-pending rotation) nil nil t3))
+  (merged-matching (bucket-leaf-one (rotation-osp rotation) (rotation-events rotation) shape-t3 t3) (rotation-pending rotation) nil nil t3))
 
 (defn by-t13 [^Rotation rotation t1 t3]
-  (merged-matching (bucket-get (rotation-osp rotation) [t3 t1]) (rotation-pending rotation) t1 nil t3))
+  (merged-matching (narrowed (bucket-leaf-one (rotation-osp rotation) (rotation-events rotation) shape-t3 t3) t1 nil nil) (rotation-pending rotation) t1 nil t3))
 
 (defn by-proposition [^Rotation rotation proposition]
-  (merged-matching (bucket-get (rotation-spo rotation) [(t/triple-t1 proposition) (t/triple-t2 proposition) (t/triple-t3 proposition)]) (rotation-pending rotation) (t/triple-t1 proposition) (t/triple-t2 proposition) (t/triple-t3 proposition)))
+  (merged-matching (narrowed (bucket-leaf-two (rotation-spo rotation) (rotation-events rotation) (t/triple-t1 proposition) (t/triple-t2 proposition)) nil nil (t/triple-t3 proposition)) (rotation-pending rotation) (t/triple-t1 proposition) (t/triple-t2 proposition) (t/triple-t3 proposition)))
 
 (defn matching [^Rotation rotation t1 t2 t3]
   (cond
@@ -147,10 +226,10 @@
   :else (all-occurrences rotation)))
 
 (defn event-at [^Rotation rotation occurrence]
-  (let [base (bucket-get (rotation-by-occurrence rotation) (occurrence-key occurrence))
+  (let [base (occurrence-event (rotation-by-occurrence rotation) (rotation-events rotation) occurrence)
    candidate (let [pending (rotation-pending rotation)]
   (loop [position 0
-   found (if (empty? base) nil (nth base 0))]
+   found base]
   (if (>= position (count pending)) found (let [op (nth pending position)]
   (recur (inc position) (if (and (= t/assert-action (pendingop-action op)) (= occurrence (occurrence-of (pendingop-event op)))) (pendingop-event op) found))))))]
   (if (nil? candidate) nil (let [present candidate
@@ -182,78 +261,83 @@
 
 (def empty-event-cells [])
 
-(def empty-position-cells [])
+(def empty-head-cells [])
 
-(defn- fresh-position-cells [width]
-  (loop [cells empty-position-cells
+(defn- fresh-head-cells [width]
+  (loop [cells empty-head-cells
    position 0]
-  (if (>= position width) cells (recur (conj cells (atom empty-positions)) (inc position)))))
+  (if (>= position width) cells (recur (conj cells (atom -1)) (inc position)))))
 
-(defn- rehashed-position-cells! [keys width]
-  (let [cells (fresh-position-cells width)]
-  (loop [position 0]
-  (if (>= position (count keys)) cells (do
-  (swap! (nth cells (bucket-slot (nth keys position) width)) conj position)
-  (recur (inc position)))))))
+(defn- frozen-heads [cells]
+  (loop [rows empty-ints
+   position 0]
+  (if (>= position (count cells)) rows (recur (conj rows (deref (nth cells position))) (inc position)))))
 
 (defn- close-event-cells [cells]
   (loop [lists empty-event-lists
    position 0]
   (if (>= position (count cells)) lists (recur (conj lists (deref (nth cells position))) (inc position)))))
 
-(defn- close-position-cells [cells]
-  (loop [rows empty-slot-rows
-   position 0]
-  (if (>= position (count cells)) rows (recur (conj rows (deref (nth cells position))) (inc position)))))
+(defn- relinked-chain! [codes source heads width]
+  (loop [chain empty-ints
+   key 0]
+  (if (>= key (count codes)) chain (let [code (nth codes key)
+   slot (mod (shape-hash (code-shape code) (nth source (code-position code))) width)
+   linked (conj chain (deref (nth heads slot)))]
+  (do
+  (reset! (nth heads slot) key)
+  (recur linked (inc key)))))))
 
 (defn- checked-assertion [event]
   (if (assertion-occurrence? event) event (throw (ex-info "fram: rotations cover assertion occurrences only" {:type :invalid-rotation-occurrence}))))
-
-(defn- entry-key [entry event]
-  (let [proposition (proposition-of event)
-   t1 (t/triple-t1 proposition)
-   t2 (t/triple-t2 proposition)
-   t3 (t/triple-t3 proposition)]
-  (cond
-  (= entry 0) (occurrence-key (occurrence-of event))
-  (= entry 1) [t1]
-  (= entry 2) [t1 t2]
-  (= entry 3) [t1 t2 t3]
-  (= entry 4) [t2]
-  (= entry 5) [t2 t3]
-  (= entry 6) [t3]
-  :else [t3 t1])))
 
 (defn- initial-bucket-width [event-count]
   (loop [width bucket-initial-slots]
   (if (>= (* bucket-slot-load width) event-count) width (recur (* 2 width)))))
 
-(defn- ^Bucket projected-bucket! [events first-entry last-entry ^Boolean replace? initial-width]
+(defn- bucket-key-at [codes chain heads source slot shape event]
+  (loop [key (deref (nth heads slot))]
+  (if (< key 0) -1 (let [code (nth codes key)]
+  (if (and (= shape (code-shape code)) (same-shape-key? shape event (nth source (code-position code)))) key (recur (nth chain key)))))))
+
+(defn- ^Bucket projected-bucket! [events first-shape last-shape initial-width]
   (loop [width initial-width
-   keys empty-keys
+   codes empty-ints
    cells empty-event-cells
-   slot-cells (fresh-position-cells initial-width)
+   chain empty-ints
+   heads (fresh-head-cells initial-width)
    position 0
-   entry first-entry]
-  (if (>= position (count events)) (->Bucket width keys (close-event-cells cells) (close-position-cells slot-cells)) (if (> entry last-entry) (recur width keys cells slot-cells (inc position) first-entry) (let [event (checked-assertion (nth events position))
-   key (entry-key entry event)
-   slot (bucket-slot key width)
-   positions (deref (nth slot-cells slot))
-   at (loop [offset 0]
-  (if (>= offset (count positions)) -1 (let [candidate (nth positions offset)]
-  (if (= (nth keys candidate) key) candidate (recur (inc offset))))))]
+   shape first-shape]
+  (if (>= position (count events)) (->Bucket width codes (close-event-cells cells) (frozen-heads heads) chain) (if (> shape last-shape) (recur width codes cells chain heads (inc position) first-shape) (let [event (checked-assertion (nth events position))
+   slot (mod (shape-hash shape event) width)
+   at (bucket-key-at codes chain heads events slot shape event)]
   (if (>= at 0) (do
-  (if replace? (reset! (nth cells at) [event]) (swap! (nth cells at) conj event))
-  (recur width keys cells slot-cells position (inc entry))) (let [appended (count keys)
-   grown-keys (conj keys key)
-   grown-cells (conj cells (atom [event]))]
+  (swap! (nth cells at) conj event)
+  (recur width codes cells chain heads position (inc shape))) (let [appended (count codes)
+   grown-codes (conj codes (key-code position shape))
+   grown-cells (conj cells (atom [event]))
+   grown-chain (conj chain (deref (nth heads slot)))]
   (do
-  (swap! (nth slot-cells slot) conj appended)
-  (if (> (count grown-keys) (* bucket-slot-load width)) (recur (* 2 width) grown-keys grown-cells (rehashed-position-cells! grown-keys (* 2 width)) position (inc entry)) (recur width grown-keys grown-cells slot-cells position (inc entry)))))))))))
+  (reset! (nth heads slot) appended)
+  (if (> (count grown-codes) (* bucket-slot-load width)) (let [widened (* 2 width)
+   fresh (fresh-head-cells widened)
+   relinked (relinked-chain! grown-codes events fresh widened)]
+  (recur widened grown-codes grown-cells relinked fresh position (inc shape))) (recur width grown-codes grown-cells grown-chain heads position (inc shape)))))))))))
+
+(defn- ^OccurrenceIndex projected-occurrences! [events width]
+  (let [heads (fresh-head-cells width)]
+  (loop [chain empty-ints
+   position 0]
+  (if (>= position (count events)) (->OccurrenceIndex width (frozen-heads heads) chain) (let [event (checked-assertion (nth events position))
+   slot (mod (hash-one (t/triple-t1 event)) width)
+   linked (conj chain (deref (nth heads slot)))]
+  (do
+  (reset! (nth heads slot) position)
+  (recur linked (inc position))))))))
 
 (defn- ^Rotation projected! [^String space-id version events]
   (let [total (count events)]
-  (->Rotation space-id version events (projected-bucket! events 0 0 true (initial-bucket-width total)) (projected-bucket! events 1 3 false (initial-bucket-width (* 3 total))) (projected-bucket! events 4 5 false (initial-bucket-width (* 2 total))) (projected-bucket! events 6 7 false (initial-bucket-width (* 2 total))) no-pending)))
+  (->Rotation space-id version events (projected-occurrences! events (initial-bucket-width total)) (projected-bucket! events shape-t1 shape-t12 (initial-bucket-width (* 2 total))) (projected-bucket! events shape-t2 shape-t2 (initial-bucket-width total)) (projected-bucket! events shape-t3 shape-t3 (initial-bucket-width total)) no-pending)))
 
 (defn ^Rotation project! [ctx]
   (projected! (store/space-id ctx) (store/current-sequence ctx) (store/live-occurrences ctx)))
@@ -278,7 +362,7 @@
    pending (loop [built (rotation-pending rotation)
    position 0]
   (if (>= position (count frames)) built (recur (pending-with-frame built space (nth frames position)) (inc position))))
-   advanced (assoc (assoc rotation :pending pending) :version target)]
+   advanced (->Rotation (rotation-space-id rotation) target (rotation-events rotation) (rotation-by-occurrence rotation) (rotation-spo rotation) (rotation-pos rotation) (rotation-osp rotation) pending)]
   (if (> (count pending) pending-fold-cap) (projected! space target (all-occurrences advanced)) advanced)))))))
 
 (defn ^Boolean pinned? [^Rotation rotation ctx]
