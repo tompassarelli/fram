@@ -30,34 +30,74 @@ hash and refuses a wasm that does not match its own provenance.
 ## Use it
 
 ```js
-import { FramDurableObjectBase } from '@tompassarelli/fram-cloudflare-do';
+import {
+  FramDurableObjectBase,
+  framDataPlaneEntrypoint,
+  framDurableObjectTransport,
+} from '@tompassarelli/fram-cloudflare-do';
+import { framClient } from '@tompassarelli/framrpc/core';
+import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import framModule from '../lib/libfram.wasm';
 
-export class FramLog extends FramDurableObjectBase {
+const SPACE = 'wiki.greywrought.com';
+
+// Raw storage owner in a backend Worker. Never bind FRAM into the wiki Worker.
+export class FramLog extends DurableObject {
+  #fram;
+
   constructor(state, env) {
-    super(state, env, framModule, { spaceId: env.FRAM_SPACE_ID });
+    super(state, env);
+    this.#fram = new FramDurableObjectBase(
+      state, env, framModule, { spaceId: SPACE },
+    );
   }
 
-  async fetch(request) {
-    const frame = new Uint8Array(await request.arrayBuffer());
-    const { status, response } = await this.query(frame);
-    return new Response(response, { headers: { 'x-fram-status': status } });
+  exchange(frame, options) {
+    return this.#fram.exchange(frame, options);
   }
+}
+
+// The backend Worker's public service entrypoint delegates only exchange.
+export class DataPlane extends WorkerEntrypoint {
+  exchange(frame, options) {
+    return framDataPlaneEntrypoint(this.env.FRAM, SPACE)
+      .exchange(frame, options);
+  }
+}
+
+// The wiki Worker receives DATA_PLANE as a service binding, not env.FRAM.
+export function client(DATA_PLANE) {
+  return framClient({
+    space: SPACE,
+    transport: framDurableObjectTransport(DATA_PLANE),
+  });
 }
 ```
 
-The four call surfaces take a canonical FRAMRPC v1 request frame and answer
-with one response frame:
+The raw storage-owning object takes a canonical FRAMRPC v1 request frame and
+answers with one response frame only after any write is durable:
 
-| method | engine entry point | for |
+| method | validates | dispatches |
 | --- | --- | --- |
-| `query(frame)` | `fram_query` | reads at the current version |
-| `transact(frame)` | `fram_transact` | writes |
-| `snapshot(frame)` | `fram_snapshot` | reads as-of a version or instant |
-| `checkpoint(frame)` | `fram_transact` | `:rpc/checkpoint`, plus `imageBytes` |
+| `exchange(frame, { entry, space })` | frame bound and envelope, exact SpaceId, closed operation, operation/entry agreement | `fram_query`, `fram_transact`, or `fram_snapshot` |
 
-Frame encoding is not this package's job: the frames are the same canonical
-FRAMRPC v1 bytes every other client speaks.
+Only the backend Worker holds the raw namespace. Its data WorkerEntrypoint
+resolves the object with `env.FRAM.getByName(SPACE)` and delegates only
+`exchange`; the wiki Worker receives only that service binding. A separately
+protected admin entrypoint may delegate export/restore to the same object, so
+both capabilities still address one store. Frame encoding and result decoding
+come from `@tompassarelli/framrpc/core`; the same official application client
+therefore works over TCP or a Durable Object.
+
+The Worker compatibility date must be `2026-03-15` or newer. The raw object
+requires `state.id.name === spaceId`; unnamed and string-reconstructed object
+IDs fail closed. This deployment regime therefore limits SpaceIds to 1,024
+UTF-8 bytes, Cloudflare's maximum for exposing the stable object name, even
+though FRAMRPC itself allows 4,096.
+
+`exchange` refuses `rpc/checkpoint`. Checkpoint, export, and restore are
+operator capabilities and must be hosted behind a separately authorized
+WorkerEntrypoint; they never appear on the wiki's data-plane service binding.
 
 ## What it does with storage
 
@@ -86,8 +126,8 @@ one commit after the call returns.
 isolate's heap. The guarantee is therefore scoped to this client's methods,
 not to the engine's own sync:
 
-- **Every public method awaits the storage commit before it resolves.** A
-  caller that awaits `transact()` before responding cannot ack a commit that is
+- **Every exchange awaits the storage commit before it resolves.** A caller
+  that awaits `exchange()` before responding cannot ack a commit that is
   not yet durable.
 - **Commits are atomic and serialised.** Fram replays the log from byte zero, so
   a torn tail is unrecoverable where a short one is not. An isolate lost after
@@ -104,6 +144,11 @@ not to the engine's own sync:
 
 What this does *not* give you is the local-disk regime's D1: there is no
 `force(true)` barrier here, and durability is Cloudflare's storage commit.
+
+A timeout or abort after a mutation has reached the Durable Object is
+ambiguous: the commit may have landed even when the caller no longer receives
+the response. Applications must recover by reading their idempotency receipt;
+they must never blindly retry an ambiguous mutation.
 
 ## The seam is checked at startup
 

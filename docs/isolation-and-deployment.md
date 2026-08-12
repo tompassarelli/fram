@@ -79,8 +79,14 @@ Exclusivity per regime:
   wasi-libc declares `flock` and links no implementation — so the guard stands
   down there rather than pretending.
 - **Durable Object**: the platform runs one instance per object id, so the id
-  is the exclusivity. One id, one database, one writer; a second concurrent
-  writer for that SpaceId is a deployment error the engine cannot detect.
+  is the exclusivity. The supported backend resolves the raw storage owner only
+  with `getByName(SpaceId)` and never binds that namespace into an application
+  Worker. Its data WorkerEntrypoint facade exposes only `exchange`: the raw
+  object checks the bounded FRAMRPC envelope and operation/entry agreement, and
+  refuses the checkpoint operator capability. A separately protected admin
+  entrypoint may address the same raw object for export/restore. One named id,
+  one database, one writer; bypassing these bindings is a deployment error the
+  engine cannot detect.
 
 The engine's `expected-version` OCC check and lease fencing are unchanged in
 every regime; neither substitutes for sole-writer exclusivity.

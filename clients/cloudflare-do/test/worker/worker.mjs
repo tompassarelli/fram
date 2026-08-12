@@ -4,9 +4,11 @@
 import framModule from "../../lib/libfram.wasm";
 import framesBin from "../bundle/frames.bin";
 import framesJson from "../bundle/frames.json";
+import { DurableObject } from "cloudflare:workers";
 import {
   ChunkedRange,
   FramDurableObjectBase,
+  framDataPlaneEntrypoint,
   hex,
 } from "../../src/adapter.mjs";
 
@@ -81,12 +83,20 @@ export class FramLog extends FramDurableObjectBase {
       }
       let result;
       try {
-        result =
-          entry === "t"
-            ? await this.transact(bytes)
-            : entry === "s"
-              ? await this.snapshot(bytes)
-              : await this.query(bytes);
+        if (name === "14-space-mismatch.bin") {
+          // Preserve the engine-oracle row for its canonical mismatch reply;
+          // the checked exchange boundary refuses this before guest entry.
+          result = await this.query(bytes);
+        } else if (name === "27-checkpoint.bin") {
+          // Checkpoint is an operator capability, not a data-plane exchange.
+          result = await this.checkpoint(bytes);
+        } else {
+          const response = await this.exchange(bytes, {
+            entry: entry === "t" ? "transact" : entry === "s" ? "snapshot" : "query",
+            space: SPACE,
+          });
+          result = { status: 0, response, released: true };
+        }
       } catch (error) {
         fatal = `frame ${name}: ${error.message}`;
         break;
@@ -180,10 +190,64 @@ export class FramLog extends FramDurableObjectBase {
   }
 }
 
+// Distinct namespaces isolate harness scenarios while every object is still
+// addressed by the one exact SpaceId carried in its frames.
+export class FramWarm extends FramLog {}
+export class FramMatrix extends FramLog {}
+export class FramDepth extends FramLog {}
+export class FramMultichunk extends FramLog {}
+export class FramRace extends FramLog {}
+export class FramClient extends DurableObject {
+  #fram;
+
+  constructor(state, env) {
+    super(state, env);
+    this.#fram = new FramDurableObjectBase(state, env, framModule, {
+      spaceId: SPACE,
+      logLabel: "in-memory",
+      instance: {
+        nowMs: () => 1700000000000,
+        arena: { initialPages: 128 },
+      },
+    });
+  }
+
+  exchange(frame, options) {
+    return this.#fram.exchange(frame, options);
+  }
+}
+
+const NAMESPACE = Object.freeze({
+  warm: "FRAM_WARM",
+  matrix: "FRAM_MATRIX",
+  depth: "FRAM_DEPTH",
+  multichunk: "FRAM_MULTICHUNK",
+  race: "FRAM_RACE",
+  "official-client": "FRAM_CLIENT",
+});
+
+function namespace(env, scenario) {
+  const binding = NAMESPACE[scenario];
+  if (!binding) throw new Error(`no namespace for scenario ${scenario}`);
+  return env[binding];
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const id = env.FRAM.idFromName(url.searchParams.get("id") ?? "matrix");
-    return env.FRAM.get(id).fetch(request);
+    if (url.pathname === "/rpc") {
+      const space = request.headers.get("x-fram-space");
+      const dataPlane = framDataPlaneEntrypoint(env.FRAM_CLIENT, SPACE);
+      const frame = new Uint8Array(await request.arrayBuffer());
+      const response = await dataPlane.exchange(frame, {
+        entry: request.headers.get("x-fram-entry"),
+        space,
+      });
+      return new Response(response, {
+        headers: { "content-type": "application/vnd.framrpc" },
+      });
+    }
+    const scenario = url.searchParams.get("id") ?? "matrix";
+    return namespace(env, scenario).getByName(SPACE).fetch(request);
   },
 };

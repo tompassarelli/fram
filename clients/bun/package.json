@@ -1,12 +1,16 @@
 {
   "name": "@tompassarelli/framrpc",
-  "version": "0.3.0",
-  "description": "Official zero-dependency Bun client for binary FRAMRPC v1",
+  "version": "0.4.0",
+  "description": "Official FRAMRPC v1 client with portable codec and Bun TCP binding",
   "type": "module",
   "exports": {
     ".": {
       "types": "./framrpc.d.ts",
       "import": "./framrpc.mjs"
+    },
+    "./core": {
+      "types": "./framrpc-core.d.ts",
+      "import": "./framrpc-core.mjs"
     },
     "./schema": {
       "types": "./schema.d.ts",
@@ -19,6 +23,8 @@
     "LICENSE-MIT",
     "LICENSE-APACHE",
     "framrpc.mjs",
+    "framrpc-core.mjs",
+    "framrpc-core.d.ts",
     "framrpc.d.ts",
     "backup.mjs",
     "schema.mjs",

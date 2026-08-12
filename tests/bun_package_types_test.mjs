@@ -65,6 +65,8 @@ import {
   keywordTerm,
 } from '@tompassarelli/framrpc';
 import type { BatchPreflight, FramClient, Term } from '@tompassarelli/framrpc';
+import { framClient as framTransportClient } from '@tompassarelli/framrpc/core';
+import type { FramTransport } from '@tompassarelli/framrpc/core';
 import {
   SCHEMA_MAX_BATCH_ACTIONS,
   SCHEMA_MAX_READ_PAGES,
@@ -79,6 +81,11 @@ import type {
 } from '@tompassarelli/framrpc/schema';
 
 declare const fram: FramClient;
+const transport: FramTransport = async request => request.frame;
+const embedded: FramClient = framTransportClient({
+  space: 'worker-space',
+  transport,
+});
 const schema = schemaClient(fram);
 const state: Term = keywordTerm('draft');
 const update: UpdateUniqueMutation = {
@@ -141,6 +148,7 @@ void protocolActions;
 void schemaActions;
 void pages;
 void checkpoint;
+void embedded;
 `);
 
     run(Bun.argv[0], [

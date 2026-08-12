@@ -221,6 +221,29 @@ export interface FramClientOptions {
   port?: number;
   space: string;
   requestTimeoutMs?: number;
+  transport?: FramTransport;
+}
+
+export type FramTransportEntry = 'query' | 'transact' | 'snapshot';
+
+export interface FramTransportRequest {
+  readonly frame: Uint8Array;
+  readonly entry: FramTransportEntry;
+  readonly operation: string;
+  readonly space: string;
+  readonly requestId: bigint;
+  readonly timeoutMs: number;
+  readonly signal: AbortSignal;
+}
+
+export type FramTransport = (
+  request: FramTransportRequest,
+) => Promise<Uint8Array> | Uint8Array;
+
+export interface FramTransportClientOptions {
+  transport: FramTransport;
+  space: string;
+  requestTimeoutMs?: number;
 }
 
 export interface FramNativeCheckpointResult {
@@ -235,6 +258,7 @@ export interface FramNativeCheckpointResult {
 
 export const FRAMRPC_VERSION: Readonly<{ major: 1; minor: 0 }>;
 export const FRAMRPC_MAX_BATCH_ACTIONS: 247;
+export const FRAMRPC_MAX_FRAME_BYTES: 1048602;
 
 export class FramProtocolError extends Error {
   code: string;
@@ -268,4 +292,8 @@ export function lowerQueryPlan(value: StructuredQuery): TripleTerm;
 export function tripleQuery(pattern?: TriplePattern): TripleTerm;
 /** Operator-only fixed capability; deliberately absent from FramClient. */
 export function framNativeCheckpoint(options: FramClientOptions): Promise<FramNativeCheckpointResult>;
+/** Runtime-neutral operator capability over an injected exact-frame transport. */
+export function framTransportCheckpoint(options: FramTransportClientOptions): Promise<FramNativeCheckpointResult>;
+export function framTcpTransport(options?: Pick<FramClientOptions, 'host' | 'port'>): FramTransport;
+export function framRpcDeclaredFrameBytes(frame: Uint8Array): number | null;
 export function framClient(options: FramClientOptions): FramClient;

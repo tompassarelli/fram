@@ -8,6 +8,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Miniflare } from "miniflare";
+import {
+  framClient,
+  keywordTerm,
+} from "../../bun/framrpc-core.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -36,9 +40,16 @@ const mf = new Miniflare({
   // No cf metadata fetch: this row must run with no network and leave no
   // .wrangler cache in the checkout.
   cf: false,
-  compatibilityDate: "2025-06-01",
+  compatibilityDate: "2026-03-15",
   compatibilityFlags: ["nodejs_compat"],
-  durableObjects: { FRAM: { className: "FramLog", useSQLite: true } },
+  durableObjects: {
+    FRAM_WARM: { className: "FramWarm", useSQLite: true },
+    FRAM_MATRIX: { className: "FramMatrix", useSQLite: true },
+    FRAM_DEPTH: { className: "FramDepth", useSQLite: true },
+    FRAM_MULTICHUNK: { className: "FramMultichunk", useSQLite: true },
+    FRAM_RACE: { className: "FramRace", useSQLite: true },
+    FRAM_CLIENT: { className: "FramClient", useSQLite: true },
+  },
 });
 
 const failures = [];
@@ -199,6 +210,49 @@ try {
   check(
     raced.statuses.every((status) => status === 0),
     `every racer answered a status frame: ${raced.statuses.join(",")}`,
+  );
+
+  // 5. The official client semantics over a non-TCP Worker/DO transport.
+  const entries = [];
+  const space = "fram-wasm-embed";
+  const transport = async ({ frame, entry, space: requestSpace }) => {
+    entries.push(entry);
+    const response = await mf.dispatchFetch(
+      "http://localhost/rpc",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/vnd.framrpc",
+          "x-fram-entry": entry,
+          "x-fram-space": requestSpace,
+        },
+        body: frame,
+      },
+    );
+    if (!response.ok) throw new Error(await response.text());
+    return new Uint8Array(await response.arrayBuffer());
+  };
+  const client = framClient({ transport, space, requestTimeoutMs: 30000 });
+  const initial = await client.version();
+  const asserted = await client.assert(
+    "worker-client-subject",
+    keywordTerm("worker-client/predicate"),
+    "worker-client-value",
+    { expectedVersion: initial.servedVersion },
+  );
+  const scanned = await client.scan({ t1: "worker-client-subject" });
+  const occurred = await client.occurrences();
+  check(
+    asserted.result[0].changed && scanned.result.length === 1,
+    "the official client wrote and read through Worker -> Durable Object -> Fram/wasm",
+  );
+  check(
+    occurred.result.length > 0,
+    "the official client decoded an occurrence snapshot response",
+  );
+  check(
+    entries.join(",") === "query,transact,query,snapshot",
+    `the client selected exact embed entries: ${entries.join(",")}`,
   );
 
   process.stdout.write(`${notes.join("\n")}\n`);

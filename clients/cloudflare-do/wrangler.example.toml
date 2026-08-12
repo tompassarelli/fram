@@ -5,7 +5,9 @@
 #   wrangler deploy
 name = "fram-do"
 main = "src/worker.mjs"
-compatibility_date = "2025-06-01"
+# ctx.id.name is load-bearing for SpaceId/object identity and became available
+# on 2026-03-15. Do not move this date earlier.
+compatibility_date = "2026-03-15"
 compatibility_flags = ["nodejs_compat"]
 
 # The engine ships as a module in the bundle, not as a fetched asset: a Worker
@@ -29,4 +31,7 @@ tag = "v1"
 new_sqlite_classes = ["FramLog"]
 
 [vars]
+# The backend Worker derives the raw stub only with getByName(FRAM_SPACE_ID).
+# Never bind the FRAM namespace into the public application Worker; bind only
+# its exchange-only WorkerEntrypoint service facade.
 FRAM_SPACE_ID = "cloudflare-do"

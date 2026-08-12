@@ -1,8 +1,9 @@
 # `@tompassarelli/framrpc`
 
-The official Bun client for Fram's binary FRAMRPC v1 data plane. It is an
-ES module with no runtime dependencies. The `framClient` object exposes all
-thirteen frozen data operations.
+The official client for Fram's binary FRAMRPC v1 data plane. It is an ES
+module with no runtime dependencies. The root entry point binds Bun TCP; the
+portable `./core` entry point accepts an exact-frame transport. Both expose
+the same thirteen frozen data operations.
 
 Use this client for application and builder traffic that needs exact recursive
 Terms, atomic batches, optimistic versions, occurrence replay, or pinned
@@ -17,7 +18,7 @@ declared package version to the exact Fram release tag and source commit. Once
 the tarball is downloaded, installation needs no registry or network access:
 
 ```console
-$ bun add --offline /path/to/tompassarelli-framrpc-0.3.0.tgz
+$ bun add --offline /path/to/tompassarelli-framrpc-0.4.0.tgz
 ```
 
 The client package version is independent of the containing Fram release tag;
@@ -29,6 +30,28 @@ $ bun add /path/to/fram/clients/bun
 ```
 
 Bun 1.3.13 or newer is required.
+
+The runtime-neutral `@tompassarelli/framrpc/core` entry point exposes the same
+client over an injected exact-frame transport and has no TCP or Node builtin
+dependency. It is the supported route for Workers and embedded hosts:
+
+```js
+import { framClient } from '@tompassarelli/framrpc/core';
+import { framDurableObjectTransport } from '@tompassarelli/fram-cloudflare-do';
+
+const space = 'wiki.greywrought.com';
+const fram = framClient({
+  space,
+  // DATA_PLANE is an exchange-only service binding. The raw Durable Object
+  // namespace remains private to the backend Worker.
+  transport: framDurableObjectTransport(env.DATA_PLANE),
+});
+```
+
+The transport accepts and returns canonical FRAMRPC bytes. It does not change
+the operation set or engine ABI. A timeout after dispatch is ambiguous for a
+mutation; recover by reading the application's idempotency receipt and never
+blindly retry it.
 
 ## Connect
 

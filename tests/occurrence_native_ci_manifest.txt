@@ -61,6 +61,7 @@ run-shell	current-cache	tests/fri_golden.sh	-
 run-shell	current-model	tests/fri2_replay_oracle_test.sh	-
 run-node	current-cloudflare	tests/cloudflare_worker_client_test.mjs	-
 run-bun	current-bun-client	tests/bun_framrpc_client_test.mjs	-
+run-bun	current-bun-client	tests/framrpc_transport_test.mjs	-
 run-bun	current-bun-backup	tests/bun_backup_test.mjs	-
 run-bun	current-bun-schema-client	tests/bun_schema_client_test.mjs	-
 run-bun	current-bun-package-types	tests/bun_package_types_test.mjs	-

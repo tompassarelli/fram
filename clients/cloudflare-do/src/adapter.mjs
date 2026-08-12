@@ -10,6 +10,184 @@ import { assertSeams } from "./seams.mjs";
 
 const PAGE_BYTES = 65536;
 const FRAM_ABI_VERSION = 1;
+const FRAMRPC_MAGIC = Uint8Array.of(
+  0x46, 0x52, 0x41, 0x4d, 0x52, 0x50, 0x43, 0x00,
+);
+const FRAMRPC_HEADER_BYTES = 26;
+const FRAMRPC_MAX_BODY_BYTES = 1024 * 1024;
+export const FRAMRPC_MAX_FRAME_BYTES =
+  FRAMRPC_HEADER_BYTES + FRAMRPC_MAX_BODY_BYTES;
+const FRAMRPC_MAX_SPACE_BYTES = 4096;
+const FRAM_DO_MAX_NAMED_SPACE_BYTES = 1024;
+const textDecoder = new TextDecoder("utf-8", { fatal: true });
+const textEncoder = new TextEncoder();
+
+const FRAMRPC_OPERATIONS = new Set([
+  "rpc/version", "rpc/status", "rpc/validate",
+  "rpc/assert", "rpc/retract", "rpc/batch",
+  "rpc/scan", "rpc/query", "rpc/occurrences",
+  "rpc/lease-acquire", "rpc/lease-renew", "rpc/lease-release",
+  "rpc/lease-check", "rpc/checkpoint",
+]);
+const FRAMRPC_MUTATIONS = new Set([
+  "rpc/assert", "rpc/retract", "rpc/batch",
+  "rpc/lease-acquire", "rpc/lease-renew", "rpc/lease-release",
+]);
+
+export class FramRequestError extends Error {
+  constructor(message, code = "request/invalid-frame", options) {
+    super(`Fram request: ${message}`, options);
+    this.name = "FramRequestError";
+    this.code = code;
+  }
+}
+
+function requestFail(message, code) {
+  throw new FramRequestError(message, code);
+}
+
+function sameBytes(left, right) {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+class RequestReader {
+  constructor(bytes) {
+    this.bytes = bytes;
+    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    this.offset = 0;
+  }
+
+  ensure(length, label) {
+    if (this.offset + length > this.bytes.length) {
+      requestFail(`frame ended inside ${label}`, "request/truncated");
+    }
+  }
+
+  u8(label) {
+    this.ensure(1, label);
+    const value = this.view.getUint8(this.offset);
+    this.offset += 1;
+    return value;
+  }
+
+  u32(label) {
+    this.ensure(4, label);
+    const value = this.view.getUint32(this.offset, true);
+    this.offset += 4;
+    return value;
+  }
+
+  text(maximum, label) {
+    const length = this.u32(`${label} length`);
+    if (length > maximum) {
+      requestFail(`${label} exceeds its UTF-8 byte limit`, "request/string-limit");
+    }
+    this.ensure(length, label);
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
+    this.offset += length;
+    try {
+      return textDecoder.decode(bytes);
+    } catch (cause) {
+      throw new FramRequestError(
+        `${label} is not valid UTF-8`,
+        "request/invalid-utf8",
+        { cause },
+      );
+    }
+  }
+
+  stringTerm(label) {
+    if (this.u8(`${label} tag`) !== 1) {
+      requestFail(`${label} is not a String Term`, "request/invalid-record");
+    }
+    return this.text(FRAMRPC_MAX_SPACE_BYTES, label);
+  }
+
+  keywordTerm(label) {
+    if (this.u8(`${label} tag`) !== 6) {
+      requestFail(`${label} is not a Keyword Term`, "request/invalid-record");
+    }
+    const value = this.text(FRAMRPC_MAX_BODY_BYTES, label);
+    if (!value) requestFail(`${label} is empty`, "request/invalid-record");
+    return value;
+  }
+}
+
+/**
+ * Parse only the fixed FRAMRPC v1 envelope fields an embedder must authorize.
+ * The engine remains the authority for the complete recursive payload codec.
+ */
+export function inspectFramRpcRequest(frame) {
+  if (!(frame instanceof Uint8Array)) {
+    requestFail("frame must be a Uint8Array", "request/invalid-type");
+  }
+  if (frame.length < FRAMRPC_HEADER_BYTES) {
+    requestFail("frame ended inside its header", "request/truncated");
+  }
+  if (frame.length > FRAMRPC_MAX_FRAME_BYTES) {
+    requestFail("frame exceeds 1 MiB body limit", "request/frame-too-large");
+  }
+  if (!sameBytes(frame.subarray(0, FRAMRPC_MAGIC.length), FRAMRPC_MAGIC)) {
+    requestFail("magic does not match", "request/invalid-magic");
+  }
+  const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+  const major = view.getUint16(8, true);
+  const minor = view.getUint16(10, true);
+  const kind = view.getUint8(12);
+  const flags = view.getUint8(13);
+  const bodyBytes = view.getUint32(14, true);
+  const requestId = view.getBigInt64(18, true);
+  if (major !== 1 || minor !== 0) {
+    requestFail("protocol version is unsupported", "request/unsupported-version");
+  }
+  if (kind !== 1) requestFail("frame is not a request", "request/invalid-kind");
+  if (flags !== 0) requestFail("flags must be zero", "request/invalid-flags");
+  if (bodyBytes > FRAMRPC_MAX_BODY_BYTES) {
+    requestFail("body exceeds 1 MiB", "request/frame-too-large");
+  }
+  if (frame.length !== FRAMRPC_HEADER_BYTES + bodyBytes) {
+    requestFail("body length is inconsistent", "request/truncated");
+  }
+  const body = new RequestReader(frame.subarray(FRAMRPC_HEADER_BYTES));
+  const space = body.stringTerm("SpaceId");
+  const operation = body.keywordTerm("operation");
+  if (!space || textEncoder.encode(space).length > FRAMRPC_MAX_SPACE_BYTES) {
+    requestFail("SpaceId is empty or too large", "request/invalid-space");
+  }
+  if (!FRAMRPC_OPERATIONS.has(operation)) {
+    requestFail("operation is outside FRAMRPC v1", "request/unsupported-operation");
+  }
+  return Object.freeze({
+    space,
+    operation,
+    requestId,
+    frameBytes: frame.length,
+    bodyBytes,
+  });
+}
+
+export function framRpcEntry(operation) {
+  if (operation === "rpc/checkpoint") return "operator";
+  if (FRAMRPC_MUTATIONS.has(operation)) return "transact";
+  if (operation === "rpc/occurrences") return "snapshot";
+  return "query";
+}
+
+function entryAccepts(operation, entry) {
+  if (operation === "rpc/query") return entry === "query" || entry === "snapshot";
+  return framRpcEntry(operation) === entry;
+}
+
+export function framDurableObjectTransport(stub) {
+  if (!stub || (typeof stub !== "object" && typeof stub !== "function")) {
+    throw new TypeError("Fram Durable Object service binding is required");
+  }
+  return ({ frame, entry, space }) => stub.exchange(frame, { entry, space });
+}
 
 // wasm32 layouts of the public ABI structs (native/fram.h under -m32).
 export const OPTIONS_SIZE = 32; // abi, size, space, path, host, pad, budget u64
@@ -442,6 +620,15 @@ export class FramStorageError extends Error {
   }
 }
 
+/** A wasm-embed entry point failed before it could produce a FRAMRPC reply. */
+export class FramExchangeError extends Error {
+  constructor(status, message) {
+    super(`Fram exchange failed with status ${status}: ${message}`);
+    this.name = "FramExchangeError";
+    this.status = status;
+  }
+}
+
 export class FramInstance {
   /**
    * @param {WebAssembly.Module} module libfram.wasm, host=wasm-embed
@@ -864,10 +1051,22 @@ export class FramInstance {
  */
 export class FramDurableObjectBase {
   constructor(state, env, module, options = {}) {
+    if (typeof options.spaceId !== "string" || !options.spaceId) {
+      throw new TypeError("Fram Durable Object spaceId must be a nonempty string");
+    }
+    if (textEncoder.encode(options.spaceId).length > FRAM_DO_MAX_NAMED_SPACE_BYTES) {
+      throw new TypeError("Fram Durable Object spaceId exceeds 1024 UTF-8 bytes");
+    }
+    if (state?.id?.name !== options.spaceId) {
+      throw new FramRequestError(
+        "Durable Object name must exactly equal its SpaceId; use getByName(spaceId)",
+        "request/object-identity-mismatch",
+      );
+    }
     this.state = state;
     this.env = env;
     this.module = module;
-    this.spaceId = options.spaceId ?? "fram";
+    this.spaceId = options.spaceId;
     this.logLabel = options.logLabel ?? "in-memory";
     this.storeOptions = options.store ?? {};
     this.instanceOptions = options.instance ?? {};
@@ -928,6 +1127,68 @@ export class FramDurableObjectBase {
     return this.#use((instance) => instance.checkpoint(frame));
   }
 
+  /**
+   * Runtime-neutral data plane for the official FRAMRPC client.
+   *
+   * This is safe to expose as a Durable Object RPC method: it validates the
+   * exact frame bound, protocol envelope, SpaceId, and operation/entry pairing
+   * before entering the guest. It resolves only after the adapter has durably
+   * committed every write performed by the call.
+   */
+  async exchange(frame, options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      requestFail("exchange options must be an object", "request/invalid-options");
+    }
+    for (const key of Object.keys(options)) {
+      if (key !== "entry" && key !== "space") {
+        requestFail(`exchange option ${key} is unknown`, "request/invalid-options");
+      }
+    }
+    if (options.entry !== "query"
+        && options.entry !== "transact"
+        && options.entry !== "snapshot") {
+      requestFail("entry must be query, transact, or snapshot", "request/invalid-entry");
+    }
+    if (typeof options.space !== "string" || !options.space) {
+      requestFail("space must be a nonempty string", "request/invalid-space");
+    }
+    const inspected = inspectFramRpcRequest(frame);
+    if (inspected.operation === "rpc/checkpoint") {
+      requestFail(
+        "checkpoint is an operator capability, not a data-plane operation",
+        "request/operator-capability",
+      );
+    }
+    if (options.space !== this.spaceId || inspected.space !== this.spaceId) {
+      requestFail("SpaceId does not belong to this object", "request/space-mismatch");
+    }
+    if (!entryAccepts(inspected.operation, options.entry)) {
+      requestFail(
+        `${inspected.operation} cannot use ${options.entry}`,
+        "request/entry-mismatch",
+      );
+    }
+
+    const result = options.entry === "transact"
+      ? await this.transact(frame)
+      : options.entry === "snapshot"
+        ? await this.snapshot(frame)
+        : await this.query(frame);
+    if (result.status !== 0) {
+      throw new FramExchangeError(result.status, result.message);
+    }
+    if (!(result.response instanceof Uint8Array)) {
+      throw new FramExchangeError(result.status, "guest response is not bytes");
+    }
+    if (result.response.length > FRAMRPC_MAX_FRAME_BYTES) {
+      throw new FramExchangeError(result.status, "guest response exceeds 1 MiB");
+    }
+    if (!result.released) {
+      throw new FramExchangeError(result.status, "guest response buffer was not released");
+    }
+    return result.response;
+  }
+
   async #use(body) {
     const instance = await this.fram();
     try {
@@ -955,6 +1216,30 @@ export class FramDurableObjectBase {
     }
     return null;
   }
+}
+
+/**
+ * A WorkerEntrypoint/service-binding facade whose public surface is exactly
+ * `exchange`. Pass the backend Worker's private raw DO namespace; never bind
+ * that namespace into an application Worker.
+ */
+export function framDataPlaneEntrypoint(namespace, spaceId) {
+  if (!namespace || (typeof namespace !== "object"
+      && typeof namespace !== "function")) {
+    throw new TypeError("Fram data plane requires a Durable Object namespace");
+  }
+  if (typeof spaceId !== "string" || !spaceId) {
+    throw new TypeError("Fram data plane spaceId must be a nonempty string");
+  }
+  if (textEncoder.encode(spaceId).length > FRAM_DO_MAX_NAMED_SPACE_BYTES) {
+    throw new TypeError("Fram data plane spaceId exceeds 1024 UTF-8 bytes");
+  }
+  const object = () => namespace.getByName(spaceId);
+  return Object.freeze({
+    exchange(frame, options) {
+      return object().exchange(frame, options);
+    },
+  });
 }
 
 export function nowHiRes() {

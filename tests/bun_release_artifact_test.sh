@@ -28,6 +28,8 @@ package_files=(
   LICENSE-MIT
   LICENSE-APACHE
   framrpc.mjs
+  framrpc-core.mjs
+  framrpc-core.d.ts
   framrpc.d.ts
   backup.mjs
   schema.mjs
@@ -44,6 +46,8 @@ git -C "$source_seed" add \
   clients/bun/LICENSE-MIT \
   clients/bun/LICENSE-APACHE \
   clients/bun/framrpc.mjs \
+  clients/bun/framrpc-core.mjs \
+  clients/bun/framrpc-core.d.ts \
   clients/bun/framrpc.d.ts \
   clients/bun/backup.mjs \
   clients/bun/schema.mjs \
@@ -89,13 +93,13 @@ grep -Fxq 'release-tag v1.2.3' "${files_a[1]}" ||
   fail "receipt omitted the repository release tag"
 grep -Fxq 'package-name @tompassarelli/framrpc' "${files_a[1]}" ||
   fail "receipt omitted the package name"
-grep -Fxq 'package-version 0.3.0' "${files_a[1]}" ||
+grep -Fxq 'package-version 0.4.0' "${files_a[1]}" ||
   fail "receipt omitted the independent package version"
 archive_sha256="$(sha256sum "${files_a[0]}" | awk '{print $1}')"
 grep -Fxq "archive-sha256 $archive_sha256" "${files_a[1]}" ||
   fail "receipt does not hash the shipped archive"
 
-expected_entries=$'package/package.json\npackage/LICENSE\npackage/LICENSE-APACHE\npackage/LICENSE-MIT\npackage/README.md\npackage/backup.mjs\npackage/framrpc.d.ts\npackage/framrpc.mjs\npackage/schema.d.ts\npackage/schema.mjs'
+expected_entries=$'package/package.json\npackage/LICENSE\npackage/LICENSE-APACHE\npackage/LICENSE-MIT\npackage/README.md\npackage/backup.mjs\npackage/framrpc-core.d.ts\npackage/framrpc-core.mjs\npackage/framrpc.d.ts\npackage/framrpc.mjs\npackage/schema.d.ts\npackage/schema.mjs'
 [[ "$(tar -tzf "${files_a[0]}")" == "$expected_entries" ]] ||
   fail "archive member set or order is not canonical"
 
@@ -162,9 +166,10 @@ printf '%s\n' '{"name":"framrpc-release-consumer","private":true,"type":"module"
 cat >"$consumer/probe.mjs" <<'PROBE'
 import assert from 'node:assert/strict';
 import { framClient, framNativeCheckpoint, keywordTerm } from '@tompassarelli/framrpc';
+import { framClient as framTransportClient } from '@tompassarelli/framrpc/core';
 import { schemaClient } from '@tompassarelli/framrpc/schema';
 
-const client = framClient({ space: 'offline-package-probe' });
+const client = framClient({ space: 'offline-package-probe', port: 1 });
 assert.deepEqual(Object.keys(client).sort(), [
   'assert',
   'batch',
@@ -186,9 +191,10 @@ assert.equal('checkpoint' in client, false);
 assert.equal('framNativeCheckpoint' in client, false);
 assert.equal(typeof framNativeCheckpoint, 'function');
 assert.equal(typeof schemaClient, 'function');
+assert.equal(typeof framTransportClient, 'function');
 assert.deepEqual(keywordTerm('draft'), ['keyword', 'draft']);
 
-for (const privateSubpath of ['backup', 'framrpc.mjs', 'schema.mjs']) {
+for (const privateSubpath of ['backup', 'framrpc.mjs', 'framrpc-core.mjs', 'schema.mjs']) {
   try {
     await import(`@tompassarelli/framrpc/${privateSubpath}`);
     assert.fail(`private package subpath unexpectedly imported: ${privateSubpath}`);

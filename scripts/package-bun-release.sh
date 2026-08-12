@@ -107,6 +107,8 @@ package_version="$(bun -e '
     "LICENSE-MIT",
     "LICENSE-APACHE",
     "framrpc.mjs",
+    "framrpc-core.mjs",
+    "framrpc-core.d.ts",
     "framrpc.d.ts",
     "backup.mjs",
     "schema.mjs",
@@ -115,6 +117,7 @@ package_version="$(bun -e '
   ];
   const expectedExports = {
     ".": { types: "./framrpc.d.ts", import: "./framrpc.mjs" },
+    "./core": { types: "./framrpc-core.d.ts", import: "./framrpc-core.mjs" },
     "./schema": { types: "./schema.d.ts", import: "./schema.mjs" },
   };
   const fail = message => {
@@ -126,7 +129,7 @@ package_version="$(bun -e '
     fail("package version must be stable semver");
   }
   if (JSON.stringify(manifest.exports) !== JSON.stringify(expectedExports)) {
-    fail("package exports must contain only the root and ./schema entry points");
+    fail("package exports must contain only root, ./core, and ./schema entry points");
   }
   if (manifest.types !== "./framrpc.d.ts") fail("unexpected root declaration entry");
   if (JSON.stringify(manifest.files) !== JSON.stringify(expectedFiles)) {
@@ -150,6 +153,8 @@ package_files=(
   LICENSE-MIT
   LICENSE-APACHE
   framrpc.mjs
+  framrpc-core.mjs
+  framrpc-core.d.ts
   framrpc.d.ts
   backup.mjs
   schema.mjs
@@ -187,7 +192,7 @@ trap 'exit 143' TERM
 [[ -f "$temporary_archive" && ! -L "$temporary_archive" ]] ||
   die "Bun did not produce the package archive"
 
-expected_entries=$'package/package.json\npackage/LICENSE\npackage/LICENSE-APACHE\npackage/LICENSE-MIT\npackage/README.md\npackage/backup.mjs\npackage/framrpc.d.ts\npackage/framrpc.mjs\npackage/schema.d.ts\npackage/schema.mjs'
+expected_entries=$'package/package.json\npackage/LICENSE\npackage/LICENSE-APACHE\npackage/LICENSE-MIT\npackage/README.md\npackage/backup.mjs\npackage/framrpc-core.d.ts\npackage/framrpc-core.mjs\npackage/framrpc.d.ts\npackage/framrpc.mjs\npackage/schema.d.ts\npackage/schema.mjs'
 archive_entries="$(tar -tzf "$temporary_archive")"
 [[ "$archive_entries" == "$expected_entries" ]] ||
   die "package archive member set or order is not canonical"
