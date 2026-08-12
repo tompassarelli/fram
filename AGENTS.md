@@ -54,3 +54,19 @@ only to the revision checked; never treat it as evergreen.
   `0c5077e51419868618aeaa5fe8019c62421857d6` is MIT. FRAM uses it only in
   GitHub Actions to install the exact Bun toolchain; it is not a shipped or
   runtime dependency.
+
+- 2026-08-12 — Wrangler npm package `4.121.0` and Miniflare npm package
+  `5.20260804.1-alpha`, source revision
+  `15fc56824836570ca291aa148be72d2d62f59566` in Cloudflare's workers-sdk,
+  are respectively MIT OR Apache-2.0 and MIT. FRAM uses these exact packages
+  only as development gates: Wrangler produces the deployment-shaped dry-run
+  bundle and Miniflare launches the workerd functional harness. Neither is
+  shipped by `@tompassarelli/fram-cloudflare-do`, and no Cloudflare source is
+  copied into FRAM.
+
+- 2026-08-12 — workerd npm package `1.20260804.1`, source revision
+  `abd3d71c2d9a3bd6f27072091d9368fd18ca02e6`, is Apache-2.0. Wrangler
+  `4.121.0` selects this exact runtime build. FRAM invokes it indirectly through
+  Miniflare for local capacity evidence only; local workerd plus a Linux cgroup
+  is a conservative process-tree proxy, not an observation of Cloudflare's
+  production isolate accounting.

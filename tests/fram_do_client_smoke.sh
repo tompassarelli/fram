@@ -20,9 +20,9 @@ fail() {
   exit 1
 }
 
-command -v node >/dev/null 2>&1 || skip "node is not on PATH"
+command -v bun >/dev/null 2>&1 || skip "Bun is not on PATH"
 [[ -d "$client/node_modules/miniflare" ]] ||
-  skip "miniflare is not installed; run npm install in clients/cloudflare-do"
+  skip "Miniflare is not installed; run bun install in clients/cloudflare-do"
 
 wasi_cc="${FRAM_WASI_CC:-${WASI_CC:-}}"
 [[ -n "$wasi_cc" && -x "$(command -v "$wasi_cc" 2>/dev/null || true)" ]] ||
@@ -38,9 +38,9 @@ wasm_artifact="$(FRAM_WASI_CC="$wasi_cc" "$repo/bin/fram-native-build" \
   fail "wasm-embed build failed"
 FRAM_DO_WASM_ARTIFACT="$wasm_artifact" bash "$client/scripts/build-wasm.sh" ||
   fail "publishing lib/libfram.wasm failed"
-node "$client/scripts/check-seams.mjs" ||
+bun "$client/scripts/check-seams.mjs" ||
   fail "the adapter's seam list is not native/wasm-embed.seams"
-node "$client/test/pack-frames.mjs" "$frames" "$client/test/bundle" >/dev/null ||
+bun "$client/test/pack-frames.mjs" "$frames" "$client/test/bundle" >/dev/null ||
   fail "packing the frame bundle failed"
 
 # The oracle: the same frames through the native lp64 embed library.
@@ -64,16 +64,16 @@ embed_artifact="$("$repo/bin/fram-native-build" --host embed "${sources[@]}")" |
 # so a wedged isolate fails the row instead of hanging the suite.
 budget="${FRAM_DO_SMOKE_TIMEOUT:-1200}"
 
-node_status=0
-timeout "$budget" node "$client/test/run-node.mjs" \
-  "$client/lib/libfram.wasm" "$frames" >"$scratch/node.out" 2>&1 ||
-  node_status=$?
-cat "$scratch/node.out"
-[[ $node_status -eq 0 ]] ||
-  fail "the durability harness failed (exit $node_status)"
+bun_status=0
+timeout "$budget" bun "$client/test/run-node.mjs" \
+  "$client/lib/libfram.wasm" "$frames" >"$scratch/bun.out" 2>&1 ||
+  bun_status=$?
+cat "$scratch/bun.out"
+[[ $bun_status -eq 0 ]] ||
+  fail "the durability harness failed (exit $bun_status)"
 
 workerd_status=0
-timeout "$budget" node "$client/test/run-matrix.mjs" "$scratch" \
+timeout "$budget" bun "$client/test/run-matrix.mjs" "$scratch" \
   "$scratch/native.transcript" "$scratch/native-depth.transcript" \
   >"$scratch/workerd.out" 2>&1 || workerd_status=$?
 cat "$scratch/workerd.out"

@@ -5,3 +5,4 @@ node_modules/
 test/bundle/
 test/out/
 package-lock.json
+capacity/out/

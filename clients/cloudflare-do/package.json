@@ -21,17 +21,20 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=20"
+    "bun": "1.3.13"
   },
   "scripts": {
     "build:wasm": "bash scripts/build-wasm.sh",
-    "check:seams": "node scripts/check-seams.mjs",
-    "pack:frames": "node test/pack-frames.mjs",
-    "test:node": "node test/run-node.mjs lib/libfram.wasm ../../tests/wasm_embed/frames",
-    "test:workerd": "node test/run-matrix.mjs test/out"
+    "check:seams": "bun scripts/check-seams.mjs",
+    "pack:frames": "bun test/pack-frames.mjs",
+    "test:bun": "bun test/run-node.mjs lib/libfram.wasm ../../tests/wasm_embed/frames",
+    "test:workerd": "bun test/run-matrix.mjs test/out",
+    "capacity": "bash capacity/run-gate.sh",
+    "capacity:receipt": "bun test capacity/receipt.test.mjs"
   },
   "devDependencies": {
-    "miniflare": "^5.20260801.0-alpha"
+    "miniflare": "5.20260804.1-alpha",
+    "wrangler": "4.121.0"
   },
   "repository": {
     "type": "git",

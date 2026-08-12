@@ -6,6 +6,8 @@
 # in the flake devShell and before a release, and its evidence is the cost source.
 
 run-bb	current-model	tests/cloudflare_json_response_test.clj	-
+run-bun	current-model	tests/cloudflare_capacity_receipt_test.mjs	-
+exclude-runner	needs-wasm-cgroup	tests/fram_cloudflare_capacity_gate.sh	clients/cloudflare-do/capacity/workerd-cgroup-wrapper.sh#memory\.max
 run-bb	current-model	tests/cloudflare_runtime_closure_test.clj	-
 run-bb	current-model	tests/codegraph_seam_test.clj	-
 run-bb	current-model	tests/database_migrate_flat_classification_test.clj	-

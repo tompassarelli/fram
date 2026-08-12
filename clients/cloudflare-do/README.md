@@ -206,14 +206,46 @@ visible too. A tenth host hook cannot reach this adapter silently.
 ## Test it
 
 ```console
-$ npm install                        # miniflare, for the workerd half
+$ bun install                        # pinned Miniflare/workerd toolchain
 $ scripts/build-wasm.sh
-$ node test/pack-frames.mjs
-$ npm run test:node                  # durability, fencing, multi-chunk
-$ npm run test:workerd               # the frame matrix inside workerd
+$ bun test/pack-frames.mjs
+$ bun run test:bun                   # durability, fencing, multi-chunk
+$ bun run test:workerd               # the frame matrix inside workerd
 ```
 
 `tests/fram_do_client_smoke.sh` is the same harness as one CI row: it builds
 the wasm and the native lp64 oracle, runs both halves, and compares the
 transcript and the FRAMLOG bytes the Durable Object wrote against the oracle's.
-It SKIPs cleanly when node, miniflare, or the wasi compiler is absent.
+It SKIPs cleanly when Bun, Miniflare, or the wasi compiler is absent.
+
+## Cloudflare capacity gate
+
+`capacity/run-gate.sh` builds the current `libfram.wasm`, makes Wrangler emit
+the deployment-shaped Worker bundle, and loads the fixed wiki-shaped corpus
+through workerd. The functional process tree runs in a Linux cgroup with an
+exact 128 MiB memory ceiling and swap disabled. The Bun/Miniflare controller
+stays outside that cgroup; the real workerd process and all descendants are in
+it:
+
+```sh
+$ bun run capacity
+```
+
+The default checks the stricter Free-plan 3 MiB compressed Worker limit. Set
+`FRAM_CF_CAPACITY_PLAN=paid` to check the Paid-plan 10 MiB limit. Both plans
+also enforce Wrangler's 64 MiB pre-compression limit.
+
+The deterministic receipt is `capacity/out/receipt.json`. It reports Wrangler's
+displayed upload totals, hashes and exact byte sizes for emitted modules, guest
+linear-memory high-water, and the kernel's peak for the whole workerd runtime
+process tree. The process-tree row is deliberately stricter than an
+isolate-only limit, but it is not a measurement of Cloudflare production
+isolate accounting. The receipt is capacity evidence only: it does not prove a
+release, Access policy, production identity, an admin path, or backup/restore
+peak memory.
+
+The tracked corpus shape is exact, not a forecast of Greywrought traffic. Its
+purpose is to keep this gate reproducible: 32 articles, three revisions per
+article, 2,048-byte deterministic bodies, four links per revision, and 864
+facts total. Change `capacity/corpus.json` deliberately when the accepted gate
+profile changes.
