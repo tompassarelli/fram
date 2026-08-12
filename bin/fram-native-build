@@ -234,6 +234,14 @@ if [[ -n "$beagle_root" ]]; then
   git -C "$beagle_root" diff --cached --quiet --ignore-submodules -- ||
     die "Beagle has staged changes: $beagle_root"
 fi
+ffc_notice_root="$beagle_home/native-core/shim/third_party/ffc"
+[[ -d "$ffc_notice_root" && ! -L "$ffc_notice_root" &&
+  "$(realpath "$ffc_notice_root")" == "$ffc_notice_root" ]] ||
+  die "Beagle ffc notice directory is unavailable or symlinked: $ffc_notice_root"
+for notice in LICENSE-MIT PROVENANCE; do
+  [[ -f "$ffc_notice_root/$notice" && ! -L "$ffc_notice_root/$notice" ]] ||
+    die "Beagle ffc notice is unavailable or symlinked: $ffc_notice_root/$notice"
+done
 
 # Every file a `beagle build --materializer` run reads out of the Beagle tree,
 # listed as `sha256  repo-relative-path`. Verified against an strace of a
@@ -286,6 +294,26 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+validate_ffc_notices() {
+  local artifact_root="$1" notice destination
+  for notice in LICENSE-MIT PROVENANCE; do
+    destination="$artifact_root/THIRD-PARTY/ffc/$notice"
+    [[ -f "$destination" && ! -L "$destination" ]] ||
+      die "native artifact omitted its ffc notice: $destination"
+    cmp -s "$ffc_notice_root/$notice" "$destination" ||
+      die "native artifact ffc notice differs from the Beagle source: $destination"
+  done
+}
+
+copy_ffc_notices() {
+  local artifact_root="$1" notice
+  mkdir -p "$artifact_root/THIRD-PARTY/ffc"
+  for notice in LICENSE-MIT PROVENANCE; do
+    cp "$ffc_notice_root/$notice" "$artifact_root/THIRD-PARTY/ffc/$notice"
+  done
+  validate_ffc_notices "$artifact_root"
+}
 
 native_server_entries=(
   fram.native-server/server-generated-abi
@@ -853,6 +881,7 @@ if [[ ! -e "$program_dir" ]]; then
   check_qbe_frontier "$program_stage/qbe-frontier.txt"
   [[ "$(<"$program_stage/module.native-program.sha256")" == "$native_program_digest" ]] ||
     die "materializer native program digest does not match its bytes"
+  copy_ffc_notices "$program_stage"
   write_program_input_manifest "$program_stage/input.after"
   cmp -s "$program_input_manifest" "$program_stage/input.after" ||
     die "source/compiler/config closure changed during native program build"
@@ -867,6 +896,7 @@ fi
   -f "$program_dir/module.native-program" &&
   -f "$program_dir/module.native-program.sha256" ]] ||
   die "native program cache entry is incomplete: $program_dir"
+validate_ffc_notices "$program_dir"
 cmp -s "$program_input_manifest" "$program_dir/input.manifest" ||
   die "native program cache identity does not match its input closure"
 native_program_digest="$(sha256sum "$program_dir/module.native-program" | sed 's/ .*//')"
@@ -900,6 +930,7 @@ if [[ -e "$artifact_dir" ]]; then
     die "cache entry exists but is not READY: $artifact_dir"
   cmp -s "$input_manifest" "$artifact_dir/input.manifest" ||
     die "cache entry identity does not match its input closure: $artifact_dir"
+  validate_ffc_notices "$artifact_dir"
   if [[ "$host" == "wasm-embed" ]]; then
     [[ -f "$artifact_dir/include/fram.h" &&
       -f "$artifact_dir/lib/libfram.wasm" ]] ||
@@ -920,6 +951,7 @@ fi
 stage="$(mktemp -d "$cache_root/.tmp/$closure_hash.XXXXXX")"
 mkdir -p "$stage/bin" "$stage/include" "$stage/lib"
 cp "$input_manifest" "$stage/input.manifest"
+copy_ffc_notices "$stage"
 for artifact in source.facts module.native-program module.native-program.sha256 \
     module_0.h module_0.c native_shim.h native_shim.c \
     native_unicode15_data.h UNICODE-LICENSE.txt report.txt \

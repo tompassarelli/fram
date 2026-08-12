@@ -283,11 +283,29 @@ seed_beagle_tree() {
     done
   done
   mkdir -p "$root/beagle-lib/compiled" "$root/bin/test"
+  mkdir -p "$root/native-core/shim/third_party/ffc"
   printf '%s\n' 'fixture bytecode' >"$root/beagle-lib/compiled/module_01.zo"
   printf '%s\n' 'fixture bin fixture' >"$root/bin/test/fixture.txt"
   printf '%s\n' 'fixture corpus' >"$root/native-core/src/shapes_corpus.bclj"
+  printf '%s\n' 'fixture ffc MIT license' \
+    >"$root/native-core/shim/third_party/ffc/LICENSE-MIT"
+  printf '%s\n' 'fixture ffc provenance' \
+    >"$root/native-core/shim/third_party/ffc/PROVENANCE"
 }
 seed_beagle_tree "$scratch/tool"
+
+ffc_notice_root="$scratch/tool/native-core/shim/third_party/ffc"
+assert_ffc_notices() {
+  local artifact_root="$1" notice
+  for notice in LICENSE-MIT PROVENANCE; do
+    [[ -f "$artifact_root/THIRD-PARTY/ffc/$notice" &&
+      ! -L "$artifact_root/THIRD-PARTY/ffc/$notice" ]] ||
+      fail "artifact omitted its regular ffc $notice"
+    cmp -s "$ffc_notice_root/$notice" \
+      "$artifact_root/THIRD-PARTY/ffc/$notice" ||
+      fail "artifact changed its ffc $notice"
+  done
+}
 
 printf '%s\n' '#lang beagle' '(ns demo.main)' '(defn start [] -> Nil nil)' \
   >"$scratch/sources/good.bgl"
@@ -477,6 +495,10 @@ host_artifact="$("${build_env[@]}" "$builder" --host server \
   fail "server host build failed"
 [[ -f "$host_artifact/READY" && -x "$host_artifact/bin/fram-server-native" ]] ||
   fail "server host artifact is not ready and executable"
+assert_ffc_notices "$host_artifact"
+host_program="$scratch/cache/.programs/$(sed -n 's/^program=//p' \
+  "$host_artifact/input.manifest")"
+assert_ffc_notices "$host_program"
 grep -Fqx 'native-host-abi PASS host=server exports=8' \
   "$host_artifact/native-host.report.txt" ||
   fail "server host artifact omitted its eight-export receipt"
@@ -532,6 +554,31 @@ fi
 grep -Fq 'fram-server-native: invalid port: not-a-port' \
   "$scratch/host.err" || fail "linked server host main did not run"
 
+rm "$host_program/THIRD-PARTY/ffc/PROVENANCE"
+if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
+    "$scratch/sources/good.bgl" \
+    >"$scratch/program-notice.out" 2>"$scratch/program-notice.err"; then
+  fail "native program cache hit accepted a missing ffc notice"
+fi
+grep -Fq 'native artifact omitted its ffc notice:' \
+  "$scratch/program-notice.err" ||
+  fail "missing native program ffc notice failed for the wrong reason"
+cp "$ffc_notice_root/PROVENANCE" \
+  "$host_program/THIRD-PARTY/ffc/PROVENANCE"
+
+printf '%s\n' 'tampered license' \
+  >"$host_artifact/THIRD-PARTY/ffc/LICENSE-MIT"
+if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
+    "$scratch/sources/good.bgl" \
+    >"$scratch/host-notice.out" 2>"$scratch/host-notice.err"; then
+  fail "native host cache hit accepted a changed ffc notice"
+fi
+grep -Fq 'native artifact ffc notice differs from the Beagle source:' \
+  "$scratch/host-notice.err" ||
+  fail "changed native host ffc notice failed for the wrong reason"
+cp "$ffc_notice_root/LICENSE-MIT" \
+  "$host_artifact/THIRD-PARTY/ffc/LICENSE-MIT"
+
 host_hit="$("${build_env[@]}" "$builder" --host server \
   --adapter "$adapter" "$scratch/sources/good.bgl")" ||
   fail "server host cache hit failed"
@@ -547,6 +594,7 @@ embed_artifact="$("${build_env[@]}" "$builder" --host embed \
   -f "$embed_artifact/lib/libfram.a" &&
   -f "$embed_artifact/lib/libfram.so" ]] ||
   fail "embed host artifact omitted its public libraries"
+assert_ffc_notices "$embed_artifact"
 grep -Fqx 'native-host-abi PASS host=embed exports=7 version=1' \
   "$embed_artifact/native-host.report.txt" ||
   fail "embed host artifact omitted its public ABI receipt"
