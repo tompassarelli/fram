@@ -266,6 +266,29 @@ exit 97
 FAKE_BEAGLE
 chmod +x "$scratch/tool/bin/beagle"
 
+# The builder identifies Beagle by hashing every file its compiler reads out of
+# the tree -- bin/, share/, beagle-lib/, native-core/{bin,shim,src} -- and
+# refuses a sweep too small to be one. The fake compiler above IS the whole
+# materializer here, so its tree is fabricated to match: deterministic
+# stand-ins under each swept root, plus one file under each path the sweep
+# prunes, so the content-keying assertions at the end have both cases to check.
+seed_beagle_tree() {
+  local root="$1" directory index
+  for directory in bin share beagle-lib native-core/bin native-core/shim \
+    native-core/src; do
+    mkdir -p "$root/$directory"
+    for index in $(seq -w 1 20); do
+      printf 'fixture %s/%s\n' "$directory" "$index" \
+        >"$root/$directory/module_$index.txt"
+    done
+  done
+  mkdir -p "$root/beagle-lib/compiled" "$root/bin/test"
+  printf '%s\n' 'fixture bytecode' >"$root/beagle-lib/compiled/module_01.zo"
+  printf '%s\n' 'fixture bin fixture' >"$root/bin/test/fixture.txt"
+  printf '%s\n' 'fixture corpus' >"$root/native-core/src/shapes_corpus.bclj"
+}
+seed_beagle_tree "$scratch/tool"
+
 printf '%s\n' '#lang beagle' '(ns demo.main)' '(defn start [] -> Nil nil)' \
   >"$scratch/sources/good.bgl"
 ledger="$scratch/qbe-frontier.ledger"
@@ -377,6 +400,18 @@ int fram_server_store_shutdown(fram_server_store *store,
                                    char *error,
                                    size_t capacity) {
   (void)store;
+  clear_error(error, capacity);
+  return FRAM_SERVER_OK;
+}
+
+int fram_server_store_compact_idle(fram_server_store *store,
+                                       int *compacted_out,
+                                       char *error,
+                                       size_t capacity) {
+  (void)store;
+  if (compacted_out != NULL) {
+    *compacted_out = 0;
+  }
   clear_error(error, capacity);
   return FRAM_SERVER_OK;
 }
@@ -694,5 +729,53 @@ program_dir="$("${qbe_env[@]}" "$builder" --host program --entry demo.main/start
   fail "recorded QBE refusal blocked --host program"
 [[ -f "$program_dir/module_0.c" && -f "$program_dir/READY" ]] ||
   fail "--host program did not persist the C17 projection"
+
+# The Beagle identity is content, not a commit: a file the compiler sweep reads
+# moves the native program cache entry, and a path the sweep prunes does not.
+# Its own cache namespace and a clean ledger keep these builds out of the counts
+# every assertion above makes.
+printf '%s\n' '# scratch QBE frontier ledger' >"$ledger"
+keying_env=(
+  env
+  FRAM_BEAGLE="$scratch/tool/bin/beagle"
+  FRAM_NATIVE_CACHE="$scratch/cache-keying"
+  FRAM_NATIVE_CC="${CC:-cc}"
+  FRAM_QBE_FRONTIER_LEDGER="$ledger"
+  FAKE_NATIVE_CALLS="$calls"
+)
+keyed_artifact="$("${keying_env[@]}" "$builder" --host server \
+  --adapter "$adapter" "$scratch/sources/good.bgl")" ||
+  fail "content-keyed server host build failed"
+
+printf '%s\n' 'pruned bytecode changed' \
+  >"$scratch/tool/beagle-lib/compiled/module_01.zo"
+printf '%s\n' 'pruned bin fixture changed' >"$scratch/tool/bin/test/fixture.txt"
+printf '%s\n' 'pruned corpus changed' \
+  >"$scratch/tool/native-core/src/shapes_corpus.bclj"
+calls_before_pruned="$(wc -l <"$calls")"
+pruned_hit="$("${keying_env[@]}" "$builder" --host server \
+  --adapter "$adapter" "$scratch/sources/good.bgl")" ||
+  fail "a pruned compiler-tree change failed the build"
+[[ "$pruned_hit" == "$keyed_artifact" ]] ||
+  fail "a pruned compiler-tree path keyed the native program cache"
+[[ "$(wc -l <"$calls")" == "$calls_before_pruned" ]] ||
+  fail "a pruned compiler-tree path forced a materialization"
+
+printf '%s\n' 'compiler source changed' \
+  >"$scratch/tool/beagle-lib/module_01.txt"
+calls_before_swept="$(wc -l <"$calls")"
+swept_artifact="$("${keying_env[@]}" "$builder" --host server \
+  --adapter "$adapter" "$scratch/sources/good.bgl")" ||
+  fail "a swept compiler-tree change failed the build"
+[[ "$swept_artifact" != "$keyed_artifact" ]] ||
+  fail "a swept compiler input did not key the native program cache"
+[[ "$(wc -l <"$calls")" -gt "$calls_before_swept" ]] ||
+  fail "a swept compiler input did not force a materialization"
+swept_program="$scratch/cache-keying/.programs/$(sed -n 's/^program=//p' \
+  "$swept_artifact/input.manifest")"
+grep -Fqx "$(sha256sum "$scratch/tool/beagle-lib/module_01.txt" |
+  sed 's|  .*|  beagle-lib/module_01.txt|')" \
+  "$swept_program/compiler-inputs.txt" ||
+  fail "the entry did not record the compiler input listing behind its digest"
 
 echo "fram native build cache smoke: PASS"
