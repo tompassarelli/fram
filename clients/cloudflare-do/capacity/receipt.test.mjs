@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   COMPRESSED_LIMIT_BYTES,
   ISOLATE_MEMORY_LIMIT_BYTES,
@@ -51,6 +52,20 @@ function fixture(overrides = {}) {
 }
 
 describe("Cloudflare capacity receipt", () => {
+  test("pins the full representative wiki-shaped profile", () => {
+    const corpus = JSON.parse(
+      readFileSync(new URL("./corpus.json", import.meta.url), "utf8"),
+    );
+    const expected =
+      corpus.articles *
+      (3 + corpus.revisionsPerArticle * (4 + corpus.linksPerRevision));
+    expect(corpus.profile).toBe("wiki-shaped-256x3-2k-v1");
+    expect(corpus.decision).toBe("launch-blocking capacity floor");
+    expect(corpus.articles).toBe(256);
+    expect(corpus.expectedFacts).toBe(6912);
+    expect(corpus.expectedFacts).toBe(expected);
+  });
+
   test("parses Wrangler's displayed upload units", () => {
     expect(
       parseWranglerUpload("Total Upload: 1.50 MiB / gzip: 200.25 KiB"),
@@ -70,6 +85,12 @@ describe("Cloudflare capacity receipt", () => {
       COMPRESSED_LIMIT_BYTES.free,
     );
     expect(receipt.memory.productionIsolatePeakMeasured).toBe(false);
+    expect(receipt.memory.enforcedProcesses).toBe(
+      "workerd and every descendant",
+    );
+    expect(receipt.memory.controllerProcesses).toBe(
+      "Bun and Miniflare excluded",
+    );
     expect(receipt.exclusions.backupPeakMeasured).toBe(false);
     expect(receipt.exclusions.releaseProof).toBe(false);
   });
@@ -80,6 +101,16 @@ describe("Cloudflare capacity receipt", () => {
     const receipt = makeReceipt(input);
     expect(receipt.pass).toBe(false);
     expect(receipt.checks.workerdProcessTreePeakWithin128MiB).toBe(false);
+  });
+
+  test("does not call missing guest telemetry within budget", () => {
+    const input = fixture();
+    input.functional.pass = false;
+    input.functional.guestLinearMemoryHighWaterBytes = null;
+    const receipt = makeReceipt(input);
+    expect(receipt.pass).toBe(false);
+    expect(receipt.checks.guestLinearMemoryMeasured).toBe(false);
+    expect(receipt.checks.guestLinearMemoryWithin128MiB).toBe(false);
   });
 
   test("fails when the selected plan's compressed upload is too large", () => {

@@ -18,11 +18,11 @@ group="$base/fram-cloudflare-workerd-$$"
   exit 2
 }
 mkdir "$group"
+printf '%s\n' "$group" >"$locator"
 printf '%s\n' "$limit_bytes" >"$group/memory.max"
 printf '0\n' >"$group/memory.swap.max"
 if [[ -f "$group/memory.zswap.max" ]]; then
   printf '0\n' >"$group/memory.zswap.max"
 fi
 printf '%s\n' "$$" >"$group/cgroup.procs"
-printf '%s\n' "$group" >"$locator"
 exec "$real_workerd" "$@"

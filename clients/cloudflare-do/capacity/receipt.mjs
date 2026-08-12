@@ -123,6 +123,9 @@ export function makeReceipt({
   const memoryMaxBytes = integerProperty(cgroup, "MemoryMax");
   const memorySwapMaxBytes = integerProperty(cgroup, "MemorySwapMax");
   const exitStatus = integerProperty(cgroup, "ExecMainStatus");
+  const guestLinearMemoryMeasured =
+    Number.isSafeInteger(functional.guestLinearMemoryHighWaterBytes) &&
+    functional.guestLinearMemoryHighWaterBytes > 0;
   const checks = {
     cgroupLimitIs128MiB: memoryMaxBytes === ISOLATE_MEMORY_LIMIT_BYTES,
     workerdProcessSucceeded: cgroup.Result === "success" && exitStatus === 0,
@@ -130,7 +133,9 @@ export function makeReceipt({
     emittedRawWithinWranglerLimit:
       bundle.emittedBytes <= RAW_BUNDLE_LIMIT_BYTES,
     functionalCorpusPassed: functional.pass === true,
+    guestLinearMemoryMeasured,
     guestLinearMemoryWithin128MiB:
+      guestLinearMemoryMeasured &&
       functional.guestLinearMemoryHighWaterBytes <= ISOLATE_MEMORY_LIMIT_BYTES,
     workerdProcessTreePeakWithin128MiB:
       memoryPeakBytes <= ISOLATE_MEMORY_LIMIT_BYTES,
@@ -184,6 +189,10 @@ export function makeReceipt({
     memory: {
       cloudflareDocumentedIsolateLimitBytes: ISOLATE_MEMORY_LIMIT_BYTES,
       enforcement: "linux-cgroup-v2-workerd-process-tree",
+      enforcedProcesses: "workerd and every descendant",
+      controllerProcesses: "Bun and Miniflare excluded",
+      relationshipToProduction:
+        "conservative whole-workerd-runtime proxy for one workload, not isolate accounting",
       workerdProcessTreeLimitBytes: memoryMaxBytes,
       workerdProcessTreePeakBytes: memoryPeakBytes,
       workerdProcessTreeSwapMaxBytes: memorySwapMaxBytes,

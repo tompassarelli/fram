@@ -244,8 +244,11 @@ isolate accounting. The receipt is capacity evidence only: it does not prove a
 release, Access policy, production identity, an admin path, or backup/restore
 peak memory.
 
-The tracked corpus shape is exact, not a forecast of Greywrought traffic. Its
-purpose is to keep this gate reproducible: 32 articles, three revisions per
-article, 2,048-byte deterministic bodies, four links per revision, and 864
-facts total. Change `capacity/corpus.json` deliberately when the accepted gate
-profile changes.
+The tracked corpus is a launch-blocking capacity floor with a fixed
+representative wiki shape, not a forecast of Greywrought traffic: 256 articles,
+three revisions per article, 2,048-byte deterministic bodies, four links per
+revision, and 6,912 facts total. Each article contributes three article facts
+plus `3 × (4 revision facts + 4 link facts)`, or 27 facts. The full profile is
+deliberate: if it exceeds 128 MiB, the gate fails instead of silently shrinking
+the workload. Change `capacity/corpus.json` only with the profile contract test
+and an explicit capacity decision.

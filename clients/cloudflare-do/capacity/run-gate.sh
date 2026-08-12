@@ -12,8 +12,23 @@ repo="$(cd "$client/../.." && pwd)"
 plan="${FRAM_CF_CAPACITY_PLAN:-free}"
 output="${1:-$here/out}"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/fram-cloudflare-capacity.XXXXXXXX")"
+workerd_cgroup=""
 
 cleanup() {
+  if [[ -n "$workerd_cgroup" && -d "$workerd_cgroup" ]]; then
+    if [[ -f "$workerd_cgroup/cgroup.kill" ]]; then
+      printf '1\n' >"$workerd_cgroup/cgroup.kill" 2>/dev/null || true
+    else
+      while read -r process; do
+        [[ -n "$process" ]] && kill -TERM "$process" 2>/dev/null || true
+      done <"$workerd_cgroup/cgroup.procs"
+    fi
+    for _ in $(seq 1 50); do
+      [[ ! -s "$workerd_cgroup/cgroup.procs" ]] && break
+      sleep 0.1
+    done
+    rmdir "$workerd_cgroup" 2>/dev/null || true
+  fi
   rm -rf "${scratch:?}"
 }
 trap cleanup EXIT
@@ -84,11 +99,12 @@ functional_status=$?
 set -e
 [[ -s "$scratch/cgroup.locator" ]] ||
   die "the workerd cgroup wrapper emitted no cgroup locator"
-workerd_cgroup="$(<"$scratch/cgroup.locator")"
-case "$workerd_cgroup" in
+candidate_cgroup="$(<"$scratch/cgroup.locator")"
+case "$candidate_cgroup" in
   "$cgroup_parent"/fram-cloudflare-workerd-[0-9]*) ;;
   *) die "the workerd cgroup locator escaped its delegated parent" ;;
 esac
+workerd_cgroup="$candidate_cgroup"
 [[ -d "$workerd_cgroup" ]] || die "the workerd cgroup disappeared before measurement"
 peak="$(<"$workerd_cgroup/memory.peak")"
 oom_kills="$(awk '$1 == "oom_kill" { print $2 }' "$workerd_cgroup/memory.events")"
@@ -109,6 +125,7 @@ if [[ "$(<"$workerd_cgroup/cgroup.procs")" != "" ]]; then
   die "workerd left a process in its capacity cgroup"
 fi
 rmdir "$workerd_cgroup"
+workerd_cgroup=""
 
 if [[ ! -s "$scratch/functional.json" ]]; then
   "$bun_binary" "$here/write-functional-failure.mjs" \
