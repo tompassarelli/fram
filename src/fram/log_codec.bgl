@@ -518,14 +518,12 @@
                   (->BootStream
                    (bootstream-configured-space-id stream)
                    (term-store/open-fold!
-                    (term-store/new-term-store space-id))
+                    (term-store/new-term-store-for-log space-id (count bytes)))
                    header-bytes [] nil)
                   bytes header-bytes)]))]))])))
 
 (defn canonical-store-copy! [root: (Atom t/TermStore)] -> (Atom t/TermStore)
-  (let [dump (term-store/dump-term-store root)
-        copy (term-store/new-term-store (t/termstoredump-space-id dump))]
-    (term-store/load-term-store! copy dump)))
+  (term-store/validated-store! root))
 
 (defn successful-boot!
   [root: (Atom t/TermStore)
@@ -636,7 +634,7 @@
                    (replay-complete-frames!
                     decoder
                     (term-store/open-fold!
-                     (term-store/new-term-store space-id))
+                     (term-store/new-term-store-for-log space-id (count bytes)))
                     (deref (wire/decoder-position decoder)))]))]))))]))
 
 (defn- failed-header [message: String] -> HeaderFields
@@ -790,10 +788,19 @@
        (failed-boot
         "FRAMLOG base chain member must not carry the continuation flag")]
       [:else
-       (let [root (term-store/open-fold!
-                   (term-store/new-term-store
-                    (headerfields-space-id first-header)))
-             total (+ (count segments) 1)]
+       (let [total: Int (+ (count segments) 1)
+             chain-bytes: Int
+             (loop [index: Int 0 counted: Int 0]
+               (if (>= index total)
+                 counted
+                 (recur (inc index)
+                        (+ counted
+                           (count (chainpiece-bytes
+                                   (chain-piece-at segments tail index)))))))
+             root: (Atom t/TermStore)
+             (term-store/open-fold!
+              (term-store/new-term-store-for-log
+               (headerfields-space-id first-header) chain-bytes))]
          (loop [index: Int 0 tail-valid-bytes: Int 0]
            (if (>= index total)
              (successful-boot! root tail-valid-bytes [])

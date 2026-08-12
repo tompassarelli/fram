@@ -1105,7 +1105,9 @@
                 metadata (metadata-operations db tx-coordinate operations request)
                 all-operations (into source-operations metadata)
                 before (term-store/operation-count context)
-                before-store @context]
+                ;; A store is an identity: the rollback point has to be a fork
+                ;; taken before append-and-replay! mutates the live one.
+                before-store (term-store/fork-state @context)]
             (try
               (let [committed (append-and-replay! db sequence all-operations)
                     events (occurrence-events-range
@@ -1135,7 +1137,7 @@
     (let [context (database-store db)
           before-store @context
           scratch (assoc db
-                         :term-store (atom before-store)
+                         :term-store (term-store/fork-store context)
                          :mutation-state (atom @(:mutation-state db)))
           frames (atom [])
           results

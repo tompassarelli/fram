@@ -227,11 +227,14 @@
   (boolean (and (writer-lock-held?)
                 (database/mutation-ready? @database))))
 
+;; A published snapshot has to stay frozen while later commits land, and a
+;; TermStore is an identity the writer keeps mutating, so the read view is a
+;; fork of the current state rather than the live store itself.
 (defn- snapshot-of [db]
-  (let [root @(database/database-store db)]
+  (let [root (term-store/fork-state @(database/database-store db))]
     {:generation @server-generation
      :space (database/database-space db)
-     :version (dec (t/termstore-next-sequence root))
+     :version (dec (deref (t/termstore-next-sequence root)))
      :root root}))
 
 (defn- publish-snapshot! [db]
@@ -733,7 +736,7 @@
              context (term-store/new-term-store (database/database-space db))]
          (fri/restore-store! image context)
          (let [root @context]
-           (when (= sequence (dec (t/termstore-next-sequence root))) root)))
+           (when (= sequence (dec (deref (t/termstore-next-sequence root)))) root)))
        (catch Throwable _ nil)))
    (query-checkpoint-files db upper-inclusive)))
 
@@ -926,7 +929,7 @@
                       (atom base)
                       (term-store/new-term-store
                        (database/database-space history-db)))
-            lower-exclusive (dec (t/termstore-next-sequence @context))]
+            lower-exclusive (dec (deref (t/termstore-next-sequence @context)))]
         (doseq [frame (term-store/transaction-frames-between
                        head-root lower-exclusive version)]
           (term-store/replay-transaction! context frame))
@@ -998,6 +1001,9 @@
 (defn- cached-query-page-root [version]
   (get-in @query-page-snapshots [:by-version version]))
 
+;; A TermStore is an identity whose cells the writer keeps mutating, so the
+;; live head root is never cacheable: only an independently replayed
+;; historical root is frozen enough to survive in this map.
 (defn- retain-query-page-root! [version root]
   (locking query-page-snapshots
     (let [{:keys [order by-version]} @query-page-snapshots
@@ -1011,6 +1017,13 @@
                                    (assoc by-version version root)
                                    evicted)})
       root)))
+
+(defn- query-page-root! [db version]
+  (or (cached-query-page-root version)
+      (let [root (replayed-store-root! db version)]
+        (if (= version (current-version db))
+          root
+          (retain-query-page-root! version root)))))
 
 (defn- native-term-slot [value width]
   (mod (hash value) width))
@@ -1041,16 +1054,16 @@
       (when (every? some? [t1 t2 t3])
         (when-let [position
                    (native-index-position
-                    (t/termstore-triples root)
-                    (t/termstore-triple-slots root)
+                    (deref (t/termstore-triples root))
+                    (deref (t/termstore-triple-slots root))
                     (t/->TripleRow t1 t2 t3))]
           (inc (* 2 position)))))
     (let [row (native-atom-row value)]
       (when row
         (when-let [position
                    (native-index-position
-                    (t/termstore-atoms root)
-                    (t/termstore-atom-slots root) row)]
+                    (deref (t/termstore-atoms root))
+                    (deref (t/termstore-atom-slots root)) row)]
           (* 2 position))))))
 
 (defn- native-atom-value [row]
@@ -1065,16 +1078,16 @@
 (defn- native-resolve-handle [root handle]
   (let [position (quot handle 2)]
     (if (zero? (mod handle 2))
-      (native-atom-value (nth (t/termstore-atoms root) position))
-      (let [row (nth (t/termstore-triples root) position)]
+      (native-atom-value (nth (deref (t/termstore-atoms root)) position))
+      (let [row (nth (deref (t/termstore-triples root)) position)]
         (t/triple
          (native-resolve-handle root (t/triplerow-t1 row))
          (native-resolve-handle root (t/triplerow-t2 row))
          (native-resolve-handle root (t/triplerow-t3 row)))))))
 
 (defn- native-active-handle? [root handle]
-  (let [slots (t/termstore-active-slots root)
-        buckets (t/termstore-active-buckets root)
+  (let [slots (deref (t/termstore-active-slots root))
+        buckets (deref (t/termstore-active-buckets root))
         positions @(nth slots (native-term-slot handle (count slots)))]
     (boolean
      (some (fn [position]
@@ -1111,8 +1124,8 @@
       (not-any? #{native-unbound} expected)
       (let [row (apply t/->TripleRow expected)
             position (native-index-position
-                      (t/termstore-triples root)
-                      (t/termstore-triple-slots root) row)
+                      (deref (t/termstore-triples root))
+                      (deref (t/termstore-triple-slots root)) row)
             handle (when (some? position) (inc (* 2 position)))]
         (if (and handle (native-active-handle? root handle)) [handle] []))
       :else
@@ -1123,11 +1136,11 @@
                    (if (and (seq (t/activebucket-positions bucket))
                             (native-row-matches-handles?
                              expected
-                             (nth (t/termstore-triples root) (quot handle 2))))
+                             (nth (deref (t/termstore-triples root)) (quot handle 2))))
                      (conj! handles handle)
                      handles)))
                (transient [])
-               (t/termstore-active-buckets root))))))
+               (deref (t/termstore-active-buckets root)))))))
 
 (defn- match-query-row [arguments row]
   (loop [position 0 bindings {}]
@@ -1567,9 +1580,7 @@
         cache-snapshot (assoc (select-keys snapshot [:generation :space])
                               :version version)
         build #(let [db (database/store-view @database (:root snapshot))
-                     root (or (cached-query-page-root version)
-                              (retain-query-page-root!
-                               version (replayed-store-root! db version)))
+                     root (query-page-root! db version)
                      view (database/store-view db root)]
                  (collect-rows (database/live-propositions view)
                                (fn [row] (scan-match? options row))
@@ -1591,9 +1602,7 @@
         cache-snapshot (assoc (select-keys snapshot [:generation :space])
                               :version version)
         build #(let [db (database/store-view @database (:root snapshot))
-                     root (or (cached-query-page-root version)
-                              (retain-query-page-root!
-                               version (replayed-store-root! db version)))
+                     root (query-page-root! db version)
                      view (database/store-view db root)]
                  (collect-rows (database/history view)
                                kernel/operation-occurrence?
@@ -1634,18 +1643,14 @@
         control (datalog/query-control 10000000 timeout)
         build
         (if direct?
-          #(let [root (or (cached-query-page-root version)
-                          (retain-query-page-root!
-                           version (replayed-store-root! db version)))]
+          #(let [root (query-page-root! db version)]
              (one-triple-query-rows root direct-pattern cancellation))
           #(do
              (reset! (:query-control cancellation) control)
              (when @(:cancelled cancellation)
                (datalog/cancel-query! control :request-cancelled))
              (try
-               (let [root (or (cached-query-page-root version)
-                              (retain-query-page-root!
-                               version (replayed-store-root! db version)))
+               (let [root (query-page-root! db version)
                      text? (plan-uses-text? plan)
                      occurrence? (plan-uses-occurrence? plan)
                      only-text? (and text? (plan-uses-only-text-base? plan))

@@ -14,7 +14,7 @@
   (reduce max 0 (map (fn [cid] (seq-of ctx cid)) (live-cids-lp ctx te pid))))
 
 (defn current-seq [ctx]
-  (dec (t/termstore-next-sequence (deref ctx))))
+  (c/current-sequence ctx))
 
 (defn agent-of [ctx cid]
   (let [txid (c/fact-tx ctx cid)]

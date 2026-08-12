@@ -54,25 +54,25 @@
 
 (def corrupt-operation-store
   (assoc (deref ctx) :operations
-         (assoc (t/termstore-operations (deref ctx)) 0
-                (assoc (first (t/termstore-operations (deref ctx)))
-                       :triple-handle 0))))
+         (atom (assoc (deref (t/termstore-operations (deref ctx))) 0
+                      (assoc (first (deref (t/termstore-operations (deref ctx))))
+                             :triple-handle 0)))))
 (def corrupt-operation-frames
   (store/transaction-frames-between-result corrupt-operation-store -1 5))
 
 (def corrupt-triple-store
   (assoc (deref ctx) :triples
-         (assoc (t/termstore-triples (deref ctx)) 0
-                (assoc (first (t/termstore-triples (deref ctx)))
-                       :t1 999999))))
+         (atom (assoc (deref (t/termstore-triples (deref ctx))) 0
+                      (assoc (first (deref (t/termstore-triples (deref ctx))))
+                             :t1 999999)))))
 (def corrupt-triple-frames
   (store/transaction-frames-between-result corrupt-triple-store -1 5))
 
 (def corrupt-history-store
   (assoc (deref ctx) :operations
-         (assoc (t/termstore-operations (deref ctx)) 0
-                (assoc (first (t/termstore-operations (deref ctx)))
-                       :action :invalid))))
+         (atom (assoc (deref (t/termstore-operations (deref ctx))) 0
+                      (assoc (first (deref (t/termstore-operations (deref ctx))))
+                             :action :invalid)))))
 (def corrupt-history-frames
   (store/transaction-frames-between-result corrupt-history-store -1 5))
 
