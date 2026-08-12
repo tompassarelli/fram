@@ -44,13 +44,25 @@ if [[ "$command" == "build" ]]; then
   [[ -n "$out" && -n "$abi" && ${#sources[@]} -gt 0 ]] || exit 96
   printf '%s\n' "build-$(IFS=+; printf '%s' "${materializers[*]}")" \
     >>"$FAKE_NATIVE_CALLS"
+  if [[ -n "${FAKE_SOURCE_OBSERVATIONS:-}" ]]; then
+    for source in "${sources[@]}"; do
+      printf '%s\t%s\t%s\n' "$PWD" "$source" \
+        "$(sha256sum "$source" | sed 's/ .*//')" \
+        >>"$FAKE_SOURCE_OBSERVATIONS"
+    done
+  fi
   mkdir -p "$out"
   # Mimic beagle-build-core: managed artifacts are wiped before the run.
   rm -f "$out/module_0.h" "$out/module_0.c" "$out/module_0.ssa" \
     "$out/native_shim.h" "$out/native_shim.c" "$out/report.txt" \
     "$out/native_unicode15_data.h" "$out/UNICODE-LICENSE.txt"
   printf '%s\n' 'fake source facts' >"$out/source.facts"
-  printf '%s\n' 'fake frozen native program' >"$out/module.native-program"
+  {
+    printf '%s\n' 'fake frozen native program'
+    for source in "${sources[@]}"; do
+      sha256sum "$source" | sed 's/ .*//'
+    done
+  } >"$out/module.native-program"
   sha256sum "$out/module.native-program" | sed 's/ .*//' \
     >"$out/module.native-program.sha256"
   cat >"$out/module_0.h" <<'C'
@@ -253,6 +265,11 @@ C
       printf '%s\n' 'result PASS'
     fi
   } >"$out/report.txt"
+  if [[ "$want_qbe" == 1 && -n "${FAKE_MUTATE_SOURCE:-}" ]]; then
+    printf '%s\n' '#lang beagle' '(ns demo.main)' \
+      '(defn start [] -> Nil nil)' ';; changed during materialization' \
+      >"$FAKE_MUTATE_SOURCE"
+  fi
   # A refused sibling makes beagle exit before persisting C17's artifacts.
   if [[ "$want_qbe" == 1 && -n "${FAKE_QBE_REFUSAL:-}" ]]; then
     rm -f "$out/module_0.h" "$out/module_0.c" "$out/native_shim.h" \
@@ -358,6 +375,46 @@ build_env=(
   FRAM_QBE_FRONTIER_LEDGER="$ledger"
   FAKE_NATIVE_CALLS="$calls"
 )
+
+# A QBE refusal invokes a second C17 materialization. Both passes must consume
+# the launch snapshot even when the original worktree source changes between
+# them, and the private staging path must not become the source's logical name.
+snapshot_source="$scratch/sources/snapshot-drift.bgl"
+printf '%s\n' '#lang beagle' '(ns demo.main)' \
+  '(defn start [] -> Nil nil)' ';; launch bytes' >"$snapshot_source"
+snapshot_launch_digest="$(sha256sum "$snapshot_source" | sed 's/ .*//')"
+snapshot_observations="$scratch/snapshot-source.observations"
+: >"$snapshot_observations"
+snapshot_ledger="$scratch/snapshot-qbe-frontier.ledger"
+printf '%s\n' '# snapshot QBE frontier ledger' \
+  "$(printf 'demo.main/start\tunsupported-value-semantics\thash')" \
+  >"$snapshot_ledger"
+snapshot_artifact="$(env \
+  FRAM_BEAGLE="$scratch/tool/bin/beagle" \
+  FRAM_NATIVE_CACHE="$scratch/cache-snapshot" \
+  FRAM_NATIVE_CC="${CC:-cc}" \
+  FRAM_QBE_FRONTIER_LEDGER="$snapshot_ledger" \
+  FAKE_NATIVE_CALLS="$calls" \
+  FAKE_QBE_REFUSAL='unsupported native value-semantics op: hash' \
+  FAKE_MUTATE_SOURCE="$snapshot_source" \
+  FAKE_SOURCE_OBSERVATIONS="$snapshot_observations" \
+  "$builder" --host program --entry demo.main/start "$snapshot_source")" ||
+  fail "source snapshot did not survive mutation between materializers"
+[[ -f "$snapshot_artifact/READY" ]] ||
+  fail "source snapshot build did not publish a ready native program"
+grep -Fqx ';; changed during materialization' <(tail -n 1 "$snapshot_source") ||
+  fail "source snapshot regression did not mutate the original source"
+[[ "$(wc -l <"$snapshot_observations")" == "2" ]] ||
+  fail "source snapshot build did not run both materializer passes"
+[[ "$(awk -F '\t' -v digest="$snapshot_launch_digest" \
+  '$3 == digest { count += 1 } END { print count + 0 }' \
+  "$snapshot_observations")" == "2" ]] ||
+  fail "a repeated materializer did not consume the launch source bytes"
+! grep -Fq "$snapshot_source" "$snapshot_observations" ||
+  fail "a materializer received the mutable worktree source path"
+[[ "$(awk -F '\t' '$2 == "snapshot-drift.bgl" { count += 1 } \
+  END { print count + 0 }' "$snapshot_observations")" == "2" ]] ||
+  fail "the source snapshot did not preserve its relative logical path"
 
 adapter="$scratch/sources/server_generated.c"
 cat >"$adapter" <<'C'

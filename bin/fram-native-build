@@ -291,9 +291,12 @@ input_manifest=""
 program_input_manifest=""
 stage=""
 program_stage=""
+source_snapshot_root=""
 cleanup() {
   [[ -z "$stage" || ! -d "$stage" ]] || rm -rf "${stage:?}"
   [[ -z "$program_stage" || ! -d "$program_stage" ]] || rm -rf "${program_stage:?}"
+  [[ -z "$source_snapshot_root" || ! -d "$source_snapshot_root" ]] ||
+    rm -rf "${source_snapshot_root:?}"
   [[ -z "$input_manifest" || ! -f "$input_manifest" ]] || rm -f "${input_manifest:?}"
   [[ -z "$program_input_manifest" || ! -f "$program_input_manifest" ]] ||
     rm -f "${program_input_manifest:?}"
@@ -301,6 +304,40 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# A native program build can invoke Beagle more than once: a QBE refusal is
+# followed by a C17-only recovery pass. Capture the declared dependency-first
+# closure once so every pass sees the same bytes even when its worktree moves.
+# Relative argv preserves the closure's layout for Beagle's import resolver and
+# keeps the private staging path out of source identities.
+source_common_root="$(dirname "${normalized_sources[0]}")"
+for source in "${normalized_sources[@]}"; do
+  while [[ "$source_common_root" != "/" &&
+    "$source" != "$source_common_root/"* ]]; do
+    source_common_root="$(dirname "$source_common_root")"
+  done
+done
+source_snapshot_root="$(mktemp -d "$cache_root/.tmp/sources.XXXXXX")"
+source_logical_paths=()
+source_digests=()
+for index in "${!normalized_sources[@]}"; do
+  source="${normalized_sources[$index]}"
+  source_logical_path="$(realpath --relative-to="$source_common_root" "$source")"
+  [[ "$source_logical_path" != /* && "$source_logical_path" != ../* ]] ||
+    die "cannot place source inside its closure snapshot: $source"
+  snapshot_source="$source_snapshot_root/$source_logical_path"
+  mkdir -p "$(dirname "$snapshot_source")"
+  source_digest_before="$(sha256sum "$source" | sed 's/ .*//')"
+  cp -- "$source" "$snapshot_source"
+  snapshot_digest="$(sha256sum "$snapshot_source" | sed 's/ .*//')"
+  source_digest_after="$(sha256sum "$source" | sed 's/ .*//')"
+  [[ "$source_digest_before" == "$snapshot_digest" &&
+    "$snapshot_digest" == "$source_digest_after" ]] ||
+    die "source changed while its launch snapshot was captured: $source"
+  chmod a-w "$snapshot_source"
+  source_logical_paths+=("$source_logical_path")
+  source_digests+=("$snapshot_digest")
+done
 
 validate_ffc_notices() {
   local artifact_root="$1" notice destination
@@ -400,7 +437,7 @@ write_program_input_manifest() {
     done
     for index in "${!normalized_sources[@]}"; do
       source="${normalized_sources[$index]}"
-      printf '%06d %q %s\n' "$index" "$source" "$(sha256sum "$source" | sed 's/ .*//')"
+      printf '%06d %q %s\n' "$index" "$source" "${source_digests[$index]}"
     done
   } >"$destination"
 }
@@ -450,9 +487,7 @@ write_wasm_provenance() {
     printf 'host %s\n' "$host"
     printf 'native-program-sha256 %s\n' "$native_program_digest"
     for index in "${!normalized_sources[@]}"; do
-      source="${normalized_sources[$index]}"
-      printf 'source-sha256 %06d %s\n' "$index" \
-        "$(sha256sum "$source" | sed 's/ .*//')"
+      printf 'source-sha256 %06d %s\n' "$index" "${source_digests[$index]}"
     done
     printf 'host-source-sha256 %s\n' "$(sha256sum "$host_source" | sed 's/ .*//')"
     printf 'host-header-sha256 %s\n' "$(sha256sum "$host_header" | sed 's/ .*//')"
@@ -886,12 +921,14 @@ if [[ ! -e "$program_dir" ]]; then
   # behind it, so a cache miss can be explained by diffing two entries.
   printf '%s\n' "$beagle_compiler_input_list" >"$program_stage/compiler-inputs.txt"
   combined_status=0
-  "$beagle" build --materializer c17 --materializer qbe \
-      --out "$program_stage" --abi "$abi" \
-      "${native_server_entry_args[@]}" \
-      -- \
-      "${normalized_sources[@]}" \
-      >"$program_stage/materialize.log" 2>&1 || combined_status=$?
+  (
+    cd "$source_snapshot_root"
+    "$beagle" build --materializer c17 --materializer qbe \
+        --out "$program_stage" --abi "$abi" \
+        "${native_server_entry_args[@]}" \
+        -- \
+        "${source_logical_paths[@]}"
+  ) >"$program_stage/materialize.log" 2>&1 || combined_status=$?
   # beagle-build-core wipes managed artifacts up front and, on any materializer
   # failure, exits before copying the successful ones out (:118-133, :713-720).
   [[ -f "$program_stage/report.txt" ]] ||
@@ -910,12 +947,14 @@ if [[ ! -e "$program_dir" ]]; then
         sed -n '1,240p' "$program_stage/materialize.log" >&2
         die "Beagle native program materialization failed"
       }
-    "$beagle" build --materializer c17 \
-        --out "$program_stage" --abi "$abi" \
-        "${native_server_entry_args[@]}" \
-        -- \
-        "${normalized_sources[@]}" \
-        >"$program_stage/materialize.log" 2>&1 || {
+    (
+      cd "$source_snapshot_root"
+      "$beagle" build --materializer c17 \
+          --out "$program_stage" --abi "$abi" \
+          "${native_server_entry_args[@]}" \
+          -- \
+          "${source_logical_paths[@]}"
+    ) >"$program_stage/materialize.log" 2>&1 || {
       sed -n '1,240p' "$program_stage/materialize.log" >&2
       die "C17 recovery materialization failed after a QBE refusal"
     }
