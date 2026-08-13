@@ -268,7 +268,7 @@ C
   } >"$out/report.txt"
   if [[ "$want_qbe" == 1 && -n "${FAKE_MUTATE_SOURCE:-}" ]]; then
     printf '%s\n' '#lang beagle' '(ns demo.main)' \
-      '(defn start [] -> Nil nil)' ';; changed during materialization' \
+      '(defn start [] Nil nil)' ';; changed during materialization' \
       >"$FAKE_MUTATE_SOURCE"
   fi
   # A refused sibling makes beagle exit before persisting C17's artifacts.
@@ -365,7 +365,7 @@ assert_ffc_notices() {
   done
 }
 
-printf '%s\n' '#lang beagle' '(ns demo.main)' '(defn start [] -> Nil nil)' \
+printf '%s\n' '#lang beagle' '(ns demo.main)' '(defn start [] Nil nil)' \
   >"$scratch/sources/good.bgl"
 ledger="$scratch/qbe-frontier.ledger"
 printf '%s\n' '# scratch QBE frontier ledger' >"$ledger"
@@ -424,7 +424,7 @@ pinned_hit="$("${build_env[@]}" \
 # them, and the private staging path must not become the source's logical name.
 snapshot_source="$scratch/sources/snapshot-drift.bgl"
 printf '%s\n' '#lang beagle' '(ns demo.main)' \
-  '(defn start [] -> Nil nil)' ';; launch bytes' >"$snapshot_source"
+  '(defn start [] Nil nil)' ';; launch bytes' >"$snapshot_source"
 snapshot_launch_digest="$(sha256sum "$snapshot_source" | sed 's/ .*//')"
 snapshot_observations="$scratch/snapshot-source.observations"
 : >"$snapshot_observations"
@@ -947,7 +947,7 @@ printf '%s\n' '# scratch QBE frontier ledger' >"$ledger"
 # An unrecorded refusal fails: the frontier may not grow.
 qbe_env=("${build_env[@]}"
   FAKE_QBE_REFUSAL='unsupported native value-semantics op: hash')
-printf '%s\n' '#lang beagle' '(ns demo.refused)' '(defn start [] -> Nil nil)' \
+printf '%s\n' '#lang beagle' '(ns demo.refused)' '(defn start [] Nil nil)' \
   >"$scratch/sources/refused.bgl"
 if "${qbe_env[@]}" "$builder" --host server --adapter "$adapter" \
     "$scratch/sources/refused.bgl" \
@@ -1061,7 +1061,7 @@ for portable in "$portable_a" "$portable_b"; do
   cp "$repo/native/server_host.h" "$portable/native/server_host.h"
   cp "$adapter" "$portable/native/server_generated.c"
   printf '%s\n' '#lang beagle' '(ns demo.portable)' \
-    '(defn start [] -> Nil nil)' >"$portable/src/portable.bgl"
+    '(defn start [] Nil nil)' >"$portable/src/portable.bgl"
 done
 portable_env=(
   env
@@ -1106,7 +1106,7 @@ portable_artifact_b="$("${portable_env[@]}" \
   fail "byte-identical checkout B rebuilt the shared native program"
 
 printf '%s\n' '#lang beagle' '(ns demo.portable)' \
-  '(defn start [] -> Nil nil)' ';; genuine source change' \
+  '(defn start [] Nil nil)' ';; genuine source change' \
   >"$portable_b/src/portable.bgl"
 portable_changed="$("${portable_env[@]}" \
   "$portable_b/bin/fram-native-build" --host server \

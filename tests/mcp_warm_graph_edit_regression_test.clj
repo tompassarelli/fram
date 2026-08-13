@@ -45,8 +45,8 @@
       (str "#lang beagle/clj\n"
            "(ns src.plangrep.model)\n"
            "(define-mode strict)\n"
-           "(defn base [] :- Int 1)\n"
-           "(defn semantic-index-accepted? [schema-version :- String] :- Bool\n"
+           "(defn base [] Int 1)\n"
+           "(defn semantic-index-accepted? [(schema-version String)] Bool\n"
            "  (= schema-version \"firn-index/v1\"))\n"))
 (spit graph-registry "/stale/pre-container/model.bclj\n")
 
@@ -182,7 +182,7 @@
 
   (let [reply (mcp-call mcp-env 10 "add-def"
                         {:module source-file
-                         :form "(defn increment [x :- Int] :- Int (+ x 1))"})
+                         :form "(defn increment [(x Int)] Int (+ x 1))"})
         rendered (slurp source-file)]
     (check! "the same canonical adopted path is accepted by graph authoring"
             (and reply (not (reply-error? reply))))
@@ -197,7 +197,7 @@
 
   (let [reply (mcp-call mcp-env 14 "add-def"
                         {:module "src.plangrep.model"
-                         :form "(defn semantic-index-accepted? [schema-version :- String] :- Bool (= schema-version \"firn-index/v2\"))"})
+                         :form "(defn semantic-index-accepted? [(schema-version String)] Bool (= schema-version \"firn-index/v2\"))"})
         rendered (slurp source-file)]
     (check! "warm same-name add-def succeeds"
             (and reply (not (reply-error? reply))))

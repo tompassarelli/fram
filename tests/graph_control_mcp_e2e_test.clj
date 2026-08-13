@@ -111,10 +111,10 @@
  (str "#lang beagle/clj\n"
       "(ns fixture)\n"
       "(define-mode strict)\n"
-      "(defn alpha [] :- Int 0)\n"
+      "(defn alpha [] Int 0)\n"
       ;; beta calls alpha so the program reads have one real resolved edge;
       ;; a third definition would push fram-code-status past its preflight cap.
-      "(defn beta [] :- Int (alpha))\n")
+      "(defn beta [] Int (alpha))\n")
  (str source-path))
 
 (def ingest
@@ -287,7 +287,7 @@
                  :params {:name "add-def"
                           :arguments
                           {:module "fixture"
-                           :form "(defrecord Point [x :- Int y :- Int])"}}}])
+                           :form "(defrecord Point [(x Int) (y Int)])"}}}])
           replies (parse-replies (:out run))
           alpha (call-value (get replies 23))
           reply (get replies 10)
@@ -312,7 +312,7 @@
                  :params {:name "replace-def"
                           :arguments
                           {:module "fixture"
-                           :form "(defrecord Point [x :- Int y :- Int label :- String])"}}}])
+                           :form "(defrecord Point [(x Int) (y Int) (label String)])"}}}])
           reply (get (parse-replies (:out run)) 11)
           result (call-value reply)
           after-snapshot (code-reader/read-module-snapshot!
@@ -323,7 +323,7 @@
                    (= "committed-projection-published" (:outcome result))))
       (check! "replace-def republishes one updated definition at the original position"
               (and (= 1 (count (re-seq #"\(defrecord Point" (:source rendered))))
-                   (str/includes? (:source rendered) "label :- String")
+                   (str/includes? (:source rendered) "(label String)")
                    (= (:source rendered) (slurp source-path)))))
 
     (let [run (run-control
@@ -332,18 +332,18 @@
                  :params {:name "add-def"
                           :arguments
                           {:module "fixture"
-                           :form "(defn typed-value [value: Int] -> Int value)"}}}])
+                           :form "(defn typed-value [(value Int)] Int value)"}}}])
           reply (get (parse-replies (:out run)) 24)
           result (call-value reply)
           rendered (code-reader/render-module!
                     beagle
                     (code-reader/read-module-snapshot!
                      port space checkout-root "fixture"))]
-      (check! "add-def accepts current name: annotations through the sealed parser"
+      (check! "add-def accepts current structural annotations through the sealed parser"
               (and (not (get-in reply [:result :isError]))
                    (= "committed-projection-published" (:outcome result))
                    (str/includes? (:source rendered)
-                                  "[value: Int] -> Int"))))
+                                  "[(value Int)] Int"))))
 
     (let [version-before (version! port space)
           facts-before (:facts
@@ -357,7 +357,7 @@
                  :params {:name "add-def"
                           :arguments
                           {:module "fixture"
-                           :form "(defrecord Point [x :- Int])"}}}])
+                           :form "(defrecord Point [(x Int)])"}}}])
           reply (get (parse-replies (:out run)) 12)
           result (call-value reply)
           version-after (version! port space)

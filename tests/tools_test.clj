@@ -138,9 +138,9 @@
                                           (has-tool? "replace-in-body")
                                           (has-tool? "edit-transaction")))
 (chk "add-def -> {:edit upsert-form} envelope (NOT {:write})"
-     (let [r (call "add-def" {:module "schema" :form "(defn f [x :- Int] :- Int x)"})]
+     (let [r (call "add-def" {:module "schema" :form "(defn f [(x Int)] Int x)"})]
        (and (nil? (:write r))
-            (= (:edit r) {:op "upsert-form" :module "schema" :form "(defn f [x :- Int] :- Int x)"}))))
+            (= (:edit r) {:op "upsert-form" :module "schema" :form "(defn f [(x Int)] Int x)"}))))
 (chk "set-body -> {:edit set-body} envelope"
      (= (:edit (call "set-body" {:module "schema" :name "cardinality" :body "\"single\""}))
         {:op "set-body" :module "schema" :name "cardinality" :body "\"single\""}))

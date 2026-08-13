@@ -40,7 +40,7 @@
   (when-not ok? (swap! failures inc)))
 
 ;; probe: is the warm check actually alive? (a valid def that should type-check clean)
-(def probe (w "schema" "(defn a1-rc-ok [x :- Int] :- Int (+ x 1))"))
+(def probe (w "schema" "(defn a1-rc-ok [(x Int)] Int (+ x 1))"))
 (cond
   (and (false? (:ok probe)) (str/includes? (str (:message (err-of probe))) "unavailable"))
   (do (println "SKIP — beagle def-check sidecar unavailable in this env:" (:message (err-of probe))) (shutdown!) (System/exit 0))
@@ -50,8 +50,8 @@
   (do
     (println "warm def-check LIVE, port=" port "\n")
     (check "valid def -> :ok, :deep-check :ran" (and (:ok probe) (= :ran (:deep-check probe))) (pr-str probe))
-    ;; a def that MINTS but fails the type check: declares :- String, body is Int
-    (let [bad (w "schema" "(defn a1-rc-bad [x :- Int] :- String (+ x 1))")
+    ;; a def that MINTS but fails the type check: declares String, body is Int
+    (let [bad (w "schema" "(defn a1-rc-bad [(x Int)] String (+ x 1))")
           e (err-of bad)]
       (check "bad-type write fails closed" (false? (:ok bad)) (pr-str (dissoc bad :failed)))
       (check "bad-type :stage :type" (= :type (:stage e)) (pr-str (dissoc e :errors)))

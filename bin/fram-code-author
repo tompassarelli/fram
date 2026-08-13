@@ -16,7 +16,7 @@
 ;;                        [--log <code.log>]
 ;;
 ;;   --script  EDN vector of step maps (inline forms — NO temp files for the author):
-;;       {:op "upsert-form"    :module "greet" :form (def salutation :- String "Howdy") :note "..."}
+;;       {:op "upsert-form"    :module "greet" :form (def salutation String "Howdy") :note "..."}
 ;;       {:op "set-body"       :module "greet" :name "greet" :body (str salutation " " who)}
 ;;       {:op "rename"         :module "greet" :old "base" :new "prefix"}
 ;;       {:op "insert-form"    :module "greet" :after "greet" :form (defn shout ...)}

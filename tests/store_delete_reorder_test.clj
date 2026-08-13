@@ -21,7 +21,7 @@
 ;;   R1  reorder moves the form to its new slot WITHOUT re-minting it (the SAME node id
 ;;       backs the moved form — 0 node churn) and the new order is what the render shows.
 ;;   E   the post-delete+reorder module renders through Beagle's certified CLI;
-;;       the `:- T` annotations and requested order survive in the source view.
+;;       the structural typed bindings and requested order survive in the source view.
 ;;
 ;;   bb -cp out tests/store_delete_reorder_test.clj   (from the repo root)
 ;; SAFE: /tmp work dir, in-process; no daemon, no socket, no canonical log touched.
@@ -59,10 +59,10 @@
 ;; frame per verb; the resolve-edn! test path computes it once at setup).
 (def seed (str work "/demo.bclj"))
 (spit seed (str "#lang beagle/clj\n"
-                "(def base :- String \"hello\")\n"
-                "(def punct :- String \"!\")\n"
-                "(def dead :- String \"x\")\n"
-                "(defn greet [who :- String] :- String (str base \" \" who punct))\n"))
+                "(def base String \"hello\")\n"
+                "(def punct String \"!\")\n"
+                "(def dead String \"x\")\n"
+                "(defn greet [(who String)] String (str base \" \" who punct))\n"))
 (def seed-edn (str work "/demo.edn"))
 (def emit-r (proc/sh {:out :string :err :string}
                      beagle-bin "facts-roundtrip" "--emit-edn" seed))
@@ -126,8 +126,9 @@
             greet-i (.indexOf rendered "(defn greet")]
         (chk "E1: certified facts-roundtrip CLI renders the post-delete+reorder module"
              (zero? (:exit rr)))
-        (chk "E2: the `:- String` annotations survive in the rendered Beagle source"
-             (str/includes? rendered ":- String"))
+        (chk "E2: the structural String annotations survive in the rendered Beagle source"
+             (and (str/includes? rendered "(def punct String")
+                  (str/includes? rendered "[(who String)] String")))
         (chk "E3: the deleted def `dead` is absent from the rendered program"
              (not (str/includes? rendered "(def dead")))
         (chk "E4: rendered source preserves requested punct,base,greet order"

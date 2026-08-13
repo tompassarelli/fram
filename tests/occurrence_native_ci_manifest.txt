@@ -83,7 +83,6 @@ exclude	moved-graph-control	tests/authority_primitives_test.clj	tests/authority_
 exclude	removed-flat-log	tests/bind_test.clj	tests/bind_test.clj#facts\.log
 exclude	stale-database-api	tests/claims_spec_test.clj	tests/claims_spec_test.clj#fram\.claims
 exclude	moved-world-service	tests/coherence_doctor_test.clj	tests/coherence_doctor_test.clj#world[_-]
-exclude	moved-graph-control	tests/server_addressable_forms_test.clj	tests/server_addressable_forms_test.clj#edit-min
 exclude	removed-flat-store	tests/server_aggregate_seam_test.clj	tests/server_aggregate_seam_test.clj#fram\.store
 exclude	removed-flat-log	tests/server_appender_failure_test.clj	tests/server_appender_failure_test.clj#facts\.log
 exclude	removed-flat-store	tests/server_authority_snapshot_test.clj	tests/server_authority_snapshot_test.clj#fram\.store
@@ -96,7 +95,6 @@ exclude	removed-flat-store	tests/commit_coexist_elect_test.clj	tests/commit_coex
 exclude	moved-graph-control	tests/server_concern_overlap_test.clj	tests/server_concern_overlap_test.clj#edit-min
 exclude	moved-graph-control	tests/server_defcheck_untyped_e2e_test.clj	tests/server_defcheck_untyped_e2e_test.clj#write-def
 exclude	removed-flat-store	tests/database_dropin_test.clj	tests/database_dropin_test.clj#c/fact-of
-exclude	moved-graph-control	tests/code_edit_min_core_test.clj	tests/code_edit_min_core_test.clj#edit-min
 exclude	moved-graph-control	tests/code_edit_min_socket_test.clj	tests/code_edit_min_socket_test.clj#edit-min
 exclude	moved-graph-control	tests/code_editpath_defect_test.clj	tests/code_editpath_defect_test.clj#edit-min
 exclude	removed-flat-log	tests/commit_fenced_publish_kernel_test.clj	tests/commit_fenced_publish_kernel_test.clj#facts\.log
@@ -108,7 +106,6 @@ exclude	removed-flat-store	tests/database_migrate_test.clj	tests/database_migrat
 exclude	removed-flat-store	tests/snapshot_mmap_image_test.clj	tests/snapshot_mmap_image_test.clj#\bcid\b
 exclude	removed-flat-store	tests/commit_occurrence_verbs_test.clj	tests/commit_occurrence_verbs_test.clj#c/value-id
 exclude	removed-flat-store	tests/snapshot_projection_singleflight_test.clj	tests/snapshot_projection_singleflight_test.clj#k/->Fact
-exclude	moved-graph-control	tests/code_protocol_upsert_test.clj	tests/code_protocol_upsert_test.clj#write-def
 exclude	removed-flat-log	tests/snapshot_query_page_test.clj	tests/snapshot_query_page_test.clj#facts\.log
 exclude	removed-flat-log	tests/snapshot_query_isolation_test.clj	tests/snapshot_query_isolation_test.clj#facts\.log
 exclude	removed-flat-store	tests/database_rotations_test.clj	tests/database_rotations_test.clj#k/->Fact
@@ -130,7 +127,6 @@ exclude	removed-query-v1	tests/datalog_shared_index_test.clj	tests/datalog_share
 exclude	removed-flat-store	tests/datalog_test.clj	tests/datalog_test.clj#c/value!
 exclude	removed-flat-log	tests/doctor_fingerprint_test.clj	tests/doctor_fingerprint_test.clj#facts\.log
 exclude	sealed-overlay-checker	tests/edit_verifier_adapter_test.clj	tests/edit_verifier_adapter_test.clj#overlay[_-]
-exclude	moved-graph-control	tests/fram_commit_code_prestate_test.clj	tests/fram_commit_code_prestate_test.clj#edit-min
 exclude	moved-graph-control	tests/graph_ops_telemetry_smoke_test.clj	tests/graph_ops_telemetry_smoke_test.clj#set-body
 exclude	removed-flat-store	tests/kernel_violations_test.clj	tests/kernel_violations_test.clj#k/->Fact
 exclude	removed-flat-log	tests/log_split_boot_test.clj	tests/log_split_boot_test.clj#facts\.log

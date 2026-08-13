@@ -66,7 +66,7 @@
          (pr-str (dissoc si :defs))))
 
 (println "\n=== write-def happy path + read-def round-trip ===")
-(let [resp (w M "(defn a1-selftest-inc [x :- Int] :- Int (+ x 1))")]
+(let [resp (w M "(defn a1-selftest-inc [(x Int)] Int (+ x 1))")]
   (check "write typed defn -> :ok" (and (:ok resp) (= 1 (:written resp))) (pr-str resp))
   (check "deep-check status is surfaced (never silent)"
          (contains? #{:deferred :ran} (:deep-check resp)) (pr-str (:deep-check resp))))
@@ -90,7 +90,7 @@
   (check "::kw :suggestion names the fix (:foo)" (str/includes? (str (:suggestion e)) ":foo") (pr-str e)))
 
 (println "\n=== FUMBLE: (Vector String) -> nearest-miss Vec ===")
-(let [resp (w M "(defn a1-selftest-vt [x :- (Vector String)] :- Nil nil)")
+(let [resp (w M "(defn a1-selftest-vt [(x (Vector String))] Nil nil)")
       e (err-of resp)]
   (check "(Vector ..) write fails closed" (false? (:ok resp)) (pr-str resp))
   (check "unknown-type error is :stage :type" (= :type (:stage e)) (pr-str e))
@@ -125,16 +125,16 @@
   (check "unknown def :stage :lookup + :nearest" (and (= :lookup (:stage resp)) (seq (:nearest resp))) (pr-str resp)))
 
 (println "\n=== ROBUSTNESS: multi-form / replace-by-name / quote / def-form sig ===")
-(let [resp (w M "(def a1-multi-a 1)\n(defn a1-multi-b [x :- Int] :- Int x)")]
+(let [resp (w M "(def a1-multi-a 1)\n(defn a1-multi-b [(x Int)] Int x)")]
   (check "multi-form :source -> both forms minted" (and (:ok resp) (= 2 (:written resp))) (pr-str resp)))
-(let [r1s (:source (do (w M "(def a1-rep :- Int 1)") (r M "a1-rep")))
-      r2  (do (w M "(def a1-rep :- Int 2)") (r M "a1-rep"))]      ; replace by name
+(let [r1s (:source (do (w M "(def a1-rep Int 1)") (r M "a1-rep")))
+      r2  (do (w M "(def a1-rep Int 2)") (r M "a1-rep"))]      ; replace by name
   (check "upsert replaces by name (idempotent surface)"
          (and (:ok r2) (str/includes? (:source r2) "2") (not= r1s (:source r2))) (pr-str [r1s (:source r2)])))
 (let [resp (w M "(def a1-q 'sym)") rd (r M "a1-q")]
   (check "'x canonicalizes + writes -> :ok" (:ok resp) (pr-str resp))
   (check "'x stored/rendered as (quote sym)" (and (:ok rd) (str/includes? (str (:source rd)) "quote")) (pr-str (:source rd))))
-(let [_ (w M "(def a1-sig :- String \"hi\")") rd (r M "a1-sig")]
+(let [_ (w M "(def a1-sig String \"hi\")") rd (r M "a1-sig")]
   (check "def-form sig derived (String)" (= "String" (:sig rd)) (pr-str (:sig rd))))
 
 (println "\n=== READER-FORM ROUND-TRIP: regex / set / nested / char / ratio (EXP-025 b1 mint fix) ===")

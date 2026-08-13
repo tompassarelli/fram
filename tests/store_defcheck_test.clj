@@ -32,24 +32,36 @@
 (def modules
   {"derive"
    (str "#lang beagle/clj\n(ns gw.derive)\n\n"
-        "(defn obj-of [triples :- (Vec (Vec String)) te :- String p :- String] :- String\n"
-        "  (reduce (fn [acc :- String t :- (Vec String)] :- String\n"
+        "(defn obj-of\n"
+        "  [(triples (Vec (Vec String)))\n"
+        "   (te String)\n"
+        "   (p String)]\n"
+        "  String\n"
+        "  (reduce (fn [(acc String) (t (Vec String))] String\n"
         "            (if (and (= (nth t 0) te) (= (nth t 1) p)) (nth t 2) acc)) \"\" triples))\n\n"
-        "(defn classify [triples :- (Vec (Vec String)) te :- String opts :- Any] :- String\n"
+        "(defn classify\n"
+        "  [(triples (Vec (Vec String)))\n"
+        "   (te String)\n"
+        "   (opts Any)]\n"
+        "  String\n"
         "  \"ready\")\n\n"
         ";; individually FINE (Int in, Int out); a landmine for gw.projections/use-tag.\n"
-        "(defn tag [x :- String] :- Int 42)\n")
+        "(defn tag [(x String)] Int 42)\n")
    "projections"
    (str "#lang beagle/clj\n(ns gw.projections)\n\n(require gw.derive :as d)\n\n"
-        "(defn condition-of [triples :- (Vec (Vec String)) te :- String opts :- Any] :- String\n"
+        "(defn condition-of\n"
+        "  [(triples (Vec (Vec String)))\n"
+        "   (te String)\n"
+        "   (opts Any)]\n"
+        "  String\n"
         "  (d/classify triples te opts))\n\n"
         ";; BROKEN CALLER: d/tag returns Int, but this is annotated String. The break\n"
         ";; lives HERE, not in gw.derive — only a whole-tree check sees it.\n"
-        "(defn use-tag [x :- String] :- String (d/tag x))\n")
+        "(defn use-tag [(x String)] String (d/tag x))\n")
    "badcalc"
    (str "#lang beagle/clj\n(ns gw.badcalc)\n\n"
         ";; self-contained return-type error: body is Int, annotated String.\n"
-        "(defn oops [x :- Int] :- String (+ x 1))\n")})
+        "(defn oops [(x Int)] String (+ x 1))\n")})
 
 ;; --- helpers -----------------------------------------------------------------
 (defn log! [& xs] (apply println xs) (flush))
