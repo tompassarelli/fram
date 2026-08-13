@@ -10,9 +10,7 @@
 (def text-index-max-bytes Int (* 64 1024 1024))
 
 (defrecord TextCandidateSource
-  [(rows (Vec t/Triple))
-   (postings (Map String (Vec Int)))
-   (bytes Int)])
+  [(rows (Vec t/Triple)) (postings (Map String (Vec Int))) (bytes Int)])
 
 (defrecord TextError
   [(type Keyword)
@@ -23,24 +21,13 @@
    (limit-data Bool)])
 
 (defrecord TextCandidateSourceResult
-  [(ok Bool)
-   (source TextCandidateSource?)
-   (error TextError)])
+  [(ok Bool) (source TextCandidateSource?) (error TextError)])
 
-(defrecord TextNeedleResult
-  [(ok Bool)
-   (tokens (Vec String))
-   (error TextError)])
+(defrecord TextNeedleResult [(ok Bool) (tokens (Vec String)) (error TextError)])
 
-(defrecord TextHandlesResult
-  [(ok Bool)
-   (handles (Vec Int))
-   (error TextError)])
+(defrecord TextHandlesResult [(ok Bool) (handles (Vec Int)) (error TextError)])
 
-(defrecord TextRowsResult
-  [(ok Bool)
-   (rows (Vec (Vec Any)))
-   (error TextError)])
+(defrecord TextRowsResult [(ok Bool) (rows (Vec (Vec Any))) (error TextError)])
 
 (defn no-text-error [] TextError
   (->TextError :query-text-none :query-text-none "" 0 0 false))
@@ -49,9 +36,7 @@
   (->TextError :fram-query-abort code message 0 0 false))
 
 (defn text-index-limit-error
-  [(message String)
-   (bytes Int)
-   (maximum Int)] TextError
+  [(message String) (bytes Int) (maximum Int)] TextError
   (->TextError :query-text-index-limit :query-text-index-limit
                message bytes maximum true))
 
@@ -113,10 +98,7 @@
   (and (string? needle) (not (empty? (tokenize needle)))))
 
 (defn- postings-weight [(postings (Map String (Vec Int)))] Int
-  (reduce-kv (fn
-               [(total Int)
-                (token String)
-                (handles (Vec Int))] Int
+  (reduce-kv (fn [(total Int) (token String) (handles (Vec Int))] Int
                (+ total 84 (* 4 (count token)) (* 42 (count handles))))
              0 postings))
 
@@ -127,8 +109,7 @@
     nil))
 
 (defn build-source-result
-  [(propositions (Vec t/Triple))
-   (maximum Int)] TextCandidateSourceResult
+  [(propositions (Vec t/Triple)) (maximum Int)] TextCandidateSourceResult
   (let [(rows (Vec t/Triple)) propositions
         (row-count Int) (count rows)
         (empty-postings (Map String (Vec Int))) {}
@@ -155,8 +136,7 @@
        true (->TextCandidateSource rows postings weight) (no-text-error)))))
 
 (defn build-source
-  [(propositions (Vec t/Triple))
-   (maximum Int)] TextCandidateSource
+  [(propositions (Vec t/Triple)) (maximum Int)] TextCandidateSource
   (let [(result TextCandidateSourceResult)
         (build-source-result propositions maximum)
         (source TextCandidateSource?) (source-result-source result)]
@@ -190,8 +170,7 @@
               (if (< (count candidate) (count best)) candidate best))))))))
 
 (defn indexed-handles-result
-  [(source TextCandidateSource)
-   (needle Any)] TextHandlesResult
+  [(source TextCandidateSource) (needle Any)] TextHandlesResult
   (let [(needle-result TextNeedleResult) (needle-tokens-result needle)]
     (if (not (textneedleresult-ok needle-result))
       (->TextHandlesResult false [] (textneedleresult-error needle-result))
@@ -224,8 +203,7 @@
       (raise-text-error (handles-result-error result)))))
 
 (defn scan-handles-result
-  [(source TextCandidateSource)
-   (needle Any)] TextHandlesResult
+  [(source TextCandidateSource) (needle Any)] TextHandlesResult
   (let [(needle-result TextNeedleResult) (needle-tokens-result needle)]
     (if (not (textneedleresult-ok needle-result))
       (->TextHandlesResult false [] (textneedleresult-error needle-result))
@@ -256,14 +234,14 @@
 (defn- rows-for-handles
   [(source TextCandidateSource)
    (needle Any)
-   (handles (Vec Int))] (Vec (Vec Any))
+   (handles (Vec Int))]
+  (Vec (Vec Any))
   (let [(rows (Vec t/Triple)) (textcandidatesource-rows source)]
     (mapv (fn [(handle Int)] (Vec Any) (let [(proposition t/Triple) (nth rows handle)] [(t/triple-t1 proposition) (t/triple-t2 proposition) needle]))
       handles)))
 
 (defn indexed-rows-result
-  [(source TextCandidateSource)
-   (needle Any)] TextRowsResult
+  [(source TextCandidateSource) (needle Any)] TextRowsResult
   (let [(result TextHandlesResult) (indexed-handles-result source needle)]
     (if (handles-result-ok? result)
       (->TextRowsResult
@@ -272,8 +250,7 @@
       (->TextRowsResult false [] (handles-result-error result)))))
 
 (defn scan-rows-result
-  [(source TextCandidateSource)
-   (needle Any)] TextRowsResult
+  [(source TextCandidateSource) (needle Any)] TextRowsResult
   (let [(result TextHandlesResult) (scan-handles-result source needle)]
     (if (handles-result-ok? result)
       (->TextRowsResult

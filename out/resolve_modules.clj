@@ -108,14 +108,21 @@
   (vec (drop (inc (rc/type-name-index (hd ctx view d) (sv ctx view (nth children 1 nil)))) children)))) acc))) {} defs)]
   (merge variants names)))
 
+(defn- field-binding-leaves [ctx view fields]
+  (vec (keep (fn [field] (let [parts (rb/typed-binding-parts ctx view field)
+   binding (if (nil? parts) nil (nth parts 0 nil))
+   leaf (if (nil? binding) nil (rr/unwrap-meta ctx view binding))]
+  (if (some? (sv ctx view leaf)) (do
+  leaf)))) (vec (rest (rr/ordered-children ctx fields))))))
+
 (defn module-accessors [ctx view ents]
   (reduce (fn [acc f] (let [d (unwrap-def ctx view f)]
   (if (contains? #{"defrecord" "deftype"} (str (hd ctx view d))) (let [nl (type-name-leaf ctx view d)
    nm (sv ctx view nl)
    fb (first (filterv (fn [k] (rb/brackets? ctx view k)) (vec (drop 2 (rr/ordered-children ctx d)))))]
   (if (or (nil? nm) (nil? fb)) acc (let [pfx (str/lower-case (str nm))]
-  (reduce (fn [a b] (let [fld (sv ctx view b)]
-  (if (nil? fld) a (assoc a (str pfx "-" (str fld)) [nl fld])))) acc (rb/param-binds ctx view fb))))) acc))) {} (forms-of ctx view ents)))
+  (reduce (fn [a field] (let [fld (sv ctx view field)]
+  (if (nil? fld) a (assoc a (str pfx "-" (str fld)) [nl fld])))) acc (field-binding-leaves ctx view fb))))) acc))) {} (forms-of ctx view ents)))
 
 (defn form-binding-leaves [ctx view form]
   (let [d (unwrap-def ctx view form)

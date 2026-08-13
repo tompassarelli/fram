@@ -21,8 +21,7 @@
 (defrecord Doc [(head String) (body String)])
 
 (defrecord PredicateRegistry
-  [(by-name (Map String String))
-   (canonical (Map String String))])
+  [(by-name (Map String String)) (canonical (Map String String))])
 
 (def ref-predicates (Vec String)
   ["depends_on" "part_of" "relates_to" "clarifies" "amends"])
@@ -70,7 +69,8 @@
 (defn- bind-predicate-spelling
   [(spellings (Map String String))
    (spelling String)
-   (identity String)] (Map String String)
+   (identity String)]
+  (Map String String)
   (let [(prior String?) (get spellings spelling)]
     (if (and (some? prior) (not (= prior identity)))
       (throw (ex-info (str "predicate spelling collision: " spelling
@@ -92,7 +92,8 @@
         (reduce
          (fn
            [(spellings (Map String String))
-            (value t/Triple)] (Map String String)
+            (value t/Triple)]
+           (Map String String)
            (bind-predicate-spelling spellings
                                     (triple-right value)
                                     (triple-left value)))
@@ -120,7 +121,8 @@
   [(registry PredicateRegistry)
    (triples (Vec t/Triple))
    (predicate String)
-   (property String)] String?
+   (property String)]
+  String?
   (let [identity (predicate-id registry predicate)
         property-id (predicate-id registry property)]
     (reduce
@@ -145,7 +147,8 @@
 (defn- value-kind-of
   [(registry PredicateRegistry)
    (triples (Vec t/Triple))
-   (predicate String)] String
+   (predicate String)]
+  String
   (let [(explicit String?)
         (predicate-property-value registry triples predicate "value_kind")]
     (if (some? explicit)

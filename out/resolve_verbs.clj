@@ -536,14 +536,22 @@
   (let [fnf (:fn-facts v)
    mint (:mint v)
    kids (vec (fnf d))
-   param? (contains? rc/PARAM-FORMS (str (rr/head-sym ctx view d)))
-   anchor-n (nn (if param? (some (fn [e] (if (rb/brackets? ctx view (nn (enode e))) (do
-  (ekey e)))) kids) (some (fn [e] (if (= name (rr/sym-val ctx view (rr/unwrap-meta ctx view (nn (enode e))))) (do
-  (ekey e)))) kids)))
-   ret? (some (fn [e] (if (and (= (ekey e) (+ anchor-n 1)) (contains? rc/TYPE-COLON (str (rr/sym-val ctx view (nn (enode e)))))) (do
-  true))) kids)
-   body-start (+ anchor-n (if (some? ret?) 3 1))
-   body-slots (vec (filter (fn [e] (>= (nn (ekey e)) body-start)) kids))
+   head (str (rr/head-sym ctx view d))
+   param? (contains? rc/PARAM-FORMS head)
+   anchor-edge (if param? (some (fn [e] (if (rb/brackets? ctx view (nn (enode e))) (do
+  e))) kids) (some (fn [e] (if (= name (rr/sym-val ctx view (rr/unwrap-meta ctx view (nn (enode e))))) (do
+  e))) kids))
+   anchor-n (if (some? anchor-edge) (ekey anchor-edge) -1)
+   forms (if (and param? (>= anchor-n 0)) (mapv enode (filter (fn [e] (>= (ekey e) anchor-n)) kids)) [])
+   sig (if param? (do
+  (rb/signature-tail ctx view forms (= "defmacro" head))))
+   first-body (if param? (do
+  (first (:body sig))))
+   body-start (if param? (some (fn [e] (if (= first-body (enode e)) (do
+  (ekey e)))) kids) (if (seq kids) (do
+  (ekey (last kids)))))
+   body-start-n (nn (if (nil? body-start) -1 body-start))
+   body-slots (if (< body-start-n 0) [] (if param? (vec (filter (fn [e] (>= (nn (ekey e)) body-start-n)) kids)) (vec (filter (fn [e] (= (ekey e) body-start-n)) kids))))
    new-root (mint src datum)]
   (if (= 0 (count body-slots)) (do
   (warn (str "REJECTED — `" name "` has no body fN edges to replace; no facts mutated."))
@@ -552,7 +560,7 @@
    emit (:emit v)]
   (doseq [e body-slots]
   (retire (ecid e)))
-  (ri/assert! ctx (nn d) (str "f" body-start) (nn new-root))
+  (ri/assert! ctx (nn d) (str "f" body-start-n) (nn new-root))
   (if (not (:capture-only? v)) (do
   (let [rr! (:reresolve v)]
   (rr!))))

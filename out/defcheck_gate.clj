@@ -6,7 +6,7 @@
 
 (def BEAGLE-MESSAGE-RE (re-pattern "^beagle:\\s*"))
 
-(def TYPED-SOURCE-RE (re-pattern "(?m)(^|[\\s(\\[]):-(\\s|$)"))
+(def BEAGLE-SOURCE-RE (re-pattern "(?m)^#lang[ \\t]+beagle(?:[/ \\t]|$)"))
 
 (def DOT-RE (re-pattern "\\."))
 
@@ -158,15 +158,15 @@
    resp (sidecar-with-state state (str "check " epath " " (src-path-with-state state module)))]
   (if (:ok resp) (mapv (fn [e] (diag->error module e)) (:errors resp)) [{:ok false :stage :type :at {:module module} :message (str "def-check infra error: " (:error resp))}])))
 
-(defn- ^Boolean source-typed? [^String src]
-  (boolean (re-find TYPED-SOURCE-RE (str src))))
+(defn- ^Boolean beagle-source? [^String src]
+  (boolean (re-find BEAGLE-SOURCE-RE (str src))))
 
 (defn- ^Boolean untyped-mode? [^String src]
   (let [mode (or (System/getenv "FRAM_DEFCHECK_MODE") "auto")]
   (cond
   (= mode "typed") false
   (= mode "untyped") true
-  :else (not (source-typed? src)))))
+  :else (not (beagle-source? src)))))
 
 (defn ^String module-src-text-with-state!
   "Refresh `module`'s sibling .bclj (warm EDN->text) and return its text." [^DefcheckState state ^String module]
@@ -204,9 +204,9 @@
   (symbol? pat) (if (= pat '&) #{} #{pat})
   (vector? pat) (set (mapcat pattern-locals pat))
   (map? pat) (reduce-kv (fn [acc k v] (cond
-  (= k :keys) (into acc (map (comp symbol name)) v)
-  (= k :strs) (into acc (map (comp symbol name)) v)
-  (= k :syms) (into acc (map (comp symbol name)) v)
+  (= k :keys) (into acc (map (comp symbol name) v))
+  (= k :strs) (into acc (map (comp symbol name) v))
+  (= k :syms) (into acc (map (comp symbol name) v))
   (= k :as) (conj acc v)
   (= k :or) acc
   (keyword? k) (into acc (pattern-locals k))
@@ -467,7 +467,7 @@
   (clojure.core/deref errs)))))
 
 (defn check-module-errors-any-with-state!
-  "Render `module` to text once; route to the untyped in-process analyzer (no\n  beagle type-check) when the module carries no `:-` annotation (or the env forces\n  it), else the typed sidecar checker. Returns a vector of ERROR-shape maps." [^DefcheckState state ^String module]
+  "Render `module` to text once; route a `#lang beagle...` source to the typed\n  sidecar and other Clojure source to the in-process analyzer, unless the env\n  explicitly forces a mode. Returns a vector of ERROR-shape maps." [^DefcheckState state ^String module]
   (let [src (module-src-text-with-state! state module)]
   (if (untyped-mode? src) (analyze-untyped-module-with-state! (:arity-check? state) module src) (check-module-errors-with-state! state module))))
 

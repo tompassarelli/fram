@@ -23,9 +23,7 @@
 ;; The cache is accepted only when its immutable space and exact canonical-log
 ;; prefix match the caller's expectation.
 (defrecord CacheSource
-  [(space-id String)
-   (fingerprint String)
-   (valid-bytes Int)])
+  [(space-id String) (fingerprint String) (valid-bytes Int)])
 (defrecord CacheReceipt
   [(format Int)
    (space-id String)
@@ -33,10 +31,7 @@
    (source-position Int)
    (sha256 String)])
 (defrecord CacheImage
-  [(source CacheSource)
-   (dump t/TermStoreDump)
-   (indexes Any)
-   (store Any)])
+  [(source CacheSource) (dump t/TermStoreDump) (indexes Any) (store Any)])
 
 (defn- fail [(message String) (type Keyword)] Any
   (throw (ex-info message {:type type})))
@@ -45,9 +40,7 @@
   (some? (re-matches #"[0-9a-f]{64}" value)))
 
 (defn source-binding
-  [(space-id String)
-   (fingerprint String)
-   (valid-bytes Int)] CacheSource
+  [(space-id String) (fingerprint String) (valid-bytes Int)] CacheSource
   (if (and (pos? (count space-id))
            (and (valid-fingerprint? fingerprint) (>= valid-bytes 0)))
     (->CacheSource space-id fingerprint valid-bytes)
@@ -107,28 +100,19 @@
       (write-u8! out (unsigned-bit-shift-right value (* position 8))))
     nil))
 
-(defn- write-u32-le!
-  [(out Any)
-   (value Int)
-   (context String)] Nil
+(defn- write-u32-le! [(out Any) (value Int) (context String)] Nil
   (let [(checked Int) (require-u32 value context)]
     (doseq [position (range 4)]
       (write-u8! out (unsigned-bit-shift-right checked (* position 8))))
     nil))
 
-(defn- write-i64-le!
-  [(out Any)
-   (value Int)
-   (context String)] Nil
+(defn- write-i64-le! [(out Any) (value Int) (context String)] Nil
   (let [(checked Int) (require-i64 value context)]
     (doseq [position (range 8)]
       (write-u8! out (unsigned-bit-shift-right checked (* position 8))))
     nil))
 
-(defn- ensure-remaining!
-  [(buffer ByteBuffer)
-   (amount Int)
-   (context String)] Nil
+(defn- ensure-remaining! [(buffer ByteBuffer) (amount Int) (context String)] Nil
   (if (and (>= amount 0) (>= (.remaining buffer) amount))
     nil
     (fail (str "fri: truncated " context) :invalid-fri-cache)))
@@ -152,20 +136,14 @@
 (defn- read-i64-le! [(buffer ByteBuffer) (context String)] Int
   (do (ensure-remaining! buffer 8 context) (.getLong buffer)))
 
-(defn- read-fixed!
-  [(buffer ByteBuffer)
-   (amount Int)
-   (context String)] Any
+(defn- read-fixed! [(buffer ByteBuffer) (amount Int) (context String)] Any
   (do
     (ensure-remaining! buffer amount context)
     (let [(bytes Any) (byte-array amount)]
       (.get buffer bytes)
       bytes)))
 
-(defn- write-sized-text!
-  [(out Any)
-   (value String)
-   (context String)] Nil
+(defn- write-sized-text! [(out Any) (value String) (context String)] Nil
   (let [(bytes Any) (strict-utf8 value context)]
     (write-u32-le! out (alength bytes) context)
     (.write out bytes)
@@ -186,10 +164,7 @@
 ;; this temporary copy from acquiring a divergent tag table.
 (declare write-term-v1!)
 
-(defn- write-triple-v1!
-  [(out Any)
-   (value Any)
-   (depth Int)] Nil
+(defn- write-triple-v1! [(out Any) (value Any) (depth Int)] Nil
   (do
     (when (not (t/triple? value))
       (fail "fri: TermCodecV1 expected Triple" :invalid-fri-cache))
@@ -200,10 +175,7 @@
     (write-term-v1! out (t/triple-t2 value) (inc depth))
     (write-term-v1! out (t/triple-t3 value) (inc depth))))
 
-(defn- write-term-v1!
-  [(out Any)
-   (term Any)
-   (depth Int)] Nil
+(defn- write-term-v1! [(out Any) (term Any) (depth Int)] Nil
   (cond
     [(t/triple? term) (write-triple-v1! out term depth)]
     [(string? term)
@@ -364,10 +336,7 @@
           (write-i64-le! out handle "slot index handle"))))
     (.toByteArray out)))
 
-(defn- read-count!
-  [(buffer ByteBuffer)
-   (context String)
-   (minimum-row Int)] Int
+(defn- read-count! [(buffer ByteBuffer) (context String) (minimum-row Int)] Int
   (let [(row-count Int) (read-u32-le! buffer context)]
     (if (or (> row-count 2147483647)
             (> (* row-count minimum-row) (.remaining buffer)))
@@ -502,10 +471,7 @@
                              StandardCopyOption/REPLACE_EXISTING]))
     nil))
 
-(defn write-fri!
-  [(dump Any)
-   (path String)
-   (source CacheSource)] Any
+(defn write-fri! [(dump Any) (path String) (source CacheSource)] Any
   (do
     (validate-dump! dump source)
     (let [(payload Any) (write-payload! dump)
@@ -641,10 +607,7 @@
                          (triple-handle position)])
                       (t/termstoredump-triples dump)))))
 
-(defn- index-matches
-  [(image Any)
-   (index-position Int)
-   (keys Any)] Any
+(defn- index-matches [(image Any) (index-position Int) (keys Any)] Any
   (let [(dump t/TermStoreDump) (cacheimage-dump image)
         (handles Any) (term-handles dump)
         (key-handles Any) (mapv (fn [(term Any)] Any (get handles term)) keys)]
@@ -720,20 +683,11 @@
 (defn by-t1 [(image Any) (term Any)] Any (index-matches image 0 [term]))
 (defn by-t2 [(image Any) (term Any)] Any (index-matches image 1 [term]))
 (defn by-t3 [(image Any) (term Any)] Any (index-matches image 2 [term]))
-(defn by-t12
-  [(image Any)
-   (t1 Any)
-   (t2 Any)] Any
+(defn by-t12 [(image Any) (t1 Any) (t2 Any)] Any
   (index-matches image 3 [t1 t2]))
-(defn by-t23
-  [(image Any)
-   (t2 Any)
-   (t3 Any)] Any
+(defn by-t23 [(image Any) (t2 Any) (t3 Any)] Any
   (index-matches image 4 [t2 t3]))
-(defn by-t13
-  [(image Any)
-   (t1 Any)
-   (t3 Any)] Any
+(defn by-t13 [(image Any) (t1 Any) (t3 Any)] Any
   (index-matches image 5 [t1 t3]))
 (defn live-occurrences-as-of [(image Any) (sequence Int)] Any
   (let [(dump t/TermStoreDump) (cacheimage-dump image)]

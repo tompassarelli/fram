@@ -22,9 +22,7 @@
    (operator Keyword)
    (binding String)])
 (defrecord Rule
-  [(head-relation String)
-   (head-arguments (Vec QueryTerm))
-   (body (Vec Literal))])
+  [(head-relation String) (head-arguments (Vec QueryTerm)) (body (Vec Literal))])
 (defrecord QueryEvaluationError
   [(error-type Keyword)
    (code Keyword)
@@ -52,8 +50,7 @@
 (defalias HandleTrie (Map Any HandleTrieBranch))
 
 (defrecord QueryEvaluationContext
-  [(control QueryControl?)
-   (error (Atom QueryEvaluationError?))])
+  [(control QueryControl?) (error (Atom QueryEvaluationError?))])
 (defrecord QueryEvaluationResult [(db Db) (error QueryEvaluationError?)])
 
 (defrecord BuiltinValueResult [(int-value Int?) (double-value Double?)])
@@ -66,7 +63,8 @@
 
 ;; A projected rotation carries the upper snapshot only, so a since window's
 ;; lower bound has to ride alongside it.
-(defrecord RotationCandidateSource [(rotation rot/Rotation) (lower-exclusive Int)])
+(defrecord RotationCandidateSource
+  [(rotation rot/Rotation) (lower-exclusive Int)])
 
 ;; Candidate handles are private positions in one immutable relation vector.
 (defrecord CandidateSource
@@ -78,14 +76,12 @@
    (occurrence OccurrenceCandidateSource?)
    (rotation RotationCandidateSource?)])
 (defrecord VirtualCandidateSource
-  [(relation String)
-   (source text-search/TextSearchSource)])
+  [(relation String) (source text-search/TextSearchSource)])
 (defalias CandidateSourceValue (U CandidateSource VirtualCandidateSource))
 (defalias CandidateSources (Map String CandidateSourceValue))
 
 (defrecord CandidateSourcesResult
-  [(sources CandidateSources)
-   (error QueryEvaluationError?)])
+  [(sources CandidateSources) (error QueryEvaluationError?)])
 
 (def triple-relation String "triple")
 (def occurrence-relation String "occurrence")
@@ -109,8 +105,7 @@
 (defn- next-query-step [(steps Int)] Int
   (inc steps))
 
-(defn- query-cancellation-cell
-  [(reason (U Keyword Nil))] (Atom (U Keyword Nil))
+(defn- query-cancellation-cell [(reason (U Keyword Nil))] (Atom (U Keyword Nil))
   (atom reason))
 
 (def no-query-evaluation-error QueryEvaluationError? nil)
@@ -120,7 +115,8 @@
 
 (defn preserve-first-query-evaluation-error
   [(current QueryEvaluationError?)
-   (incoming QueryEvaluationError)] QueryEvaluationError?
+   (incoming QueryEvaluationError)]
+  QueryEvaluationError?
   (if current current incoming))
 
 (defn query-control [(max-steps Int) (timeout-ms Int)] QueryControl
@@ -145,9 +141,7 @@
   (->QueryEvaluationContext control (query-evaluation-error-cell)))
 
 (defn query-evaluation-error
-  [(error-type Keyword)
-   (code Keyword)
-   (message String)] QueryEvaluationError
+  [(error-type Keyword) (code Keyword) (message String)] QueryEvaluationError
   (->QueryEvaluationError error-type code message
                           nil nil nil nil nil nil))
 
@@ -156,7 +150,8 @@
    (code Keyword)
    (message String)
    (bytes Int)
-   (maximum Int)] QueryEvaluationError
+   (maximum Int)]
+  QueryEvaluationError
   (->QueryEvaluationError error-type code message
                           nil nil nil nil bytes maximum))
 
@@ -175,8 +170,7 @@
      (text-index/texterror-message error-value))))
 
 (defn record-query-evaluation-error!
-  [(context QueryEvaluationContext)
-   (error-value QueryEvaluationError)] Nil
+  [(context QueryEvaluationContext) (error-value QueryEvaluationError)] Nil
   (compare-and-set! (queryevaluationcontext-error context)
                     no-query-evaluation-error error-value)
   nil)
@@ -204,8 +198,7 @@
 (defn query-evaluation-error-type [(error-value QueryEvaluationError)] Keyword
   (queryevaluationerror-error-type error-value))
 
-(defn query-evaluation-error-message
-  [(error-value QueryEvaluationError)] String
+(defn query-evaluation-error-message [(error-value QueryEvaluationError)] String
   (queryevaluationerror-message error-value))
 
 (defn- query-evaluation-error-data [(error-value QueryEvaluationError)] Any
@@ -301,20 +294,18 @@
   (->Literal :relation relation arguments true :none ""))
 
 (defn comparison-literal
-  [(operator Keyword)
-   (arguments (Vec QueryTerm))] Literal
+  [(operator Keyword) (arguments (Vec QueryTerm))] Literal
   (->Literal :comparison "" arguments false operator ""))
 
 (defn builtin-literal
-  [(operator Keyword)
-   (arguments (Vec QueryTerm))
-   (binding String)] Literal
+  [(operator Keyword) (arguments (Vec QueryTerm)) (binding String)] Literal
   (->Literal :builtin "" arguments false operator binding))
 
 (defn rule
   [(head-relation String)
    (head-arguments (Vec QueryTerm))
-   (body (Vec Literal))] Rule
+   (body (Vec Literal))]
+  Rule
   (->Rule head-relation head-arguments body))
 
 (defn- triple-row [(value t/Triple)] Tuple
@@ -331,8 +322,7 @@
   {triple-relation (rows propositions)})
 
 (defn edb-with-occurrences
-  [(propositions (Vec t/Triple))
-   (occurrences (Vec t/Triple))] Db
+  [(propositions (Vec t/Triple)) (occurrences (Vec t/Triple))] Db
   (let [checked
         (reduce (fn [(acc (Vec t/Triple)) (value t/Triple)] (Vec t/Triple)
                   (if (kernel/operation-occurrence? value)
@@ -348,9 +338,7 @@
     (if (some? name) (get subst name) (queryterm-value term))))
 
 (defn- unify
-  [(term QueryTerm)
-   (value Any)
-   (subst Substitution)] (U Substitution Nil)
+  [(term QueryTerm) (value Any) (subst Substitution)] (U Substitution Nil)
   (let [name (queryterm-variable term)]
     (if (some? name)
       (if (contains? subst name)
@@ -362,7 +350,8 @@
   [(arguments (Vec QueryTerm))
    (tuple Tuple)
    (subst Substitution)
-   (context QueryEvaluationContext)] (U Substitution Nil)
+   (context QueryEvaluationContext)]
+  (U Substitution Nil)
   (if (not (query-check! context))
     nil
     (if (not (= (count arguments) (count tuple)))
@@ -379,7 +368,8 @@
   [(arguments (Vec QueryTerm))
    (tuple Tuple)
    (subst Substitution)
-   (context QueryEvaluationContext)] (U Substitution Nil)
+   (context QueryEvaluationContext)]
+  (U Substitution Nil)
   (unify-arguments-controlled! arguments tuple subst context))
 
 (defn- ground [(arguments (Vec QueryTerm)) (subst Substitution)] Tuple
@@ -430,10 +420,7 @@
                [(= operator :ge) (>= left-number right-number)]
                [:else false])))]))))
 
-(defn- integer-builtin-value
-  [(operator Keyword)
-   (left Int)
-   (right Int)] Int
+(defn- integer-builtin-value [(operator Keyword) (left Int) (right Int)] Int
   (cond
     [(= operator :mod) (mod left right)]
     [(= operator :+) (+ left right)]
@@ -441,9 +428,7 @@
     [:else (* left right)]))
 
 (defn- double-builtin-value
-  [(operator Keyword)
-   (left Double)
-   (right Double)] Double
+  [(operator Keyword) (left Double) (right Double)] Double
   (cond
     [(= operator :/) (/ left right)]
     [(= operator :+) (+ left right)]
@@ -451,9 +436,7 @@
     [:else (* left right)]))
 
 (defn- builtin-value
-  [(operator Keyword)
-   (left Any)
-   (right Any)] BuiltinValueResult
+  [(operator Keyword) (left Any) (right Any)] BuiltinValueResult
   (let [(left-int (U Int Nil)) (integer-value left)
         (right-int (U Int Nil)) (integer-value right)
         (left-number (U Double Nil)) (numeric-value left)
@@ -522,8 +505,7 @@
       [:else invalid])))
 
 (defn- builtin-results
-  [(literal Literal)
-   (subst Substitution)] (Vec Substitution)
+  [(literal Literal) (subst Substitution)] (Vec Substitution)
   (let [arguments (literal-arguments literal)
         left (term-value (nth arguments 0) subst)
         right (term-value (nth arguments 1) subst)]
@@ -543,7 +525,8 @@
   [(arguments (Vec QueryTerm))
    (tuples (Vec Tuple))
    (subst Substitution)
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (loop [(remaining (Vec Tuple)) tuples (results (Vec Substitution)) []]
     (if (or (empty? remaining)
             (not (query-evaluation-context-open? context)))
@@ -560,7 +543,8 @@
   [(arguments (Vec QueryTerm))
    (tuples (Vec Tuple))
    (subst Substitution)
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (unify-tuples-controlled! arguments tuples subst context))
 
 (defn- bound-term-value [(term QueryTerm) (subst Substitution)] Any
@@ -579,7 +563,8 @@
   [(candidate VirtualCandidateSource)
    (indexed Bool)
    (arguments (Vec QueryTerm))
-   (subst Substitution)] text-search/TextSearchRowsResult
+   (subst Substitution)]
+  text-search/TextSearchRowsResult
   (let [relation (virtualcandidatesource-relation candidate)
         source (virtualcandidatesource-source candidate)
         needle (bound-term-value (nth arguments 2) subst)]
@@ -608,7 +593,8 @@
 
 (defn- text-rows-or-record!
   [(result text-search/TextSearchRowsResult)
-   (context QueryEvaluationContext)] (Vec Tuple)
+   (context QueryEvaluationContext)]
+  (Vec Tuple)
   (if (text-search/rows-result-ok? result)
     (text-search/rows-result-rows result)
     (do
@@ -623,7 +609,8 @@
    (indexed Bool)
    (arguments (Vec QueryTerm))
    (subst Substitution)
-   (context QueryEvaluationContext)] (Vec Tuple)
+   (context QueryEvaluationContext)]
+  (Vec Tuple)
   (text-rows-or-record!
    (virtual-source-rows-result! candidate indexed arguments subst)
    context))
@@ -633,7 +620,8 @@
    (sources CandidateSources)
    (literal Literal)
    (subst Substitution)
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (let [relation (literal-relation literal)
         arguments (literal-arguments literal)
         source (get sources relation)]
@@ -656,7 +644,8 @@
    (sources CandidateSources)
    (literal Literal)
    (subst Substitution)
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (if (query-check! context)
     (cond
       [(= :relation (literal-kind literal))
@@ -672,7 +661,8 @@
    (sources CandidateSources)
    (literal Literal)
    (substitutions (Vec Substitution))
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (loop [(remaining (Vec Substitution)) substitutions (results (Vec Substitution)) []]
     (if (or (empty? remaining)
             (not (query-evaluation-context-open? context)))
@@ -689,7 +679,8 @@
    (sources CandidateSources)
    (body (Vec Literal))
    (seed Substitution)
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (loop [(remaining (Vec Literal)) body (substitutions (Vec Substitution)) [seed]]
     (cond
       [(not (query-evaluation-context-open? context)) []]
@@ -705,7 +696,8 @@
   [(db Db)
    (sources CandidateSources)
    (value Rule)
-   (context QueryEvaluationContext)] (Set Tuple)
+   (context QueryEvaluationContext)]
+  (Set Tuple)
   (let [substitutions
         (body-results! db sources (rule-body value) {} context)]
     (if (query-evaluation-context-open? context)
@@ -723,7 +715,8 @@
   [(db Db)
    (sources CandidateSources)
    (rules (Vec Rule))
-   (context QueryEvaluationContext)] Db
+   (context QueryEvaluationContext)]
+  Db
   (loop [remaining rules current db]
     (if (or (empty? remaining)
             (not (query-evaluation-context-open? context)))
@@ -738,15 +731,13 @@
                    (fn [(known (U (Set Tuple) Nil))] (Set Tuple)
                      (reduce (fn
                                [(rows-value (Set Tuple))
-                                (row Tuple)] (Set Tuple)
+                                (row Tuple)]
+                               (Set Tuple)
                                (conj rows-value row))
                              (or known #{}) derived))))
           current)))))
 
-(defn- relations-stable?
-  [(before Db)
-   (after Db)
-   (relations (Vec String))] Bool
+(defn- relations-stable? [(before Db) (after Db) (relations (Vec String))] Bool
   (loop [remaining relations]
     (if (empty? remaining)
       true
@@ -756,9 +747,7 @@
           false)))))
 
 (defn fixpoint-oracle-with-candidates!
-  [(db0 Db)
-   (rules (Vec Rule))
-   (sources CandidateSources)] Db
+  [(db0 Db) (rules (Vec Rule)) (sources CandidateSources)] Db
   (let [relations (rule-head-relations rules)
         context (new-query-evaluation-context *query-control*)]
     (loop [db db0]
@@ -773,10 +762,7 @@
 (defn- fixpoint-oracle! [(db0 Db) (rules (Vec Rule))] Db
   (fixpoint-oracle-with-candidates! db0 rules {}))
 
-(defn- append-handle
-  [(index HandleBucket)
-   (key Any)
-   (handle Int)] HandleBucket
+(defn- append-handle [(index HandleBucket) (key Any) (handle Int)] HandleBucket
   (update index key
           (fn [(current (U (Vec Int) Nil))] (Vec Int)
             (if (nil? current)
@@ -784,9 +770,7 @@
               (conj current handle)))))
 
 (defn- add-position-handles
-  [(index PositionIndex)
-   (tuple Tuple)
-   (handle Int)] PositionIndex
+  [(index PositionIndex) (tuple Tuple) (handle Int)] PositionIndex
   (loop [position 0 current index]
     (if (>= position (count tuple))
       current
@@ -796,10 +780,7 @@
                       (append-handle bucket (nth tuple position) handle)))))))
 
 (defn- trie-add
-  [(trie HandleTrie)
-   (tuple Tuple)
-   (order (Vec Int))
-   (handle Int)] HandleTrie
+  [(trie HandleTrie) (tuple Tuple) (order (Vec Int)) (handle Int)] HandleTrie
   (let [(first-key Any) (nth tuple (nth order 0))
         (second-key Any) (nth tuple (nth order 1))
         (third-key Any) (nth tuple (nth order 2))
@@ -820,19 +801,14 @@
 
 (defn- trie-leaf-handles [(node HandleTrieLeaf)] (Vec Int)
   (ordered-handles
-   (reduce-kv (fn
-                [(handles (Set Int))
-                 (key Any)
-                 (child (Vec Int))] (Set Int)
+   (reduce-kv (fn [(handles (Set Int)) (key Any) (child (Vec Int))] (Set Int)
                 (add-handle-values handles child))
               #{} node)))
 
 (defn- trie-branch-handles [(node HandleTrieBranch)] (Vec Int)
   (ordered-handles
    (reduce-kv (fn
-                [(handles (Set Int))
-                 (key Any)
-                 (child HandleTrieLeaf)] (Set Int)
+                [(handles (Set Int)) (key Any) (child HandleTrieLeaf)] (Set Int)
                 (add-handle-values handles (trie-leaf-handles child)))
               #{} node)))
 
@@ -841,7 +817,8 @@
    (reduce-kv (fn
                 [(handles (Set Int))
                  (key Any)
-                 (child HandleTrieBranch)] (Set Int)
+                 (child HandleTrieBranch)]
+                (Set Int)
                 (add-handle-values handles (trie-branch-handles child)))
               #{} node)))
 
@@ -871,15 +848,15 @@
 (defn occurrence-candidate-source
   [(root t/TermStore)
    (lower-exclusive Int)
-   (upper-inclusive Int)] CandidateSource
+   (upper-inclusive Int)]
+  CandidateSource
   (->CandidateSource [] {} {} {} {}
     (->OccurrenceCandidateSource
       root lower-exclusive upper-inclusive (store/operation-postings root))
     nil))
 
 (defn rotation-candidate-source
-  [(rotation rot/Rotation)
-   (lower-exclusive Int)] CandidateSource
+  [(rotation rot/Rotation) (lower-exclusive Int)] CandidateSource
   (->CandidateSource [] {} {} {} {} nil
     (->RotationCandidateSource rotation lower-exclusive)))
 
@@ -897,8 +874,7 @@
 ;; Public because every candidate source built from a projected rotation has to
 ;; apply the same window: the rotation carries the upper snapshot only.
 (defn events-after-sequence
-  [(events (Vec t/Triple))
-   (lower-exclusive Int)] (Vec t/Triple)
+  [(events (Vec t/Triple)) (lower-exclusive Int)] (Vec t/Triple)
   (if (< lower-exclusive 0)
     events
     (filterv (fn [(event t/Triple)] Bool
@@ -906,9 +882,7 @@
       events)))
 
 (defn- candidate-source-add
-  [(relation String)
-   (source CandidateSource)
-   (tuple Tuple)] CandidateSource
+  [(relation String) (source CandidateSource) (tuple Tuple)] CandidateSource
   (let [(handle Int) (count (candidatesource-rows source))
         (with-row CandidateSource)
         (assoc source :rows (conj (candidatesource-rows source) tuple))]
@@ -924,15 +898,14 @@
 (defn- candidate-source-add-rows
   [(relation String)
    (source CandidateSource)
-   (tuples (Set Tuple))] CandidateSource
+   (tuples (Set Tuple))]
+  CandidateSource
   (reduce (fn [(current CandidateSource) (tuple Tuple)] CandidateSource
             (candidate-source-add relation current tuple))
           source tuples))
 
 (defn- build-candidate-sources
-  [(db Db)
-   (relations (Vec String))
-   (seed CandidateSources)] CandidateSources
+  [(db Db) (relations (Vec String)) (seed CandidateSources)] CandidateSources
   (reduce (fn [(sources CandidateSources) (relation String)] CandidateSources
             (if (contains? sources relation)
               sources
@@ -944,7 +917,8 @@
 (defn- add-delta-sources
   [(sources CandidateSources)
    (delta Db)
-   (relations (Vec String))] CandidateSources
+   (relations (Vec String))]
+  CandidateSources
   (reduce (fn [(current CandidateSources) (relation String)] CandidateSources
             (let [(tuples (Set Tuple)) (get delta relation #{})
                   (existing Any) (get current relation)
@@ -1000,8 +974,7 @@
         (text-search/source-result-error result))))))
 
 (defn build-text-candidates-for-attributes-result
-  [(propositions (Vec t/Triple))
-   (attributes (Set Any))] CandidateSourcesResult
+  [(propositions (Vec t/Triple)) (attributes (Set Any))] CandidateSourcesResult
   (let [(result text-search/TextSearchSourceResult)
         (text-search/build-source-for-attributes-result
          propositions attributes text-index/text-index-max-bytes)
@@ -1019,9 +992,7 @@
    (text-search/build-source propositions text-index/text-index-max-bytes)))
 
 (defn- bound-prefix
-  [(arguments (Vec QueryTerm))
-   (order (Vec Int))
-   (subst Substitution)] (Vec Any)
+  [(arguments (Vec QueryTerm)) (order (Vec Int)) (subst Substitution)] (Vec Any)
   (loop [(remaining (Vec Int)) order (prefix (Vec Any)) []]
     (if (empty? remaining)
       prefix
@@ -1033,7 +1004,8 @@
 (defn- triple-prefix-handles
   [(source CandidateSource)
    (arguments (Vec QueryTerm))
-   (subst Substitution)] (U (Vec Int) Nil)
+   (subst Substitution)]
+  (U (Vec Int) Nil)
   (let [spo-key (bound-prefix arguments [0 1 2] subst)
         pos-key (bound-prefix arguments [1 2 0] subst)
         osp-key (bound-prefix arguments [2 0 1] subst)
@@ -1051,7 +1023,8 @@
 (defn- positional-handles
   [(source CandidateSource)
    (arguments (Vec QueryTerm))
-   (subst Substitution)] (U (Vec Int) Nil)
+   (subst Substitution)]
+  (U (Vec Int) Nil)
   (loop [(position Int) 0 (best (Vec Int)) [] (found Bool) false]
     (if (>= position (count arguments))
       (if found best nil)
@@ -1070,7 +1043,8 @@
   [(source CandidateSource)
    (relation String)
    (arguments (Vec QueryTerm))
-   (subst Substitution)] (U (Vec Int) Nil)
+   (subst Substitution)]
+  (U (Vec Int) Nil)
   (let [occurrence (candidatesource-occurrence source)]
     (if (some? occurrence)
       (store/operation-candidate-positions
@@ -1095,7 +1069,8 @@
   [(source CandidateSource)
    (relation String)
    (arguments (Vec QueryTerm))
-   (subst Substitution)] Bool
+   (subst Substitution)]
+  Bool
   (let [rotation (candidatesource-rotation source)]
     (if (some? rotation)
       (let [(wanted Tuple) (ground arguments subst)]
@@ -1117,7 +1092,8 @@
   [(rotation RotationCandidateSource)
    (arguments (Vec QueryTerm))
    (subst Substitution)
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (let [(events (Vec t/Triple))
         (events-after-sequence
          (rot/matching (rotationcandidatesource-rotation rotation)
@@ -1148,7 +1124,8 @@
    (sources CandidateSources)
    (literal Literal)
    (subst Substitution)
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (let [(relation String) (literal-relation literal)
         (arguments (Vec QueryTerm)) (literal-arguments literal)
         (source (U CandidateSource VirtualCandidateSource Nil))
@@ -1199,7 +1176,8 @@
    (sources CandidateSources)
    (literal Literal)
    (subst Substitution)
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (if (query-check! context)
     (cond
       [(= :relation (literal-kind literal))
@@ -1215,7 +1193,8 @@
    (sources CandidateSources)
    (literal Literal)
    (substitutions (Vec Substitution))
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (loop [(remaining (Vec Substitution)) substitutions (results (Vec Substitution)) []]
     (if (or (empty? remaining)
             (not (query-evaluation-context-open? context)))
@@ -1232,7 +1211,8 @@
    (sources CandidateSources)
    (body (Vec Literal))
    (seed Substitution)
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (loop [(remaining (Vec Literal)) body (substitutions (Vec Substitution)) [seed]]
     (cond
       [(not (query-evaluation-context-open? context)) []]
@@ -1248,7 +1228,8 @@
   [(db Db)
    (sources CandidateSources)
    (value Rule)
-   (context QueryEvaluationContext)] (Set Tuple)
+   (context QueryEvaluationContext)]
+  (Set Tuple)
   (let [substitutions
         (body-results-indexed! db sources (rule-body value) {} context)]
     (if (query-evaluation-context-open? context)
@@ -1258,8 +1239,7 @@
       #{})))
 
 (defn- delta-relation-positions
-  [(body (Vec Literal))
-   (delta-relations (Set String))] (Vec Int)
+  [(body (Vec Literal)) (delta-relations (Set String))] (Vec Int)
   (loop [(position Int) 0 (remaining (Vec Literal)) body (positions (Vec Int)) []]
     (if (empty? remaining)
       positions
@@ -1291,7 +1271,8 @@
    (delta-sources CandidateSources)
    (body (Vec Literal))
    (pin Int)
-   (context QueryEvaluationContext)] (Vec Substitution)
+   (context QueryEvaluationContext)]
+  (Vec Substitution)
   (loop [(position Int) 0 (remaining (Vec Literal)) body (substitutions (Vec Substitution)) [{}]]
     (if (or (empty? remaining)
             (not (query-evaluation-context-open? context)))
@@ -1314,7 +1295,8 @@
    (delta-sources CandidateSources)
    (delta-relations (Set String))
    (value Rule)
-   (context QueryEvaluationContext)] (Set Tuple)
+   (context QueryEvaluationContext)]
+  (Set Tuple)
   (let [head (rule-head-arguments value)
         body (rule-body value)]
     (loop [(remaining (Vec Int)) (delta-relation-positions body delta-relations)
@@ -1329,16 +1311,12 @@
             (recur
              (rest remaining)
              (reduce (fn
-                       [(current (Set Tuple))
-                        (subst Substitution)] (Set Tuple)
+                       [(current (Set Tuple)) (subst Substitution)] (Set Tuple)
                        (conj current (ground head subst)))
                      derived substitutions))
             #{}))))))
 
-(defn- db-new-only
-  [(candidate Db)
-   (db Db)
-   (relations (Vec String))] Db
+(defn- db-new-only [(candidate Db) (db Db) (relations (Vec String))] Db
   (reduce
    (fn [(delta Db) (relation String)] Db
      (let [new-tuples
@@ -1350,10 +1328,7 @@
        (if (empty? new-tuples) delta (assoc delta relation new-tuples))))
    {} relations))
 
-(defn- db-merge-delta
-  [(db Db)
-   (delta Db)
-   (relations (Vec String))] Db
+(defn- db-merge-delta [(db Db) (delta Db) (relations (Vec String))] Db
   (reduce
    (fn [(current Db) (relation String)] Db
      (let [new-tuples (get delta relation #{})]
@@ -1363,7 +1338,8 @@
                  (fn [(known (U (Set Tuple) Nil))] (Set Tuple)
                    (reduce (fn
                              [(rows-value (Set Tuple))
-                              (tuple Tuple)] (Set Tuple)
+                              (tuple Tuple)]
+                             (Set Tuple)
                              (conj rows-value tuple))
                            (or known #{}) new-tuples))))))
    db relations))
@@ -1383,7 +1359,8 @@
    (rules (Vec Rule))
    (relations (Vec String))
    (delta-relations (Vec String))
-   (context QueryEvaluationContext)] Db
+   (context QueryEvaluationContext)]
+  Db
   (let [delta-set (set delta-relations)
         delta-sources (build-candidate-sources delta delta-relations {})
         candidate
@@ -1403,7 +1380,8 @@
                          (fn [(known (U (Set Tuple) Nil))] (Set Tuple)
                            (reduce (fn
                                      [(rows-value (Set Tuple))
-                                      (tuple Tuple)] (Set Tuple)
+                                      (tuple Tuple)]
+                                     (Set Tuple)
                                      (conj rows-value tuple))
                                    (or known #{}) derived))))
                 current))))]
@@ -1415,7 +1393,8 @@
   [(db0 Db)
    (rules (Vec Rule))
    (candidates CandidateSources)
-   (context QueryEvaluationContext)] Db
+   (context QueryEvaluationContext)]
+  Db
   (let [relations (rule-head-relations rules)
         read-relations (positive-relation-names rules)
         head-set (set relations)
@@ -1440,7 +1419,8 @@
                          (fn [(known (U (Set Tuple) Nil))] (Set Tuple)
                            (reduce (fn
                                      [(rows-value (Set Tuple))
-                                      (tuple Tuple)] (Set Tuple)
+                                      (tuple Tuple)]
+                                     (Set Tuple)
                                      (conj rows-value tuple))
                                    (or known #{}) derived))))
                 current))))]
@@ -1467,7 +1447,8 @@
   [(db0 Db)
    (rules (Vec Rule))
    (candidates CandidateSources)
-   (control QueryControl?)] QueryEvaluationResult
+   (control QueryControl?)]
+  QueryEvaluationResult
   (let [context (new-query-evaluation-context control)
         db (fixpoint-with-candidates-context! db0 rules candidates context)]
     (->QueryEvaluationResult db (query-evaluation-context-error context))))
@@ -1476,14 +1457,13 @@
   [(db0 Db)
    (rules (Vec Rule))
    (candidates CandidateSources)
-   (control QueryControl?)] Db
+   (control QueryControl?)]
+  Db
   (query-evaluation-db-or-throw!
    (fixpoint-with-candidates-result! db0 rules candidates control)))
 
 (defn fixpoint-with-candidates!
-  [(db0 Db)
-   (rules (Vec Rule))
-   (candidates CandidateSources)] Db
+  [(db0 Db) (rules (Vec Rule)) (candidates CandidateSources)] Db
   (fixpoint-with-candidates-controlled!
    db0 rules candidates *query-control*))
 
@@ -1491,9 +1471,7 @@
   (fixpoint-with-candidates! db0 rules {}))
 
 (defn fixpoint-sourced!
-  [(db0 Db)
-   (registered CandidateSources)
-   (rules (Vec Rule))] Db
+  [(db0 Db) (registered CandidateSources) (rules (Vec Rule))] Db
   (fixpoint-with-candidates! db0 rules registered))
 
 (defn run-rules! [(propositions (Vec t/Triple)) (rules (Vec Rule))] Db
@@ -1503,7 +1481,8 @@
   [(db0 Db)
    (strata (Vec (Vec Rule)))
    (candidates CandidateSources)
-   (control QueryControl?)] QueryEvaluationResult
+   (control QueryControl?)]
+  QueryEvaluationResult
   (let [context (new-query-evaluation-context control)]
     (loop [remaining strata db db0]
       (if (or (empty? remaining)
@@ -1519,15 +1498,14 @@
   [(db0 Db)
    (strata (Vec (Vec Rule)))
    (candidates CandidateSources)
-   (control QueryControl?)] Db
+   (control QueryControl?)]
+  Db
   (query-evaluation-db-or-throw!
    (run-strata-db-with-candidates-result!
     db0 strata candidates control)))
 
 (defn run-strata-db-with-candidates!
-  [(db0 Db)
-   (strata (Vec (Vec Rule)))
-   (candidates CandidateSources)] Db
+  [(db0 Db) (strata (Vec (Vec Rule))) (candidates CandidateSources)] Db
   (run-strata-db-with-candidates-controlled!
    db0 strata candidates *query-control*))
 
@@ -1535,9 +1513,7 @@
   (run-strata-db-with-candidates! db0 strata {}))
 
 (defn run-strata-db-sourced!
-  [(db0 Db)
-   (sources CandidateSources)
-   (strata (Vec (Vec Rule)))] Db
+  [(db0 Db) (sources CandidateSources) (strata (Vec (Vec Rule)))] Db
   (run-strata-db-with-candidates! db0 strata sources))
 
 (defn run-strata! [(propositions (Vec t/Triple)) (strata (Vec (Vec Rule)))] Db

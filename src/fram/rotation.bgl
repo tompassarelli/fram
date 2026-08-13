@@ -48,18 +48,12 @@
 ;; occurrence coordinate, so this index needs no keys, no leaves and no
 ;; codes: key k is event position k. The chain prepends, so a repeated
 ;; occurrence resolves to its newest event without a replace step.
-(defrecord OccurrenceIndex
-  [(width Int)
-   (heads (Vec Int))
-   (chain (Vec Int))])
+(defrecord OccurrenceIndex [(width Int) (heads (Vec Int)) (chain (Vec Int))])
 
 ;; One committed-but-unprojected operation. `event` carries the assertion
 ;; occurrence for an assert; a retract names only its proposition, so `event`
 ;; then repeats the proposition and is never read.
-(defrecord PendingOp
-  [(action Keyword)
-   (proposition t/Triple)
-   (event t/Triple)])
+(defrecord PendingOp [(action Keyword) (proposition t/Triple) (event t/Triple)])
 
 (defrecord Rotation
   [(space-id String)
@@ -128,10 +122,7 @@
       [(= shape shape-t2) (hash-one (t/triple-t2 proposition))]
       [:else (hash-one (t/triple-t3 proposition))])))
 
-(defn- same-shape-key?
-  [(shape Int)
-   (left t/Triple)
-   (right t/Triple)] Bool
+(defn- same-shape-key? [(shape Int) (left t/Triple) (right t/Triple)] Bool
   (let [(lp t/Triple) (t/triple-t3 left) (rp t/Triple) (t/triple-t3 right)]
     (cond
       [(= shape shape-t1) (= (t/triple-t1 lp) (t/triple-t1 rp))]
@@ -162,10 +153,7 @@
 ;; keys in that slot, comparing each candidate against the event that named it.
 
 (defn- bucket-leaf-one
-  [(bucket Bucket)
-   (source (Vec t/Triple))
-   (shape Int)
-   (a Any)] (Vec t/Triple)
+  [(bucket Bucket) (source (Vec t/Triple)) (shape Int) (a Any)] (Vec t/Triple)
   (let [(codes (Vec Int)) (bucket-codes bucket)
         (chain (Vec Int)) (bucket-chain bucket)]
     (loop [(key Int)
@@ -180,10 +168,7 @@
             (recur (nth chain key))))))))
 
 (defn- bucket-leaf-two
-  [(bucket Bucket)
-   (source (Vec t/Triple))
-   (a Any)
-   (b Any)] (Vec t/Triple)
+  [(bucket Bucket) (source (Vec t/Triple)) (a Any) (b Any)] (Vec t/Triple)
   (let [(codes (Vec Int)) (bucket-codes bucket)
         (chain (Vec Int)) (bucket-chain bucket)]
     (loop [(key Int)
@@ -203,7 +188,8 @@
 (defn- occurrence-event
   [(index OccurrenceIndex)
    (source (Vec t/Triple))
-   (occurrence t/Triple)] t/Triple?
+   (occurrence t/Triple)]
+  t/Triple?
   (let [(chain (Vec Int)) (occurrenceindex-chain index)]
     (loop [(position Int)
            (nth (occurrenceindex-heads index)
@@ -225,11 +211,7 @@
 (defn- slot-matches? [(pattern Any) (term Any)] Bool
   (or (nil? pattern) (= pattern term)))
 
-(defn- pattern-match?
-  [(proposition t/Triple)
-   (t1 Any)
-   (t2 Any)
-   (t3 Any)] Bool
+(defn- pattern-match? [(proposition t/Triple) (t1 Any) (t2 Any) (t3 Any)] Bool
   (and (slot-matches? t1 (t/triple-t1 proposition))
     (and (slot-matches? t2 (t/triple-t2 proposition))
       (slot-matches? t3 (t/triple-t3 proposition)))))
@@ -239,10 +221,7 @@
 ;; slot excludes. A leaf that survives whole is returned as it stands, so the
 ;; common one-answer case allocates nothing.
 (defn- narrowed
-  [(base (Vec t/Triple))
-   (t1 Any)
-   (t2 Any)
-   (t3 Any)] (Vec t/Triple)
+  [(base (Vec t/Triple)) (t1 Any) (t2 Any) (t3 Any)] (Vec t/Triple)
   (let [(kept Int)
         (loop [(position Int) 0 (total Int) 0]
           (if (>= position (count base))
@@ -263,8 +242,7 @@
            (inc position)))))))
 
 (defn- without-newest-of
-  [(events (Vec t/Triple))
-   (proposition t/Triple)] (Vec t/Triple)
+  [(events (Vec t/Triple)) (proposition t/Triple)] (Vec t/Triple)
   (let [(at Int)
         (loop [(position Int) (dec (count events))]
           (if (< position 0)
@@ -285,7 +263,8 @@
    (pending (Vec PendingOp))
    (t1 Any)
    (t2 Any)
-   (t3 Any)] (Vec t/Triple)
+   (t3 Any)]
+  (Vec t/Triple)
   (if (empty? pending)
     base
     (loop [(events (Vec t/Triple)) base (position Int) 0]
@@ -321,10 +300,7 @@
      shape-t1 t1)
    (rotation-pending rotation) t1 nil nil))
 
-(defn by-t12
-  [(rotation Rotation)
-   (t1 Any)
-   (t2 Any)] (Vec t/Triple)
+(defn by-t12 [(rotation Rotation) (t1 Any) (t2 Any)] (Vec t/Triple)
   (merged-matching
    (bucket-leaf-two (rotation-spo rotation) (rotation-events rotation) t1 t2)
    (rotation-pending rotation) t1 t2 nil))
@@ -335,10 +311,7 @@
      shape-t2 t2)
    (rotation-pending rotation) nil t2 nil))
 
-(defn by-t23
-  [(rotation Rotation)
-   (t2 Any)
-   (t3 Any)] (Vec t/Triple)
+(defn by-t23 [(rotation Rotation) (t2 Any) (t3 Any)] (Vec t/Triple)
   (merged-matching
    (narrowed
     (bucket-leaf-one (rotation-osp rotation) (rotation-events rotation)
@@ -352,10 +325,7 @@
      shape-t3 t3)
    (rotation-pending rotation) nil nil t3))
 
-(defn by-t13
-  [(rotation Rotation)
-   (t1 Any)
-   (t3 Any)] (Vec t/Triple)
+(defn by-t13 [(rotation Rotation) (t1 Any) (t3 Any)] (Vec t/Triple)
   (merged-matching
    (narrowed
     (bucket-leaf-one (rotation-osp rotation) (rotation-events rotation)
@@ -363,9 +333,7 @@
     t1 nil nil)
    (rotation-pending rotation) t1 nil t3))
 
-(defn by-proposition
-  [(rotation Rotation)
-   (proposition t/Triple)] (Vec t/Triple)
+(defn by-proposition [(rotation Rotation) (proposition t/Triple)] (Vec t/Triple)
   (merged-matching
    (narrowed
     (bucket-leaf-two (rotation-spo rotation) (rotation-events rotation)
@@ -378,11 +346,7 @@
 
 ;; nil in a slot means UNBOUND. This is the semantic entry point; the bucket
 ;; layout above is private detail every caller is expected to route through.
-(defn matching
-  [(rotation Rotation)
-   (t1 Any)
-   (t2 Any)
-   (t3 Any)] (Vec t/Triple)
+(defn matching [(rotation Rotation) (t1 Any) (t2 Any) (t3 Any)] (Vec t/Triple)
   (cond
     [(and (some? t1) (and (some? t2) (some? t3)))
      (by-proposition rotation (t/triple t1 t2 t3))]
@@ -486,7 +450,8 @@
   [(codes (Vec Int))
    (source (Vec t/Triple))
    (heads (Vec (Atom Int)))
-   (width Int)] (Vec Int)
+   (width Int)]
+  (Vec Int)
   (loop [(chain (Vec Int)) empty-ints (key Int) 0]
     (if (>= key (count codes))
       chain
@@ -522,7 +487,8 @@
    (source (Vec t/Triple))
    (slot Int)
    (shape Int)
-   (event t/Triple)] Int
+   (event t/Triple)]
+  Int
   (loop [(key Int) (deref (nth heads slot))]
     (if (< key 0)
       -1
@@ -538,7 +504,8 @@
   [(events (Vec t/Triple))
    (first-shape Int)
    (last-shape Int)
-   (initial-width Int)] Bucket
+   (initial-width Int)]
+  Bucket
   (loop [(width Int) initial-width
          (codes (Vec Int)) empty-ints
          (cells (Vec (Atom (Vec t/Triple)))) empty-event-cells
@@ -580,8 +547,7 @@
 ;; is unique per operation, so key k is event position k, and prepending each
 ;; event onto its slot chain makes a repeated occurrence resolve newest-first.
 (defn- projected-occurrences!
-  [(events (Vec t/Triple))
-   (width Int)] OccurrenceIndex
+  [(events (Vec t/Triple)) (width Int)] OccurrenceIndex
   (let [(heads (Vec (Atom Int))) (fresh-head-cells width)]
     (loop [(chain (Vec Int)) empty-ints (position Int) 0]
       (if (>= position (count events))
@@ -594,9 +560,7 @@
             (recur linked (inc position))))))))
 
 (defn- projected!
-  [(space-id String)
-   (version Int)
-   (events (Vec t/Triple))] Rotation
+  [(space-id String) (version Int) (events (Vec t/Triple))] Rotation
   (let [(total Int) (count events)]
     (->Rotation space-id version events
       (projected-occurrences! events (initial-bucket-width total))
@@ -618,7 +582,8 @@
 (defn- pending-with-frame
   [(pending (Vec PendingOp))
    (space-id String)
-   (frame t/TransactionFrame)] (Vec PendingOp)
+   (frame t/TransactionFrame)]
+  (Vec PendingOp)
   (let [(coordinate t/Triple)
         (t/transaction-coordinate space-id (t/transactionframe-sequence frame))
         (operations (Vec t/CommitOperation)) (t/transactionframe-operations frame)]
@@ -643,7 +608,8 @@
   [(rotation Rotation)
    (space-id String)
    (sequence Int)
-   (operations (Vec t/CommitOperation))] Rotation
+   (operations (Vec t/CommitOperation))]
+  Rotation
   (assoc rotation :pending
     (pending-with-frame (rotation-pending rotation) space-id
       (t/->TransactionFrame sequence operations))))

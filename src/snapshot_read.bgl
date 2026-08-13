@@ -14,9 +14,7 @@
 (define-mode strict)
 
 (defn live-cids-lp
-  [(ctx (Atom fram.types/TermStore))
-   (te Int)
-   (pid Int)] (Vec Int)
+  [(ctx (Atom fram.types/TermStore)) (te Int) (pid Int)] (Vec Int)
   (filterv
     (fn [(cid Int)] Bool (c/live? ctx cid))
     (c/raw-by-lp ctx te pid)))
@@ -24,10 +22,7 @@
 (defn seq-of [(ctx (Atom fram.types/TermStore)) (cid Int)] Int
   (let [txid (c/fact-tx ctx cid)] (if (nil? txid) 0 (c/tx-seq ctx txid))))
 
-(defn base-version
-  [(ctx (Atom fram.types/TermStore))
-   (te Int)
-   (pid Int)] Int
+(defn base-version [(ctx (Atom fram.types/TermStore)) (te Int) (pid Int)] Int
   (reduce max
     0
     (map (fn [(cid Int)] Int (seq-of ctx cid)) (live-cids-lp ctx te pid))))
@@ -61,18 +56,12 @@
       (c/all-facts ctx))))
 
 (defn live-as-of-lp
-  [(ctx (Atom fram.types/TermStore))
-   (s Int)
-   (te Int)
-   (pid Int)] (Vec Int)
+  [(ctx (Atom fram.types/TermStore)) (s Int) (te Int) (pid Int)] (Vec Int)
   (let [all (live-as-of ctx s)]
     (filterv (fn [(cid Int)] Bool (and (= (c/fact-l ctx cid) te) (= (c/fact-p ctx cid) pid)))
       all)))
 
-(defn live-r-on
-  [(ctx (Atom fram.types/TermStore))
-   (cid Int)
-   (pid Int?)] Int?
+(defn live-r-on [(ctx (Atom fram.types/TermStore)) (cid Int) (pid Int?)] Int?
   (if (nil? pid)
     nil
     (let [(fcid Int?) (first (live-cids-lp ctx cid pid)) (f Any) (if (nil? fcid) nil (c/fact-of ctx fcid)) (r Any) (if (nil? f) nil (get f :r))]
@@ -102,7 +91,8 @@
   [(ctx (Atom fram.types/TermStore))
    (te Int)
    (pid Int)
-   (policy Keyword)] (Vec Int)
+   (policy Keyword)]
+  (Vec Int)
   (let [live (live-cids-lp ctx te pid)]
     (if (= policy :add-wins)
       (let [all (c/raw-by-lp ctx te pid) resurrected (filterv (fn
@@ -111,8 +101,7 @@
       live)))
 
 (defn view-selects
-  [(ctx (Atom fram.types/TermStore))
-   (view String)] (U (Set Int) Nil)
+  [(ctx (Atom fram.types/TermStore)) (view String)] (U (Set Int) Nil)
   (let [session (s/session! ctx)
         ve (s/resolve-name session view)
         sel (s/resolve-predicate session "selects")]
@@ -123,9 +112,7 @@
         (live-cids-lp ctx ve sel)))))
 
 (defn pool-of
-  [(ctx (Atom fram.types/TermStore))
-   (view String?)
-   (cids (Vec Int))] (Vec Int)
+  [(ctx (Atom fram.types/TermStore)) (view String?) (cids (Vec Int))] (Vec Int)
   (if (nil? view)
     cids
     (let [sel (view-selects ctx view)]
@@ -135,17 +122,13 @@
           (if (empty? in-view) cids in-view))))))
 
 (defn elect
-  [(ctx (Atom fram.types/TermStore))
-   (view String?)
-   (cids (Vec Int))] Int?
+  [(ctx (Atom fram.types/TermStore)) (view String?) (cids (Vec Int))] Int?
   (if (empty? cids)
     nil
     (first (sort-by (fn [(cid Int)] (Vec Any) [cid (str (agent-of ctx cid))]) (pool-of ctx view cids)))))
 
 (defn elect-causal
-  [(ctx (Atom fram.types/TermStore))
-   (view String?)
-   (cids (Vec Int))] Int?
+  [(ctx (Atom fram.types/TermStore)) (view String?) (cids (Vec Int))] Int?
   (if (empty? cids)
     nil
     (first (sort-by (fn [(cid Int)] (Vec Any) (causal-key ctx cid)) (pool-of ctx view cids)))))

@@ -34,7 +34,7 @@
   (vec (sort (mapv (fn [p] (t/triple-t1 p)) (filterv (fn [p] (and (= regime-pred (t/triple-t2 p)) (= reg (t/triple-t3 p)))) (c/live-propositions ctx))))))
 
 (defn q4! [rep-defs ^String cg-path]
-  (let [cg-blocks (cg/parse-corpus cg-path)
+  (let [cg-blocks (cg/parse-corpus! cg-path)
    graph (cg/build-graph cg-blocks)
    defns (vec (:defns graph))
    edges (vec (:edges graph))

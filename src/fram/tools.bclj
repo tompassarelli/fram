@@ -50,17 +50,10 @@
 (defrecord ProfileViolation [(proposition Any) (rule Any)])
 
 ;; tool-spec records — a catalog entry + its params
-(defrecord Param
-  [(name String)
-   (type String)
-   (required Bool)])
+(defrecord Param [(name String) (type String) (required Bool)])
 
 (defrecord ToolSpec
-  [(name String)
-   (desc String)
-   (params (Vec Param))
-   (op Op)
-   (pred String)])
+  [(name String) (desc String) (params (Vec Param)) (op Op) (pred String)])
 
 ;; --- write-value normalization ----------------------------------------------
 ;; GAP: id is an EDN arg value (string id OR other literal) -> Any.
@@ -88,10 +81,7 @@
       false
       (if (= pred (first remaining)) true (recur (rest remaining))))))
 
-(defn ref-value
-  [(session schema/Session)
-   (pred String)
-   (value Any)] Any
+(defn ref-value [(session schema/Session) (pred String) (value Any)] Any
   (let [canonical (canonical-predicate session pred)
         pid (schema/resolve-predicate session canonical)
         declared (if (nil? pid) nil (schema/lookup session pid schema/value-kind-predicate))
@@ -246,7 +236,8 @@
   [(ctx (Atom t/TermStore))
    (cat (Vec ToolSpec))
    (tool-name String)
-   (args (Map Keyword Any))] Any
+   (args (Map Keyword Any))]
+  Any
   (let [(tool String) (if (= tool-name "query") "ask" (if (= tool-name "untell") "retract" tool-name)) (spec ToolSpec?) (spec-by-name cat tool) (session schema/Session) (schema/session! ctx) (propositions (Vec t/Triple)) (rotation/propositions (rotation/all-occurrences (schema/view session)))]
     (if (nil? spec)
       {:error [(str "unknown tool '" tool "' — call `tools` for the catalog")]}

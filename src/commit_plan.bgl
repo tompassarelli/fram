@@ -12,16 +12,12 @@
 (define-mode strict)
 
 (defn version-conflict?
-  [(single Bool)
-   (base-version Int)
-   (expected-version Int?)] Bool
+  [(single Bool) (base-version Int) (expected-version Int?)] Bool
   (if (nil? expected-version)
     false
     (and single (> base-version expected-version))))
 
-(defn expected-value-match?
-  [(live-values (Set Int))
-   (expected-value Int?)] Bool
+(defn expected-value-match? [(live-values (Set Int)) (expected-value Int?)] Bool
   (if (nil? expected-value) false (contains? live-values expected-value)))
 
 (defrecord CommitIntent
@@ -37,8 +33,7 @@
    (cycle Bool)])
 
 (defn commit-plan
-  [(head-version Int)
-   (intents (Vec CommitIntent))] (Map Keyword Any)
+  [(head-version Int) (intents (Vec CommitIntent))] (Map Keyword Any)
   (loop [(remaining (Vec CommitIntent)) intents (writes (Vec Any)) [] (idempotent (Vec String)) []]
     (if (empty? remaining)
       {:writes writes :idempotent idempotent}
@@ -101,20 +96,13 @@
                 group-index
                 (->GroupBatch (:path group) (conj (:indices group) index))))))))))
 
-(defrecord LeaseSnapshot
-  [(holder String)
-   (exp Int)
-   (epoch Int)])
+(defrecord LeaseSnapshot [(holder String) (exp Int) (epoch Int)])
 
 (defn lease-expired? [(lease LeaseSnapshot?) (now-ms Int)] Bool
   (if (nil? lease) false (<= (:exp lease) now-ms)))
 
 (defn valid-lease-request?
-  [(holder Any)
-   (resource Any)
-   (ttl-ms Any)
-   (now-ms Int)
-   (max-ms Int)] Bool
+  [(holder Any) (resource Any) (ttl-ms Any) (now-ms Int) (max-ms Int)] Bool
   (and (string? holder)
     (not (str/blank? holder))
     (not (str/includes? holder "|"))
@@ -128,10 +116,7 @@
   (and (integer? epoch) (pos? epoch) (<= epoch max-epoch)))
 
 (defn lease-fence-ok?
-  [(lease LeaseSnapshot?)
-   (holder Any)
-   (epoch Any)
-   (now-ms Int)] Bool
+  [(lease LeaseSnapshot?) (holder Any) (epoch Any) (now-ms Int)] Bool
   (and (not (nil? lease))
     (> (:exp lease) now-ms)
     (= (:holder lease) holder)
@@ -147,7 +132,8 @@
    (ttl-ms Any)
    (now-ms Int)
    (max-ms Int)
-   (version Int)] (Map Keyword Any)
+   (version Int)]
+  (Map Keyword Any)
   (cond
     (not (valid-lease-request? holder resource ttl-ms now-ms max-ms))
     {:reject :invalid-lease-request :version version}
@@ -165,7 +151,8 @@
    (now-ms Int)
    (max-ms Int)
    (max-epoch Int)
-   (version Int)] (Map Keyword Any)
+   (version Int)]
+  (Map Keyword Any)
   (cond
     (or (not (valid-lease-request? holder resource ttl-ms now-ms max-ms))
       (not (valid-lease-epoch? expected-epoch max-epoch)))
@@ -182,7 +169,8 @@
    (holder Any)
    (epoch Any)
    (require-epoch Bool)
-   (version Int)] (Map Keyword Any)
+   (version Int)]
+  (Map Keyword Any)
   (if (and (not (nil? lease)) (= (:holder lease) holder) (or (not require-epoch) (= (:epoch lease) epoch)))
     {:retract true}
     {:ok version :noop true}))
@@ -206,7 +194,8 @@
 (defn boot-install-decision
   [(candidate-present Bool)
    (verification-enabled Bool)
-   (verification-ok Bool)] Keyword
+   (verification-ok Bool)]
+  Keyword
   (if (and candidate-present (or (not verification-enabled) verification-ok))
     :snapshot
     :fold))
@@ -226,7 +215,8 @@
    (fingerprint-computable Bool)
    (fingerprint-matches Bool)
    (bad-identity Any)
-   (past-eof Any)] SidecarValidation
+   (past-eof Any)]
+  SidecarValidation
   (cond
     (not sidecar-map)
     (->SidecarValidation :no-sidecar nil)
@@ -254,17 +244,13 @@
     (->SidecarValidation nil nil)))
 
 (defn reload-entry-decision
-  [(nonblocking-if-active Bool)
-   (active-reloads Int)] Keyword
+  [(nonblocking-if-active Bool) (active-reloads Int)] Keyword
   (if (and nonblocking-if-active (pos? active-reloads))
     :in-progress
     :participate))
 
 (defn reload-watermark-decision
-  [(split-logs Bool)
-   (from-tx Int)
-   (tail-max Int)
-   (log-max Int)] Keyword
+  [(split-logs Bool) (from-tx Int) (tail-max Int) (log-max Int)] Keyword
   (if split-logs
     (if (< log-max from-tx) :refused :whole)
     (cond (> tail-max from-tx) :tail (< log-max from-tx) :refused :else :whole)))
@@ -274,7 +260,8 @@
    (same-target Bool)
    (exact-base Bool)
    (generation-advanced Bool)
-   (stamps-converged Bool)] Keyword
+   (stamps-converged Bool)]
+  Keyword
   (cond
     (= candidate-mode :raced)
     :retry
@@ -288,23 +275,24 @@
     :retry))
 
 (defn reload-result-decision
-  [(result Keyword)
-   (attempt Int)
-   (max-attempts Int)] Keyword
+  [(result Keyword) (attempt Int) (max-attempts Int)] Keyword
   (if (= result :retry)
     (if (< attempt (dec max-attempts)) :retry :exhausted)
     :return))
 
 (defn migrate-input-plan [(raw (Vec Any))] (Map Keyword Any)
   (let [flat-max-tx (reduce max 0 (map (fn [(line Any)] Int (let [tx (get line :tx)] (if (int? tx) tx 0))) raw)) asserts (filterv (fn
-                                                                                                                                      [(line Any)] Bool (boolean (and (get line :l) (get line :p) (get line :r)))) raw)]
+                                                                                                                                    [(line Any)]
+                                                                                                                                    Bool
+                                                                                                                                    (boolean (and (get line :l) (get line :p) (get line :r)))) raw)]
     {:flat-max-tx flat-max-tx :asserts asserts}))
 
 (defn migrate-schema-plan
   [(predicates (Vec String))
    (card-only (Vec String))
    (by-pred (Set String))
-   (schema-preds (Set String))] (Map Keyword Any)
+   (schema-preds (Set String))]
+  (Map Keyword Any)
   {:domain
    (filterv (fn [(pred String)] Bool (not (contains? schema-preds pred)))
      predicates)
@@ -316,29 +304,27 @@
   [(single-valued (Vec String))
    (schema-preds (Set String))
    (cmap (Map String Bool))
-   (current-single (Set String))] (Vec String)
+   (current-single (Set String))]
+  (Vec String)
   (filterv (fn [(pred String)] Bool (and (not (contains? schema-preds pred)) (not (contains? cmap pred)) (not (contains? current-single pred))))
     single-valued))
 
 (defn tail-input-plan
-  [(lines (Vec Any))
-   (schema-preds (Set String))] (Map Keyword Any)
+  [(lines (Vec Any)) (schema-preds (Set String))] (Map Keyword Any)
   (let [valid (filterv (fn [(line Any)] Bool (boolean (and (get line :l) (get line :p) (get line :r) (int? (get line :tx)) (not (contains? schema-preds (get line :p)))))) lines) max-tx (reduce max 0 (map (fn
-                                                                                                                                                                                                                [(line Any)] Int (get line :tx)) valid))]
+                                                                                                                                                                                                              [(line Any)]
+                                                                                                                                                                                                              Int
+                                                                                                                                                                                                              (get line :tx)) valid))]
     {:valid valid :max-tx max-tx}))
 
 (defn tail-keyed-latest
-  [(single-preds (Set String))
-   (lines (Vec Any))] (Map Any Any)
+  [(single-preds (Set String)) (lines (Vec Any))] (Map Any Any)
   (reduce (fn [(latest (Map Any Any)) (line Any)] (Map Any Any) (let [(pred String) (get line :p) (key Any) (if (contains? single-preds pred) [(get line :l) pred] [(get line :l) pred (get line :r)]) (previous Any) (get latest key) (previous-tx Any) (if (nil? previous) nil (get previous :tx)) (line-tx Any) (get line :tx)] (if (and (int? previous-tx) (int? line-tx) (>= previous-tx line-tx)) latest (assoc latest key line))))
     {}
     lines))
 
 (defrecord TailPredicatePlan
-  [(pred String)
-   (action Keyword)
-   (cardinality String)
-   (value-kind String)])
+  [(pred String) (action Keyword) (cardinality String) (value-kind String)])
 
 (defn tail-predicate-plan
   [(domain (Vec String))
@@ -346,16 +332,15 @@
    (single-preds (Set String))
    (declared-preds (Set String))
    (current-cardinality (Map String String))
-   (link-preds (Set String))] (Vec TailPredicatePlan)
+   (link-preds (Set String))]
+  (Vec TailPredicatePlan)
   (into []
     (concat (map (fn [(pred String)] TailPredicatePlan (let [(want String) (if (contains? single-preds pred) "single" "multi") (action Keyword) (cond (not (contains? declared-preds pred)) :define (not= want (get current-cardinality pred)) :update :else :keep) (value-kind String) (if (contains? link-preds pred) "ref" "literal")] (->TailPredicatePlan pred action want value-kind))) domain)
       (map (fn [(pred String)] TailPredicatePlan (let [(want String) (if (contains? single-preds pred) "single" "multi") (action Keyword) (if (not= want (get current-cardinality pred)) :define :keep)] (->TailPredicatePlan pred action want "literal")))
         card-only))))
 
 (defn tail-fact-decision
-  [(retract Bool)
-   (single Bool)
-   (value-present Bool)] (Map Keyword Keyword)
+  [(retract Bool) (single Bool) (value-present Bool)] (Map Keyword Keyword)
   (cond
     retract
     {:action :retract :selection (if single :all :matching)}

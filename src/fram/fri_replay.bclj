@@ -96,11 +96,7 @@
 (def line-invalid Int 4)
 
 (defrecord ParsedFact
-  [(valid Bool)
-   (predicate String)
-   (value String)
-   (base Int)
-   (has-base Bool)])
+  [(valid Bool) (predicate String) (value String) (base Int) (has-base Bool)])
 (defrecord ParsedOp
   [(kind Int)
    (subject String)
@@ -152,9 +148,7 @@
       (if (parsedfact-valid (nth facts index)) (recur (+ index 1)) false))))
 
 (defn- parse-mutation
-  [(operation String)
-   (fields (Vec String))
-   (arity Int)] ParsedOp
+  [(operation String) (fields (Vec String)) (arity Int)] ParsedOp
   (if (or (< arity 4) (> arity 5))
     (invalid-op (str "invalid field count for " operation))
     (if (and (= operation "assert-at-version") (not (= arity 5)))
@@ -172,9 +166,7 @@
               (invalid-op "base is not an integer"))))))))
 
 (defn- parse-batch
-  [(operation String)
-   (fields (Vec String))
-   (arity Int)] ParsedOp
+  [(operation String) (fields (Vec String)) (arity Int)] ParsedOp
   (if (= operation "assert-batch-at-version")
     (if (= arity 4)
       (let [(parsed IntParse) (parse-int (nth fields 2))]
@@ -211,17 +203,10 @@
 (def act-assert Int 1)
 (def act-retract Int 2)
 
-(defrecord ModelTriple
-  [(t1 String)
-   (t2 String)
-   (t3 String)])
+(defrecord ModelTriple [(t1 String) (t2 String) (t3 String)])
 (defrecord Model [(triples (Vec ModelTriple)) (version Int)])
 (defrecord Action
-  [(operation Int)
-   (t1 String)
-   (t2 String)
-   (t3 String)
-   (local-base Bool)])
+  [(operation Int) (t1 String) (t2 String) (t3 String) (local-base Bool)])
 (defrecord ReplayCommit [(action Int) (triple ModelTriple)])
 
 (def no-triples (Vec ModelTriple) [])
@@ -235,10 +220,7 @@
     text))
 
 (defn- find-exact
-  [(triples (Vec ModelTriple))
-   (t1 String)
-   (t2 String)
-   (t3 String)] Int
+  [(triples (Vec ModelTriple)) (t1 String) (t2 String) (t3 String)] Int
   (loop [(index Int) 0]
     (if (>= index (count triples))
       -1
@@ -249,10 +231,7 @@
           index
           (recur (+ index 1)))))))
 
-(defn- find-group
-  [(triples (Vec ModelTriple))
-   (t1 String)
-   (t2 String)] Int
+(defn- find-group [(triples (Vec ModelTriple)) (t1 String) (t2 String)] Int
   (loop [(index Int) 0]
     (if (>= index (count triples))
       -1
@@ -281,9 +260,7 @@
           (recur (+ index 1)))))))
 
 (defn- subject-predicate-count
-  [(triples (Vec ModelTriple))
-   (subject String)
-   (predicate String)] Int
+  [(triples (Vec ModelTriple)) (subject String) (predicate String)] Int
   (loop [(index Int) 0 (total Int) 0]
     (if (>= index (count triples))
       total
@@ -312,12 +289,11 @@
        (= "single" (action-t3 action))
        (collapses? (model-triples model) (strip-at (action-t1 action)))))
 
-(defrecord GroupRemoval [(triples (Vec ModelTriple)) (commits (Vec ReplayCommit))])
+(defrecord GroupRemoval
+  [(triples (Vec ModelTriple)) (commits (Vec ReplayCommit))])
 
 (defn- remove-group
-  [(triples (Vec ModelTriple))
-   (t1 String)
-   (t2 String)] GroupRemoval
+  [(triples (Vec ModelTriple)) (t1 String) (t2 String)] GroupRemoval
   (loop [(current (Vec ModelTriple)) triples (commits (Vec ReplayCommit)) no-commits]
     (let [(position Int) (find-group current t1 t2)]
       (if (< position 0)
@@ -327,10 +303,7 @@
                      (->ReplayCommit act-retract (nth current position))))))))
 
 (defrecord ApplyResult
-  [(model Model)
-   (changed Bool)
-   (collapse Bool)
-   (commits (Vec ReplayCommit))])
+  [(model Model) (changed Bool) (collapse Bool) (commits (Vec ReplayCommit))])
 
 (defn- apply-assert [(model Model) (action Action)] ApplyResult
   (let [(triples (Vec ModelTriple)) (model-triples model)
@@ -388,16 +361,11 @@
    (written (Vec String))
    (idempotent (Vec String))])
 (defrecord MutationResult
-  [(model Model)
-   (outcome Outcome)
-   (commits (Vec ReplayCommit))])
+  [(model Model) (outcome Outcome) (commits (Vec ReplayCommit))])
 
 (def no-outcomes (Vec Outcome) [])
 
-(defn- reject
-  [(model Model)
-   (batch Bool)
-   (reason String)] MutationResult
+(defn- reject [(model Model) (batch Bool) (reason String)] MutationResult
   (->MutationResult
    model
    (->Outcome kind-reject batch (model-version model) reason no-strings no-strings)
@@ -430,9 +398,7 @@
         (recur (+ index 1))))))
 
 (defn- apply-actions
-  [(model Model)
-   (actions (Vec Action))
-   (batch Bool)] MutationResult
+  [(model Model) (actions (Vec Action)) (batch Bool)] MutationResult
   (loop [(index Int) 0
          (trial Model) model
          (commits (Vec ReplayCommit)) no-commits
@@ -663,6 +629,7 @@
   [(path String)
    (result ReplayResult)
    (folded fold/Fold)
-   (facts (Vec ModelTriple))] String
+   (facts (Vec ModelTriple))]
+  String
   (str "oracle " path ": " (replayresult-operations result) " operations, version "
        (fold/fold-version folded) ", " (count facts) " live triples"))

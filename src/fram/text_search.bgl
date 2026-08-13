@@ -34,39 +34,25 @@
    (trigram-postings PostingMap)])
 
 (defrecord TextSearchSourceResult
-  [(ok Bool)
-   (source TextSearchSource?)
-   (error text-index/TextError)])
+  [(ok Bool) (source TextSearchSource?) (error text-index/TextError)])
 
 (defrecord TextSearchHandlesResult
-  [(ok Bool)
-   (handles (Vec Int))
-   (error text-index/TextError)])
+  [(ok Bool) (handles (Vec Int)) (error text-index/TextError)])
 
 (defrecord TextSearchRowsResult
-  [(ok Bool)
-   (rows (Vec (Vec Any)))
-   (error text-index/TextError)])
+  [(ok Bool) (rows (Vec (Vec Any))) (error text-index/TextError)])
 
 (defrecord TextSearchScoreResult
-  [(ok Bool)
-   (score Int)
-   (error text-index/TextError)])
+  [(ok Bool) (score Int) (error text-index/TextError)])
 
 (defrecord SearchAnalyzersResult
-  [(ok Bool)
-   (analyzers SearchAnalyzers)
-   (error text-index/TextError)])
+  [(ok Bool) (analyzers SearchAnalyzers) (error text-index/TextError)])
 
 (defrecord StringNeedleResult
-  [(ok Bool)
-   (value String)
-   (error text-index/TextError)])
+  [(ok Bool) (value String) (error text-index/TextError)])
 
 (defrecord WordNeedleResult
-  [(ok Bool)
-   (tokens (Vec String))
-   (error text-index/TextError)])
+  [(ok Bool) (tokens (Vec String)) (error text-index/TextError)])
 
 (defn source-result-ok? [(result TextSearchSourceResult)] Bool
   (textsearchsourceresult-ok result))
@@ -74,8 +60,7 @@
 (defn source-result-source [(result TextSearchSourceResult)] TextSearchSource?
   (textsearchsourceresult-source result))
 
-(defn source-result-error
-  [(result TextSearchSourceResult)] text-index/TextError
+(defn source-result-error [(result TextSearchSourceResult)] text-index/TextError
   (textsearchsourceresult-error result))
 
 (defn handles-result-ok? [(result TextSearchHandlesResult)] Bool
@@ -98,8 +83,7 @@
   (textsearchrowsresult-error result))
 
 (defn query-text-rows-error
-  [(code Keyword)
-   (message String)] TextSearchRowsResult
+  [(code Keyword) (message String)] TextSearchRowsResult
   (->TextSearchRowsResult false [] (text-index/query-text-error code message)))
 
 (defn source-weight [(source TextSearchSource)] Int
@@ -206,18 +190,13 @@
       (recur (inc index) (conj grams (subs value index (+ index 3)))))))
 
 (defn- postings-add
-  [(postings PostingMap)
-   (keys (Vec String))
-   (handle Int)] PostingMap
+  [(postings PostingMap) (keys (Vec String)) (handle Int)] PostingMap
   (reduce (fn [(current PostingMap) (key String)] PostingMap
             (assoc current key (conj (get current key []) handle)))
           postings keys))
 
 (defn- postings-weight [(postings PostingMap)] Int
-  (reduce-kv (fn
-               [(total Int)
-                (key String)
-                (handles (Vec Int))] Int
+  (reduce-kv (fn [(total Int) (key String) (handles (Vec Int))] Int
                (+ total 84 (* 4 (count key)) (* 42 (count handles))))
              0 postings))
 
@@ -276,8 +255,7 @@
             (searchbuildstate-trigram-postings state))))))))
 
 (defn build-source-result
-  [(propositions (Vec t/Triple))
-   (maximum Int)] TextSearchSourceResult
+  [(propositions (Vec t/Triple)) (maximum Int)] TextSearchSourceResult
   (let [(rows (Vec t/Triple)) (vec propositions)
         (exact-result text-index/TextCandidateSourceResult)
         (text-index/build-source-result rows maximum)
@@ -300,8 +278,7 @@
              (text-index/no-text-error))))))))
 
 (defn propositions-for-attributes
-  [(propositions (Vec t/Triple))
-   (attributes (Set Any))] (Vec t/Triple)
+  [(propositions (Vec t/Triple)) (attributes (Set Any))] (Vec t/Triple)
   (filterv
    (fn [(proposition t/Triple)] Bool
      (contains? attributes (t/triple-t2 proposition)))
@@ -310,13 +287,13 @@
 (defn build-source-for-attributes-result
   [(propositions (Vec t/Triple))
    (attributes (Set Any))
-   (maximum Int)] TextSearchSourceResult
+   (maximum Int)]
+  TextSearchSourceResult
   (build-source-result
    (propositions-for-attributes propositions attributes) maximum))
 
 (defn build-source
-  [(propositions (Vec t/Triple))
-   (maximum Int)] TextSearchSource
+  [(propositions (Vec t/Triple)) (maximum Int)] TextSearchSource
   (let [(rows (Vec t/Triple)) (vec propositions)
         (exact text-index/TextCandidateSource)
         (text-index/build-source rows maximum)
@@ -332,7 +309,8 @@
 (defn build-source-for-attributes
   [(propositions (Vec t/Triple))
    (attributes (Set Any))
-   (maximum Int)] TextSearchSource
+   (maximum Int)]
+  TextSearchSource
   (build-source
    (propositions-for-attributes propositions attributes) maximum))
 
@@ -412,8 +390,7 @@
       (text-index/raise-text-error (wordneedleresult-error result)))))
 
 (defn- substring-needle-result
-  [(relation String)
-   (needle Any)] StringNeedleResult
+  [(relation String) (needle Any)] StringNeedleResult
   (let [(string-result StringNeedleResult)
         (string-needle-result relation needle)]
     (if (not (stringneedleresult-ok string-result))
@@ -476,9 +453,7 @@
   (vec (range (count (textsearchsource-rows source)))))
 
 (defn- sequence-at?
-  [(haystack (Vec String))
-   (needle (Vec String))
-   (start Int)] Bool
+  [(haystack (Vec String)) (needle (Vec String)) (start Int)] Bool
   (loop [offset 0]
     (if (>= offset (count needle))
       true
@@ -509,8 +484,7 @@
   (->TextSearchRowsResult false [] error))
 
 (defn phrase-handles-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchHandlesResult
+  [(source TextSearchSource) (needle Any)] TextSearchHandlesResult
   (let [(needle-result WordNeedleResult)
         (word-needle-result "text-phrase" needle)]
     (if (not (wordneedleresult-ok needle-result))
@@ -544,8 +518,7 @@
       (text-index/raise-text-error (handles-result-error result)))))
 
 (defn phrase-scan-handles-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchHandlesResult
+  [(source TextSearchSource) (needle Any)] TextSearchHandlesResult
   (let [(needle-result WordNeedleResult)
         (word-needle-result "text-phrase" needle)]
     (if (not (wordneedleresult-ok needle-result))
@@ -571,8 +544,7 @@
       (text-index/raise-text-error (handles-result-error result)))))
 
 (defn substring-handles-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchHandlesResult
+  [(source TextSearchSource) (needle Any)] TextSearchHandlesResult
   (let [(needle-result StringNeedleResult)
         (substring-needle-result "text-substring" needle)]
     (if (not (stringneedleresult-ok needle-result))
@@ -605,8 +577,7 @@
       (text-index/raise-text-error (handles-result-error result)))))
 
 (defn substring-scan-handles-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchHandlesResult
+  [(source TextSearchSource) (needle Any)] TextSearchHandlesResult
   (let [(needle-result StringNeedleResult)
         (substring-needle-result "text-substring" needle)]
     (if (not (stringneedleresult-ok needle-result))
@@ -624,9 +595,7 @@
                         (str/includes? (nth rows handle) value))
                       (all-handles source)))))))))
 
-(defn substring-scan-handles!
-  [(source TextSearchSource)
-   (needle Any)] (Vec Int)
+(defn substring-scan-handles! [(source TextSearchSource) (needle Any)] (Vec Int)
   (let [(result TextSearchHandlesResult)
         (substring-scan-handles-result! source needle)]
     (if (handles-result-ok? result)
@@ -634,8 +603,7 @@
       (text-index/raise-text-error (handles-result-error result)))))
 
 (defn stem-handles-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchHandlesResult
+  [(source TextSearchSource) (needle Any)] TextSearchHandlesResult
   (let [(needle-result WordNeedleResult)
         (word-needle-result "text-stem" needle)]
     (if (not (wordneedleresult-ok needle-result))
@@ -659,8 +627,7 @@
       (text-index/raise-text-error (handles-result-error result)))))
 
 (defn stem-scan-handles-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchHandlesResult
+  [(source TextSearchSource) (needle Any)] TextSearchHandlesResult
   (let [(needle-result WordNeedleResult)
         (word-needle-result "text-stem" needle)]
     (if (not (wordneedleresult-ok needle-result))
@@ -696,9 +663,7 @@
           0 tokens))
 
 (defn- score-at-result!
-  [(source TextSearchSource)
-   (handle Int)
-   (needle Any)] TextSearchScoreResult
+  [(source TextSearchSource) (handle Int) (needle Any)] TextSearchScoreResult
   (let [(needle-result StringNeedleResult)
         (substring-needle-result "text-search" needle)]
     (if (not (stringneedleresult-ok needle-result))
@@ -757,10 +722,7 @@
             (->TextSearchScoreResult
              true score (text-index/no-text-error))))))))
 
-(defn- score-at!
-  [(source TextSearchSource)
-   (handle Int)
-   (needle Any)] Int
+(defn- score-at! [(source TextSearchSource) (handle Int) (needle Any)] Int
   (let [(result TextSearchScoreResult)
         (score-at-result! source handle needle)]
     (if (textsearchscoreresult-ok result)
@@ -773,7 +735,8 @@
 (defn- matching-score-handles-result!
   [(source TextSearchSource)
    (needle Any)
-   (candidates (Vec Int))] TextSearchHandlesResult
+   (candidates (Vec Int))]
+  TextSearchHandlesResult
   (loop [(position Int) 0 (matches (Vec Int)) []]
     (if (>= position (count candidates))
       (handles-ok matches)
@@ -788,8 +751,7 @@
                    matches)))))))
 
 (defn ranked-handles-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchHandlesResult
+  [(source TextSearchSource) (needle Any)] TextSearchHandlesResult
   (let [(needle-result StringNeedleResult)
         (substring-needle-result "text-search" needle)]
     (if (not (stringneedleresult-ok needle-result))
@@ -826,8 +788,7 @@
       (text-index/raise-text-error (handles-result-error result)))))
 
 (defn ranked-scan-handles-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchHandlesResult
+  [(source TextSearchSource) (needle Any)] TextSearchHandlesResult
   (matching-score-handles-result! source needle (all-handles source)))
 
 (defn ranked-scan-handles! [(source TextSearchSource) (needle Any)] (Vec Int)
@@ -838,9 +799,7 @@
       (text-index/raise-text-error (handles-result-error result)))))
 
 (defn- rows-for-handles
-  [(source TextSearchSource)
-   (needle Any)
-   (handles (Vec Int))] (Vec (Vec Any))
+  [(source TextSearchSource) (needle Any) (handles (Vec Int))] (Vec (Vec Any))
   (let [(rows (Vec t/Triple)) (textsearchsource-rows source)]
     (mapv (fn [(handle Int)] (Vec Any)
             (let [(proposition t/Triple) (nth rows handle)]
@@ -852,7 +811,8 @@
 (defn- ranked-rows-for-handles-result!
   [(source TextSearchSource)
    (needle Any)
-   (handles (Vec Int))] TextSearchRowsResult
+   (handles (Vec Int))]
+  TextSearchRowsResult
   (let [(source-rows (Vec t/Triple)) (textsearchsource-rows source)]
     (loop [(position Int) 0 (result-rows (Vec (Vec Any))) []]
       (if (>= position (count handles))
@@ -872,9 +832,7 @@
                       (textsearchscoreresult-score score-result)])))))))))
 
 (defn- ranked-rows-for-handles!
-  [(source TextSearchSource)
-   (needle Any)
-   (handles (Vec Int))] (Vec (Vec Any))
+  [(source TextSearchSource) (needle Any) (handles (Vec Int))] (Vec (Vec Any))
   (let [(result TextSearchRowsResult)
         (ranked-rows-for-handles-result! source needle handles)]
     (if (rows-result-ok? result)
@@ -882,8 +840,7 @@
       (text-index/raise-text-error (rows-result-error result)))))
 
 (defn exact-indexed-rows-result
-  [(source TextSearchSource)
-   (needle Any)] TextSearchRowsResult
+  [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (let [(result text-index/TextRowsResult)
         (text-index/indexed-rows-result (textsearchsource-exact source) needle)]
     (if (text-index/rows-result-ok? result)
@@ -891,8 +848,7 @@
       (rows-error (text-index/rows-result-error result)))))
 
 (defn exact-scan-rows-result
-  [(source TextSearchSource)
-   (needle Any)] TextSearchRowsResult
+  [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (let [(result text-index/TextRowsResult)
         (text-index/scan-rows-result (textsearchsource-exact source) needle)]
     (if (text-index/rows-result-ok? result)
@@ -900,8 +856,7 @@
       (rows-error (text-index/rows-result-error result)))))
 
 (defn exact-indexed-rows
-  [(source TextSearchSource)
-   (needle Any)] (Vec (Vec Any))
+  [(source TextSearchSource) (needle Any)] (Vec (Vec Any))
   (let [(result TextSearchRowsResult) (exact-indexed-rows-result source needle)]
     (if (rows-result-ok? result)
       (rows-result-rows result)
@@ -916,50 +871,44 @@
 (defn- rows-for-handles-result
   [(source TextSearchSource)
    (needle Any)
-   (result TextSearchHandlesResult)] TextSearchRowsResult
+   (result TextSearchHandlesResult)]
+  TextSearchRowsResult
   (if (handles-result-ok? result)
     (rows-ok (rows-for-handles source needle (handles-result-handles result)))
     (rows-error (handles-result-error result))))
 
 (defn phrase-indexed-rows-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchRowsResult
+  [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (rows-for-handles-result source needle
                            (phrase-handles-result! source needle)))
 
 (defn phrase-scan-rows-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchRowsResult
+  [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (rows-for-handles-result source needle
                            (phrase-scan-handles-result! source needle)))
 
 (defn substring-indexed-rows-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchRowsResult
+  [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (rows-for-handles-result source needle
                            (substring-handles-result! source needle)))
 
 (defn substring-scan-rows-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchRowsResult
+  [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (rows-for-handles-result source needle
                            (substring-scan-handles-result! source needle)))
 
 (defn stem-indexed-rows-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchRowsResult
+  [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (rows-for-handles-result source needle
                            (stem-handles-result! source needle)))
 
 (defn stem-scan-rows-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchRowsResult
+  [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (rows-for-handles-result source needle
                            (stem-scan-handles-result! source needle)))
 
 (defn ranked-indexed-rows-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchRowsResult
+  [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (let [(handles-result TextSearchHandlesResult)
         (ranked-handles-result! source needle)]
     (if (handles-result-ok? handles-result)
@@ -968,8 +917,7 @@
       (rows-error (handles-result-error handles-result)))))
 
 (defn ranked-scan-rows-result!
-  [(source TextSearchSource)
-   (needle Any)] TextSearchRowsResult
+  [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (let [(handles-result TextSearchHandlesResult)
         (ranked-scan-handles-result! source needle)]
     (if (handles-result-ok? handles-result)
@@ -978,17 +926,14 @@
       (rows-error (handles-result-error handles-result)))))
 
 (defn phrase-indexed-rows!
-  [(source TextSearchSource)
-   (needle Any)] (Vec (Vec Any))
+  [(source TextSearchSource) (needle Any)] (Vec (Vec Any))
   (let [(result TextSearchRowsResult)
         (phrase-indexed-rows-result! source needle)]
     (if (rows-result-ok? result)
       (rows-result-rows result)
       (text-index/raise-text-error (rows-result-error result)))))
 
-(defn phrase-scan-rows!
-  [(source TextSearchSource)
-   (needle Any)] (Vec (Vec Any))
+(defn phrase-scan-rows! [(source TextSearchSource) (needle Any)] (Vec (Vec Any))
   (let [(result TextSearchRowsResult)
         (phrase-scan-rows-result! source needle)]
     (if (rows-result-ok? result)
@@ -996,8 +941,7 @@
       (text-index/raise-text-error (rows-result-error result)))))
 
 (defn substring-indexed-rows!
-  [(source TextSearchSource)
-   (needle Any)] (Vec (Vec Any))
+  [(source TextSearchSource) (needle Any)] (Vec (Vec Any))
   (let [(result TextSearchRowsResult)
         (substring-indexed-rows-result! source needle)]
     (if (rows-result-ok? result)
@@ -1005,8 +949,7 @@
       (text-index/raise-text-error (rows-result-error result)))))
 
 (defn substring-scan-rows!
-  [(source TextSearchSource)
-   (needle Any)] (Vec (Vec Any))
+  [(source TextSearchSource) (needle Any)] (Vec (Vec Any))
   (let [(result TextSearchRowsResult)
         (substring-scan-rows-result! source needle)]
     (if (rows-result-ok? result)
@@ -1014,8 +957,7 @@
       (text-index/raise-text-error (rows-result-error result)))))
 
 (defn stem-indexed-rows!
-  [(source TextSearchSource)
-   (needle Any)] (Vec (Vec Any))
+  [(source TextSearchSource) (needle Any)] (Vec (Vec Any))
   (let [(result TextSearchRowsResult)
         (stem-indexed-rows-result! source needle)]
     (if (rows-result-ok? result)
@@ -1030,17 +972,14 @@
       (text-index/raise-text-error (rows-result-error result)))))
 
 (defn ranked-indexed-rows!
-  [(source TextSearchSource)
-   (needle Any)] (Vec (Vec Any))
+  [(source TextSearchSource) (needle Any)] (Vec (Vec Any))
   (let [(result TextSearchRowsResult)
         (ranked-indexed-rows-result! source needle)]
     (if (rows-result-ok? result)
       (rows-result-rows result)
       (text-index/raise-text-error (rows-result-error result)))))
 
-(defn ranked-scan-rows!
-  [(source TextSearchSource)
-   (needle Any)] (Vec (Vec Any))
+(defn ranked-scan-rows! [(source TextSearchSource) (needle Any)] (Vec (Vec Any))
   (let [(result TextSearchRowsResult)
         (ranked-scan-rows-result! source needle)]
     (if (rows-result-ok? result)

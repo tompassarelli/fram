@@ -55,15 +55,21 @@
 (defn parse-rep-blocks [(path String)] (Vec (Map Keyword Any))
   (let [lines (str/split-lines (slurp path)) acc (reduce (fn
                                                            [(st (Map Keyword Any))
-                                                            (l String)] (Map Keyword Any) (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (get st :cur)) (get st :out) (conj (vec (get st :out)) (get st :cur)))} (if (str/starts-with? l "[") (assoc st :cur (assoc (get st :cur) :triples (conj (vec (get (get st :cur) :triples)) (edn/read-string l)))) st))) {:cur {} :out []} lines)]
+                                                            (l String)]
+                                                           (Map Keyword Any)
+                                                           (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (get st :cur)) (get st :out) (conj (vec (get st :out)) (get st :cur)))} (if (str/starts-with? l "[") (assoc st :cur (assoc (get st :cur) :triples (conj (vec (get (get st :cur) :triples)) (edn/read-string l)))) st))) {:cur {} :out []} lines)]
     (if (empty? (get acc :cur))
       (vec (get acc :out))
       (conj (vec (get acc :out)) (get acc :cur)))))
 
 (defn block->defs [(block (Map Keyword Any))] (Vec (Map Keyword Any))
   (let [ts (vec (get block :triples)) by-subj (group-by (fn [(t Any)] Any (nth t 0)) ts) ms (mapv (fn
-                                                                                                      [(s Any)] (Map Any Any) (into {} (mapv (fn
-                                                                                                                                                 [(t Any)] (Vec Any) [(nth t 1) (nth t 2)]) (vec (get by-subj s))))) (vec (keys by-subj)))]
+                                                                                                    [(s Any)]
+                                                                                                    (Map Any Any)
+                                                                                                    (into {} (mapv (fn
+                                                                                                                     [(t Any)]
+                                                                                                                     (Vec Any)
+                                                                                                                     [(nth t 1) (nth t 2)]) (vec (get by-subj s))))) (vec (keys by-subj)))]
     (mapv (fn [(m (Map Any Any))] (Map Keyword Any) {:name (get m "name") :regime (get m "rep-regime") :native (get m "native-sites") :hamt (get m "hamt-sites") :module (get m "module")})
       (filterv (fn [(m (Map Any Any))] Bool (= "rep-def" (get m "form-kind")))
         ms))))
@@ -84,7 +90,7 @@
                  (c/live-propositions ctx))))))
 
 (defn q4! [(rep-defs (Vec (Map Keyword Any))) (cg-path String)] Nil
-  (let [(cg-blocks (Vec Any)) (cg/parse-corpus cg-path)
+  (let [(cg-blocks (Vec Any)) (cg/parse-corpus! cg-path)
         (graph (Map Keyword Any)) (cg/build-graph cg-blocks)
         (defns (Vec Any)) (vec (get graph :defns))
         (edges (Vec Any)) (vec (get graph :edges))
@@ -139,7 +145,9 @@
 
 (defn -main [& args] Nil
   (let [argv (vec args) rep-path (str (nth argv 0)) cg-path (if (> (count argv) 1) (str (nth argv 1)) nil) blocks (parse-rep-blocks rep-path) rep-defs (vec (mapcat (fn
-                                                                                                                                                                      [(b (Map Keyword Any))] (Vec Any) (block->defs b)) blocks))]
+                                                                                                                                                                      [(b (Map Keyword Any))]
+                                                                                                                                                                      (Vec Any)
+                                                                                                                                                                      (block->defs b)) blocks))]
     (println "================ REP JURISDICTION — compiler judgment as facts =================")
     (println "rep corpus:" rep-path)
     (println "rep-def facts:"

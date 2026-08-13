@@ -52,9 +52,7 @@
 (defrecord ReadContext [(error (Atom ReadError?))])
 
 (defrecord ResultCacheLookup
-  [(found Bool)
-   (query-rows (Vec (Vec Any)))
-   (triple-rows (Vec t/Triple))])
+  [(found Bool) (query-rows (Vec (Vec Any))) (triple-rows (Vec t/Triple))])
 
 (def retryable-error-codes (Set Keyword)
   #{:rpc/conflict :rpc/cancelled :query-cancelled :query-time-limit
@@ -68,9 +66,7 @@
   (->ReadContext (atom no-read-error)))
 
 (defn record-read-error!
-  [(context ReadContext)
-   (code Keyword)
-   (message String)] Nil
+  [(context ReadContext) (code Keyword) (message String)] Nil
   (compare-and-set! (readcontext-error context)
                     no-read-error
                     (->ReadError code message))
@@ -84,7 +80,8 @@
 
 (defn result-snapshot-equal?
   [(left schema/OrderedResultSnapshot)
-   (right schema/OrderedResultSnapshot)] Bool
+   (right schema/OrderedResultSnapshot)]
+  Bool
   (and (= (schema/orderedresultsnapshot-space left)
           (schema/orderedresultsnapshot-space right))
        (and (= (schema/orderedresultsnapshot-version left)
@@ -93,8 +90,7 @@
                (schema/orderedresultsnapshot-lower-exclusive right)))))
 
 (defn result-key-equal?
-  [(left schema/OrderedResultKey)
-   (right schema/OrderedResultKey)] Bool
+  [(left schema/OrderedResultKey) (right schema/OrderedResultKey)] Bool
   (and (result-snapshot-equal?
         (schema/orderedresultkey-snapshot left)
         (schema/orderedresultkey-snapshot right))
@@ -105,7 +101,8 @@
 
 (defn remove-result-snapshot
   [(values (Vec schema/OrderedResultSnapshot))
-   (target schema/OrderedResultSnapshot)] (Vec schema/OrderedResultSnapshot)
+   (target schema/OrderedResultSnapshot)]
+  (Vec schema/OrderedResultSnapshot)
   (loop [(index Int) 0
          (retained (Vec schema/OrderedResultSnapshot)) []]
     (if (>= index (count values))
@@ -118,7 +115,8 @@
 
 (defn remove-result-entry-at
   [(values (Vec schema/OrderedResultEntry))
-   (target-index Int)] (Vec schema/OrderedResultEntry)
+   (target-index Int)]
+  (Vec schema/OrderedResultEntry)
   (loop [(index Int) 0
          (retained (Vec schema/OrderedResultEntry)) []]
     (if (>= index (count values))
@@ -130,7 +128,8 @@
 
 (defn result-snapshot-present?
   [(entries (Vec schema/OrderedResultEntry))
-   (snapshot schema/OrderedResultSnapshot)] Bool
+   (snapshot schema/OrderedResultSnapshot)]
+  Bool
   (loop [index 0]
     (if (>= index (count entries))
       false
@@ -143,8 +142,7 @@
           (recur (inc index)))))))
 
 (defn result-entry-index
-  [(entries (Vec schema/OrderedResultEntry))
-   (key schema/OrderedResultKey)] Int
+  [(entries (Vec schema/OrderedResultEntry)) (key schema/OrderedResultKey)] Int
   (loop [index 0]
     (if (>= index (count entries))
       -1
@@ -155,7 +153,8 @@
 
 (defn snapshot-entry-count
   [(entries (Vec schema/OrderedResultEntry))
-   (snapshot schema/OrderedResultSnapshot)] Int
+   (snapshot schema/OrderedResultSnapshot)]
+  Int
   (loop [index 0 total 0]
     (if (>= index (count entries))
       total
@@ -169,7 +168,8 @@
 
 (defn first-snapshot-entry-index
   [(entries (Vec schema/OrderedResultEntry))
-   (snapshot schema/OrderedResultSnapshot)] Int
+   (snapshot schema/OrderedResultSnapshot)]
+  Int
   (loop [index 0]
     (if (>= index (count entries))
       -1
@@ -182,8 +182,7 @@
           (recur (inc index)))))))
 
 (defn remove-result-entry
-  [(state schema/OrderedResultCache)
-   (index Int)] schema/OrderedResultCache
+  [(state schema/OrderedResultCache) (index Int)] schema/OrderedResultCache
   (let [(entries (Vec schema/OrderedResultEntry)) (schema/orderedresultcache-entries state)
         (entry schema/OrderedResultEntry) (nth entries index)
         (remaining (Vec schema/OrderedResultEntry))
@@ -205,8 +204,7 @@
      (inc (schema/orderedresultcache-evictions state)))))
 
 (defn touch-result-entry
-  [(state schema/OrderedResultCache)
-   (index Int)] schema/OrderedResultCache
+  [(state schema/OrderedResultCache) (index Int)] schema/OrderedResultCache
   (let [(entries (Vec schema/OrderedResultEntry)) (schema/orderedresultcache-entries state)
         (entry schema/OrderedResultEntry) (nth entries index)
         (key schema/OrderedResultKey) (schema/orderedresultentry-key entry)
@@ -243,7 +241,8 @@
 
 (defn append-result-entry
   [(state schema/OrderedResultCache)
-   (entry schema/OrderedResultEntry)] schema/OrderedResultCache
+   (entry schema/OrderedResultEntry)]
+  schema/OrderedResultCache
   (let [snapshot
         (schema/orderedresultkey-snapshot
          (schema/orderedresultentry-key entry))]
@@ -260,7 +259,8 @@
 
 (defn enforce-result-entry-limit
   [(state schema/OrderedResultCache)
-   (snapshot schema/OrderedResultSnapshot)] schema/OrderedResultCache
+   (snapshot schema/OrderedResultSnapshot)]
+  schema/OrderedResultCache
   (loop [bounded state]
     (if (> (snapshot-entry-count
             (schema/orderedresultcache-entries bounded) snapshot)
@@ -274,7 +274,8 @@
 
 (defn without-result-snapshot
   [(state schema/OrderedResultCache)
-   (snapshot schema/OrderedResultSnapshot)] schema/OrderedResultCache
+   (snapshot schema/OrderedResultSnapshot)]
+  schema/OrderedResultCache
   (schema/->OrderedResultCache
    (schema/orderedresultcache-entries state)
    (remove-result-snapshot
@@ -314,7 +315,8 @@
    (version Int)
    (lower-exclusive Int)
    (operation Keyword)
-   (digest String)] schema/OrderedResultKey
+   (digest String)]
+  schema/OrderedResultKey
   (schema/->OrderedResultKey
    (schema/->OrderedResultSnapshot
     (store/space-id (schema/store-of session)) version lower-exclusive)
@@ -323,8 +325,7 @@
 ;; Generated server dispatch is serialized. A concurrent host must add
 ;; single-flight before it may share this mutable Session cache.
 (defn result-cache-lookup!
-  [(session schema/Session)
-   (key schema/OrderedResultKey)] ResultCacheLookup
+  [(session schema/Session) (key schema/OrderedResultKey)] ResultCacheLookup
   (let [cell (schema/ordered-results-of session)
         state (deref cell)
         index (result-entry-index
@@ -348,8 +349,7 @@
            (schema/orderedresultentry-triple-rows entry)))))))
 
 (defn retain-result-entry!
-  [(session schema/Session)
-   (entry schema/OrderedResultEntry)] Nil
+  [(session schema/Session) (entry schema/OrderedResultEntry)] Nil
   (let [cell (schema/ordered-results-of session)
         snapshot
         (schema/orderedresultkey-snapshot
@@ -436,7 +436,8 @@
 (defn retain-query-result!
   [(session schema/Session)
    (key schema/OrderedResultKey)
-   (rows (Vec d/Tuple))] Nil
+   (rows (Vec d/Tuple))]
+  Nil
   (retain-result-entry!
    session
    (schema/->OrderedResultEntry
@@ -445,7 +446,8 @@
 (defn retain-triple-result!
   [(session schema/Session)
    (key schema/OrderedResultKey)
-   (rows (Vec t/Triple))] Nil
+   (rows (Vec t/Triple))]
+  Nil
   (retain-result-entry!
    session
    (schema/->OrderedResultEntry
@@ -461,7 +463,8 @@
   [(request t/RpcRequest)
    (served-version Int)
    (page t/RpcPageResponse?)
-   (payload t/Triple)] t/RpcResponse
+   (payload t/Triple)]
+  t/RpcResponse
   (let [(payload-term t/Term) payload]
     (t/->RpcResponse (t/rpcrequest-space request)
                      (t/rpcrequest-op request)
@@ -471,7 +474,8 @@
   [(request t/RpcRequest)
    (served-version Int)
    (code Keyword)
-   (message String)] t/RpcResponse
+   (message String)]
+  t/RpcResponse
   (t/->RpcResponse
    (t/rpcrequest-space request)
    (t/rpcrequest-op request)
@@ -500,10 +504,7 @@
          values)])))
 
 (defn read-record!
-  [(context ReadContext)
-   (value Any)
-   (tag Keyword)
-   (field-count Int)] (Vec Any)
+  [(context ReadContext) (value Any) (tag Keyword) (field-count Int)] (Vec Any)
   (if (and (t/triple? value)
            (and (= tag (t/triple-t1 value))
                 (= :rpc/record (t/triple-t3 value))))
@@ -538,10 +539,7 @@
         "RPC option must be :rpc/none or a :rpc/some record")
        (->OptionValue false nil))]))
 
-(defn require-term!
-  [(context ReadContext)
-   (value Any)
-   (label String)] Any
+(defn require-term! [(context ReadContext) (value Any) (label String)] Any
   (if (t/term? value)
     value
     (do
@@ -549,10 +547,7 @@
        context :rpc-invalid-payload (str label " must be a Term"))
       :rpc/unit)))
 
-(defn require-string!
-  [(context ReadContext)
-   (value Any)
-   (label String)] String
+(defn require-string! [(context ReadContext) (value Any) (label String)] String
   (if (string? value)
     value
     (do
@@ -560,10 +555,7 @@
        context :rpc-invalid-payload (str label " must be a String"))
       "")))
 
-(defn require-int!
-  [(context ReadContext)
-   (value Any)
-   (label String)] Int
+(defn require-int! [(context ReadContext) (value Any) (label String)] Int
   (if (integer? value)
     value
     (do
@@ -572,9 +564,7 @@
       0)))
 
 (defn require-keyword!
-  [(context ReadContext)
-   (value Any)
-   (label String)] Keyword
+  [(context ReadContext) (value Any) (label String)] Keyword
   (if (keyword? value)
     value
     (do
@@ -582,10 +572,7 @@
        context :rpc-invalid-payload (str label " must be a Keyword"))
       :rpc/invalid)))
 
-(defn require-bool!
-  [(context ReadContext)
-   (value Any)
-   (label String)] Bool
+(defn require-bool! [(context ReadContext) (value Any) (label String)] Bool
   (if (boolean? value)
     value
     (do
@@ -732,8 +719,7 @@
      (read-list! context (field-value fields 0)))))
 
 (defn parse-query-aggregate!
-  [(context ReadContext)
-   (value Any)] query/AggregateSpec
+  [(context ReadContext) (value Any)] query/AggregateSpec
   (let [(fields (Vec Any))
         (read-record! context value :query/aggregate 2)
         (operation Keyword)
@@ -754,9 +740,7 @@
          "query aggregate operation is unsupported")
         (query/aggregate-spec :count nil)))))
 
-(defn parse-query-having!
-  [(context ReadContext)
-   (value Any)] query/HavingClause
+(defn parse-query-having! [(context ReadContext) (value Any)] query/HavingClause
   (let [(fields (Vec Any)) (read-record! context value :query/having 3)
         (comparison Keyword)
         (require-keyword!
@@ -872,8 +856,7 @@
        (parse-query-row! context (field-value fields 3))))))
 
 (defn request-cursor!
-  [(context ReadContext)
-   (request t/RpcRequest)] QueryCursor?
+  [(context ReadContext) (request t/RpcRequest)] QueryCursor?
   (let [page (t/rpcrequest-page request)]
     (if (some? page)
       (let [cursor (t/rpc-page-request-cursor-value page)]
@@ -881,10 +864,7 @@
       nil)))
 
 (defn upper-snapshot-version!
-  [(context ReadContext)
-   (snapshot Any)
-   (cursor QueryCursor?)
-   (head Int)] Int
+  [(context ReadContext) (snapshot Any) (cursor QueryCursor?) (head Int)] Int
   (cond
     [(= snapshot :query/current)
      (if (some? cursor) (querycursor-snapshot-version cursor) head)]
@@ -903,7 +883,8 @@
 (defn snapshot-root!
   [(context ReadContext)
    (root (Atom t/TermStore))
-   (version Int)] (Atom t/TermStore)
+   (version Int)]
+  (Atom t/TermStore)
   (let [head (store/current-sequence root)]
     (if (or (< version 0) (> version head))
       (do
@@ -950,7 +931,8 @@
   [(context ReadContext)
    (root (Atom t/TermStore))
    (snapshot Any)
-   (cursor QueryCursor?)] QueryBounds
+   (cursor QueryCursor?)]
+  QueryBounds
   (let [head (store/current-sequence root)]
     (if (not (read-context-ok? context))
       (->QueryBounds head -1)
@@ -995,7 +977,8 @@
 (defn query-view!
   [(context ReadContext)
    (session schema/Session)
-   (bounds QueryBounds)] QueryView
+   (bounds QueryBounds)]
+  QueryView
   (let [root (schema/store-of session)
         head (store/current-sequence root)
         selected-root
@@ -1022,8 +1005,7 @@
             (recur (inc position))))))))
 
 (defn- stratum-uses-any-relation?
-  [(rules (Vec d/Rule))
-   (relations (Set String))] Bool
+  [(rules (Vec d/Rule)) (relations (Set String))] Bool
   (loop [position 0]
     (if (>= position (count rules))
       false
@@ -1032,8 +1014,7 @@
         (recur (inc position))))))
 
 (defn- plan-uses-any-relation?
-  [(plan query/QueryPlan)
-   (relations (Set String))] Bool
+  [(plan query/QueryPlan) (relations (Set String))] Bool
   (if (contains? relations
                  (query/findspec-relation (query/queryplan-find plan)))
     true
@@ -1049,7 +1030,8 @@
 (defn query-rows!
   [(view QueryView)
    (plan query/QueryPlan)
-   (timeout-ms Int)] query/QueryExecutionResult
+   (timeout-ms Int)]
+  query/QueryExecutionResult
   (let [(rotation rot/Rotation) (queryview-rotation view)
         (root t/TermStore) (deref (queryview-root view))
         (triple-candidate d/CandidateSource)
@@ -1092,9 +1074,7 @@
          (query/project-with-candidates [] candidates) plan control)))))
 
 (defn query-row-position!
-  [(context ReadContext)
-   (rows (Vec d/Tuple))
-   (after-row (Vec Any))] Int
+  [(context ReadContext) (rows (Vec d/Tuple)) (after-row (Vec Any))] Int
   (loop [position 0]
     (if (>= position (count rows))
       (do
@@ -1107,9 +1087,7 @@
         (recur (inc position))))))
 
 (defn occurrence-position!
-  [(context ReadContext)
-   (rows (Vec t/Triple))
-   (after-row (Vec Any))] Int
+  [(context ReadContext) (rows (Vec t/Triple)) (after-row (Vec Any))] Int
   (if (= 2 (count after-row))
     (let [position-value (nth after-row 0)
           expected (nth after-row 1)]
@@ -1150,7 +1128,8 @@
   [(snapshot-version Int)
    (digest String)
    (next-page-ordinal Int)
-   (after-row (Vec Any))] t/Triple
+   (after-row (Vec Any))]
+  t/Triple
   (rpc-record
    :query/cursor
    [snapshot-version digest next-page-ordinal (rpc-query-row after-row)]))
@@ -1167,7 +1146,8 @@
    (page t/RpcPageRequest?)
    (cursor QueryCursor?)
    (snapshot-version Int)
-   (digest String)] PageResult
+   (digest String)]
+  PageResult
   (if (nil? page)
     ;; An unpaged answer nests one Term node per row, so it is bounded by the
     ;; same codec budget the occurrence path takes; say so here instead of
@@ -1218,7 +1198,8 @@
    (page t/RpcPageRequest?)
    (cursor QueryCursor?)
    (snapshot-version Int)
-   (digest String)] PageResult
+   (digest String)]
+  PageResult
   (if (nil? page)
     (->PageResult
      (rpc-occurrences (vec (take unpaged-occurrence-limit rows))) nil)
@@ -1269,8 +1250,7 @@
         ""))))
 
 (defn placeholder-error-response
-  [(request t/RpcRequest)
-   (served-version Int)] t/RpcResponse
+  [(request t/RpcRequest) (served-version Int)] t/RpcResponse
   (error-response request served-version
                   :rpc/native-query-failed
                   "native read operation failed"))
@@ -1280,7 +1260,8 @@
    (request t/RpcRequest)
    (served-version Int)
    (view-version Int)
-   (error-value d/QueryEvaluationError)] t/RpcResponse
+   (error-value d/QueryEvaluationError)]
+  t/RpcResponse
   (if (= :fram-query-abort
          (d/query-evaluation-error-type error-value))
     (error-response
@@ -1301,7 +1282,8 @@
    (version Int)
    (digest String)
    (cursor QueryCursor?)
-   (rows (Vec d/Tuple))] t/RpcResponse
+   (rows (Vec d/Tuple))]
+  t/RpcResponse
   (let [(page-result PageResult)
         (slice-query-page!
          context rows (t/rpcrequest-page request) cursor version digest)]
@@ -1314,7 +1296,8 @@
 (defn query-response!
   [(context ReadContext)
    (session schema/Session)
-   (request t/RpcRequest)] t/RpcResponse
+   (request t/RpcRequest)]
+  t/RpcResponse
   (let [(root (Atom t/TermStore)) (schema/store-of session)
         (head Int) (store/current-sequence root)
         (request-fields (Vec Any))
@@ -1400,7 +1383,8 @@
    (version Int)
    (digest String)
    (cursor QueryCursor?)
-   (rows (Vec t/Triple))] t/RpcResponse
+   (rows (Vec t/Triple))]
+  t/RpcResponse
   (let [(page-result PageResult)
         (slice-occurrence-page!
          context rows (t/rpcrequest-page request) cursor version digest)]
@@ -1413,7 +1397,8 @@
 (defn occurrences-response!
   [(context ReadContext)
    (session schema/Session)
-   (request t/RpcRequest)] t/RpcResponse
+   (request t/RpcRequest)]
+  t/RpcResponse
   (let [root (schema/store-of session)
         head (store/current-sequence root)]
     (do
@@ -1477,7 +1462,8 @@
 (defn validate-response!
   [(context ReadContext)
    (session schema/Session)
-   (request t/RpcRequest)] t/RpcResponse
+   (request t/RpcRequest)]
+  t/RpcResponse
   (let [served-version (store/current-sequence (schema/store-of session))]
     (do
       (require-unit! context (t/rpc-request-payload-value request))
@@ -1487,8 +1473,7 @@
         (placeholder-error-response request served-version)))))
 
 (defn dispatch-read!
-  [(session schema/Session)
-   (request t/RpcRequest)] NativeReadResult
+  [(session schema/Session) (request t/RpcRequest)] NativeReadResult
   (let [(operation Keyword) (t/rpcrequest-op request)
         (served-version Int) (store/current-sequence (schema/store-of session))
         (context ReadContext) (new-read-context)]

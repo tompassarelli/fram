@@ -19,9 +19,7 @@
 (def mint-ordinal Keyword :mint-ordinal)
 
 (defrecord Builder
-  [(coordinate t/Triple)
-   (operations (Vec t/CommitOperation))
-   (minted Int)])
+  [(coordinate t/Triple) (operations (Vec t/CommitOperation)) (minted Int)])
 
 (def empty-operations (Vec t/CommitOperation) [])
 
@@ -63,8 +61,7 @@
 ;; Returns the occurrence coordinate the LAST appended operation will carry —
 ;; deterministic because the transaction coordinate is pinned at open.
 (defn- append!
-  [(builder (Atom Builder))
-   (appended (Vec t/CommitOperation))] t/Triple
+  [(builder (Atom Builder)) (appended (Vec t/CommitOperation))] t/Triple
   (if (empty? appended)
     (throw (ex-info "fram: an empty operation vector has no write identity" {:type :empty-operation-vector}))
     (let [(before Builder) (deref builder) (start Int) (count (builder-operations before))]
@@ -91,7 +88,8 @@
   [(view rot/Rotation)
    (subject Any)
    (predicate Any)
-   (value Any)] (Vec t/CommitOperation)
+   (value Any)]
+  (Vec t/CommitOperation)
   (conj (mapv (fn [(event t/Triple)] t/CommitOperation (store/retract-operation (rot/proposition-of event))) (rot/newest-first (rot/by-t12 view subject predicate)))
     (store/assert-operation (t/triple subject predicate value))))
 
@@ -100,7 +98,8 @@
    (view rot/Rotation)
    (subject Any)
    (predicate Any)
-   (value Any)] t/Triple
+   (value Any)]
+  t/Triple
   (append! builder (compile-single-update view subject predicate value)))
 
 (defn commit! [(ctx (Atom t/TermStore)) (builder (Atom Builder))] t/Triple

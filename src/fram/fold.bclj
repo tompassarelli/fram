@@ -15,8 +15,7 @@
    (dump t/TermStoreDump)])
 
 (defn transaction-frame
-  [(sequence Int)
-   (operations (Vec t/CommitOperation))] t/TransactionFrame
+  [(sequence Int) (operations (Vec t/CommitOperation))] t/TransactionFrame
   (store/transaction-frame sequence operations))
 
 (defn max-sequence [(frames (Vec t/TransactionFrame))] Int

@@ -19,14 +19,9 @@
 ;; transaction; the ref is the only cheap record of where a sealed chain ends
 ;; once the branch tail beside it is empty.
 (defrecord SegmentRecord
-  [(sha256 String)
-   (start-sequence Int)
-   (end-sequence Int)
-   (byte-count Int)])
+  [(sha256 String) (start-sequence Int) (end-sequence Int) (byte-count Int)])
 
-(defrecord RefDocument
-  [(space-id String)
-   (segments (Vec SegmentRecord))])
+(defrecord RefDocument [(space-id String) (segments (Vec SegmentRecord))])
 
 ;; What a folded chain member turned out to be on disk, as the caller read it.
 (defrecord ChainMember
@@ -38,16 +33,11 @@
    (torn Bool)])
 
 (defrecord ForkPlan
-  [(document RefDocument)
-   (sealed SegmentRecord)
-   (fork-sequence Int)])
+  [(document RefDocument) (sealed SegmentRecord) (fork-sequence Int)])
 
 ;; A fork prepares every file it installs before it writes this marker, so the
 ;; marker's presence means the remaining renames may be replayed as they stand.
-(defrecord ForkMarker
-  [(parent String)
-   (child String)
-   (segment String)])
+(defrecord ForkMarker [(parent String) (child String) (segment String)])
 
 (defn- fail [(message String) (code Keyword)] Any
   (throw (ex-info message {:type code :fram/code code})))
@@ -248,9 +238,7 @@
 ;; Fork appends one sealed segment to the parent chain; parent and child then
 ;; name the identical chain and diverge only in their tails.
 (defn fork-plan
-  [(parent RefDocument)
-   (sealed SegmentRecord)
-   (fork-sequence Int)] ForkPlan
+  [(parent RefDocument) (sealed SegmentRecord) (fork-sequence Int)] ForkPlan
   (let [(segments (Vec SegmentRecord)) (refdocument-segments parent)]
     (cond
       [(not (valid-segment-name? (segmentrecord-sha256 sealed)))
@@ -277,7 +265,8 @@
   [(document RefDocument)
    (index Int)
    (member ChainMember)
-   (expected-next Int)] String?
+   (expected-next Int)]
+  String?
   (let [(segment SegmentRecord) (nth (refdocument-segments document) index)]
     (cond
       [(not= (refdocument-space-id document) (chainmember-space-id member))
@@ -310,7 +299,8 @@
 (defn chain-fault
   [(document RefDocument)
    (members (Vec ChainMember))
-   (tail ChainMember)] String?
+   (tail ChainMember)]
+  String?
   (if (not= (count (refdocument-segments document)) (count members))
     "FRAMLOG branch ref does not name the segments that were read"
     (loop [(index Int) 0 (expected-next Int) 1]

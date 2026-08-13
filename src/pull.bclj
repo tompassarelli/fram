@@ -54,10 +54,7 @@
               :else false))]
     (elem? e)))
 
-(defn validate
-  [(root Any)
-   (pattern Any)
-   (opts Any)] (Vec String)
+(defn validate [(root Any) (pattern Any) (opts Any)] (Vec String)
   (let [e-root
         (if (or (and (string? root) (not (str/blank? root)))
               (and (vector? root)
@@ -97,10 +94,7 @@
     (vec (concat e-root e-pat e-caps e-asof))))
 
 (defn run
-  [(store-atom (Atom t/TermStore))
-   (root Any)
-   (pattern Any)
-   (opts Any)] Any
+  [(store-atom (Atom t/TermStore)) (root Any) (pattern Any) (opts Any)] Any
   (let [errs (validate root pattern opts)]
     (if (seq errs)
       {:error errs}
@@ -130,8 +124,7 @@
                 (events-at [(cutoff Int)] (Vec t/Triple)
                   (reduce
                     (fn
-                      [(active (Vec t/Triple))
-                       (event t/Triple)] (Vec t/Triple)
+                      [(active (Vec t/Triple)) (event t/Triple)] (Vec t/Triple)
                       (if (> (event-sequence event) cutoff)
                         active
                         (if (assertion-event? event)
@@ -278,10 +271,7 @@
                             (assoc base
                               :withdrawn_by (agent-of retraction)
                               :withdrawn_at retraction)))))))
-                (values
-                  [(pname String)
-                   (predicate Any)
-                   (left Any)] Any
+                (values [(pname String) (predicate Any) (left Any)] Any
                   (let [(events (Vec t/Triple))
                         (fwd-events left predicate)]
                     (when (seq events)
@@ -306,7 +296,8 @@
                   [(target Any)
                    (subpattern Any)
                    (depth Int)
-                   (visited (Set Any))] Any
+                   (visited (Set Any))]
+                  Any
                   (if (> (inc depth) max-depth)
                     {:fram/id (nm-of target) :fram/truncated true}
                     (node target (nm-of target) subpattern
@@ -316,7 +307,8 @@
                    (left Any)
                    (depth Int)
                    (visited (Set Any))
-                   (element Any)] Any
+                   (element Any)]
+                  Any
                   (cond
                     (= element :*)
                     (reduce
@@ -417,7 +409,8 @@
                    (name Any)
                    (requested Any)
                    (depth Int)
-                   (visited (Set Any))] Any
+                   (visited (Set Any))]
+                  Any
                   (cond
                     (contains? visited subject)
                     {:fram/id name :fram/cycle true}

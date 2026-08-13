@@ -55,8 +55,6 @@
 (defn- nn [e]
   e)
 
-(def RET-COLON #{":-" ":" ":raises"})
-
 (def UNQUOTE-TOKENS #{"~" "," "~@" ",@"})
 
 (defn- sv [^Walk w e]
@@ -151,28 +149,9 @@
   (walk-type! w ch))
   :else nil))
 
-(defn- ^Boolean colon? [^Walk w e]
-  (let [v (sv w e)]
-  (and (some? v) (contains? rc/TYPE-COLON (str v)))))
-
-(defn resolve-type-after-colon! [^Walk w nodes]
-  (loop [xs nodes]
-  (if (empty? xs) nil (if (colon? w (nth xs 0 nil)) (let [nxt (nth xs 1 nil)]
-  (if (some? nxt) (do
-  (walk-type! w nxt)))) (recur (vec (rest xs)))))))
-
-(defn resolve-types-in-bracket! [^Walk w bracket]
-  (loop [ks (vec (rest (kids w bracket)))]
-  (if (empty? ks) nil (let [k (nth ks 0)]
-  (cond
-  (colon? w k) (do
-  (if (some? (nth ks 1 nil)) (do
-  (walk-type! w (nth ks 1 nil))))
-  (recur (vec (drop 2 ks))))
-  (= "list" (kd w k)) (do
-  (resolve-type-after-colon! w (kids w k))
-  (recur (vec (rest ks))))
-  :else (recur (vec (rest ks))))))))
+(defn- walk-binding-types! [^Walk w types]
+  (doseq [type-node types]
+  (walk-type! w type-node)))
 
 (defn walk-all! [^Walk w nodes scope wf]
   (doseq [n nodes]
@@ -186,24 +165,24 @@
   (doseq [ch (vec (rest cs))]
   (walk-pat-heads! w ch scope wf)))))))
 
-(defn walk-fn-arity! [^Walk w forms scope wf]
-  (let [bi (loop [i 0]
-  (if (>= i (count forms)) nil (if (brk? w (nth forms i)) i (recur (inc i)))))
-   pv (if (nil? bi) nil (nth forms bi))
-   binds (if (nil? pv) [] (rb/param-binds (:ctx w) (:view w) pv))
-   _ (if (some? pv) (do
-  (resolve-types-in-bracket! w pv)))
-   or-vals (if (nil? pv) [] (reduce (fn [acc k] (into acc (rb/collect-or-vals (:ctx w) (:view w) k))) [] (vec (rest (kids w pv)))))
+(defn walk-fn-arity! [^Walk w forms scope wf ^Boolean macro?]
+  (let [signature (rb/signature-tail (:ctx w) (:view w) forms macro?)]
+  (if (some? signature) (do
+  (let [params (:params signature)
+   binds (rb/param-binds (:ctx w) (:view w) params)
+   or-vals (reduce (fn [acc binding] (into acc (rb/collect-or-vals (:ctx w) (:view w) binding))) [] (vec (rest (kids w params))))
    frame (rb/frame-of (:ctx w) (:view w) binds)
-   body (loop [xs (if (nil? bi) [] (vec (drop (inc bi) forms)))]
-  (let [v (sv w (nth xs 0 nil))]
-  (if (and (some? v) (contains? RET-COLON (str v))) (do
-  (if (some? (nth xs 1 nil)) (do
-  (walk-type! w (nth xs 1 nil))))
-  (recur (vec (drop 2 xs)))) xs)))]
+   return-type (:return-type signature)
+   raises-type (:raises-type signature)]
   (do
+  (if (not macro?) (do
+  (walk-binding-types! w (rb/param-type-nodes (:ctx w) (:view w) params))))
+  (if (some? return-type) (do
+  (walk-type! w return-type)))
+  (if (some? raises-type) (do
+  (walk-type! w raises-type)))
   (walk-all! w or-vals scope wf)
-  (walk-all! w body (push frame scope) wf))))
+  (walk-all! w (:body signature) (push frame scope) wf)))))))
 
 (defn walk-quasi! [^Walk w node scope ^Boolean quoted? wf qsf]
   (cond
@@ -262,23 +241,83 @@
   (swap! (:ntype w) (fn [n] (inc n)))
   true))))
 
+(defn- walk-signature-types! [^Walk w signature]
+  (if (some? signature) (do
+  (do
+  (walk-binding-types! w (rb/param-type-nodes (:ctx w) (:view w) (:params signature)))
+  (if (some? (:return-type signature)) (do
+  (walk-type! w (:return-type signature))))
+  (if (some? (:raises-type signature)) (do
+  (walk-type! w (:raises-type signature))))))))
+
+(defn- walk-method-types! [^Walk w method]
+  (if (= "list" (kd w method)) (do
+  (walk-signature-types! w (rb/signature-tail (:ctx w) (:view w) (vec (rest (kids w method))) false)))))
+
 (defn- walk-type-def! [^Walk w ks]
-  (doseq [ch (vec (drop (inc (rc/type-name-index (sv w (nth ks 0 nil)) (sv w (nth ks 1 nil)))) ks))]
+  (let [head (str (sv w (nth ks 0 nil)))
+   name-index (rc/type-name-index head (sv w (nth ks 1 nil)))
+   members (vec (drop (inc name-index) ks))]
   (cond
-  (brk? w ch) (resolve-types-in-bracket! w ch)
-  (= "list" (kd w ch)) (let [cc (kids w ch)]
+  (contains? #{"defrecord" "deftype"} head) (doseq [member members]
+  (cond
+  (brk? w member) (walk-binding-types! w (rb/param-type-nodes (:ctx w) (:view w) member))
+  (and (= "deftype" head) (= "list" (kd w member))) (walk-method-types! w member)
+  (and (= "deftype" head) (some? (sv w member))) (walk-type! w member)
+  :else nil))
+  (contains? #{"defprotocol" "definterface"} head) (doseq [method members]
+  (walk-method-types! w method))
+  (= "defunion" head) (doseq [member members]
+  (cond
+  (= "list" (kd w member)) (let [fields (first (filterv (fn [child] (brk? w child)) (vec (rest (kids w member)))))]
+  (if (some? fields) (do
+  (walk-binding-types! w (rb/param-type-nodes (:ctx w) (:view w) fields)))))
+  (some? (sv w member)) (let [binding (tr w (sv w member))]
+  (if (and (some? binding) (not= binding member)) (do
   (do
-  (doseq [b (vec (filter (fn [k] (brk? w k)) cc))]
-  (resolve-types-in-bracket! w b))
-  (let [bi (loop [i 0]
-  (if (>= i (count cc)) nil (if (brk? w (nth cc i)) i (recur (inc i)))))]
-  (resolve-type-after-colon! w (if (nil? bi) [] (vec (drop (inc bi) cc)))))))
-  (some? (sv w ch)) (let [b (tr w (sv w ch))]
-  (if (and (some? b) (not= b ch)) (do
-  (do
-  (bind! w ch b)
+  (bind! w member binding)
   (swap! (:ntype w) (fn [n] (inc n)))))))
+  :else nil))
   :else nil)))
+
+(defn- first-bracket-index [^Walk w forms]
+  (loop [i 0]
+  (if (>= i (count forms)) nil (if (brk? w (nth forms i)) i (recur (inc i))))))
+
+(defn- walk-executable! [^Walk w forms scope wf ^Boolean macro?]
+  (let [param-index (first-bracket-index w forms)]
+  (if (some? param-index) (walk-fn-arity! w (vec (drop param-index forms)) scope wf macro?) (if (not macro?) (do
+  (doseq [clause (vec (filter (fn [form] (and (= "list" (kd w form)) (brk? w (nth (kids w form) 0 nil)))) forms))]
+  (walk-fn-arity! w (kids w clause) scope wf false)))))))
+
+(defn- walk-value-def! [^Walk w ks scope wf]
+  (let [tail (vec (drop 2 ks))
+   first-node (nth tail 0 nil)
+   typed? (and (>= (count tail) 2) (not= "string" (kd w first-node)))
+   value-node (last tail)]
+  (do
+  (if typed? (do
+  (walk-type! w first-node)))
+  (if (some? value-node) (do
+  (wf w value-node scope))))))
+
+(defn- walk-extension! [^Walk w ks scope wf]
+  (let [head (str (sv w (nth ks 0 nil)))
+   tail (vec (rest ks))]
+  (if (= "extend" head) (do
+  (if (some? (nth tail 0 nil)) (do
+  (wf w (nth tail 0) scope)))
+  (if (some? (nth tail 1 nil)) (do
+  (walk-type! w (nth tail 1))))
+  (walk-all! w (vec (drop 2 tail)) scope wf)) (doseq [item tail]
+  (cond
+  (some? (sv w item)) (walk-type! w item)
+  (= "list" (kd w item)) (let [method (kids w item)]
+  (do
+  (if (some? (nth method 0 nil)) (do
+  (wf w (nth method 0) scope)))
+  (walk-fn-arity! w (vec (rest method)) scope wf false)))
+  :else nil)))))
 
 (defn walk! [^Walk w node scope]
   (let [k (kd w node)]
@@ -301,18 +340,12 @@
   (= "quote" hs) nil
   (= "quasiquote" hs) (walk-quasi! w node scope false walk! walk-quasi-seq!)
   (contains? rc/TYPE-DEFS hs) (walk-type-def! w ks)
-  (contains? rc/DEF-FORMS hs) (let [after-name (vec (drop 2 ks))]
-  (if (= ":-" (str (sv w (nth after-name 0 nil)))) (do
-  (if (some? (nth after-name 1 nil)) (do
-  (walk-type! w (nth after-name 1 nil))))
-  (walk-all! w (vec (drop 2 after-name)) scope walk!)) (walk-all! w after-name scope walk!)))
-  (contains? rc/PARAM-FORMS hs) (let [after-name (if (contains? #{"defn" "defn-" "defmacro"} hs) (vec (drop 2 ks)) (vec (rest ks)))]
-  (if (some? (some (fn [f] (if (brk? w f) true nil)) after-name)) (walk-fn-arity! w after-name scope walk!) (doseq [a (vec (filter (fn [f] (and (= "list" (kd w f)) (brk? w (nth (kids w f) 0 nil)))) after-name))]
-  (walk-fn-arity! w (kids w a) scope walk!))))
+  (contains? rc/DEF-FORMS hs) (walk-value-def! w ks scope walk!)
+  (contains? rc/PARAM-FORMS hs) (walk-executable! w (if (contains? #{"defn" "defn-" "defmacro"} hs) (vec (drop 2 ks)) (vec (rest ks))) scope walk! (= "defmacro" hs))
   (contains? rc/LET-FORMS hs) (let [bracket (nth ks 1 nil)
    ok (and (some? bracket) (brk? w bracket))
    _ (if ok (do
-  (resolve-types-in-bracket! w bracket)))
+  (walk-binding-types! w (rb/let-type-nodes (:ctx w) (:view w) bracket))))
    pairs (if ok (rb/let-bind-pairs (:ctx w) (:view w) bracket) [])
    final (reduce (fn [sc p] (let [bsyms (nth p 0)
    vnode (nth p 1)
@@ -326,7 +359,7 @@
   (contains? rc/FOR-FORMS hs) (let [bracket (nth ks 1 nil)
    ok (and (some? bracket) (brk? w bracket))
    _ (if ok (do
-  (resolve-types-in-bracket! w bracket)))
+  (walk-binding-types! w (rb/for-type-nodes (:ctx w) (:view w) bracket))))
    entries (if ok (rb/for-bind-pairs (:ctx w) (:view w) bracket) [])
    final (reduce (fn [sc e] (if (= :expr (nth e 0)) (do
   (walk! w (nth e 1) sc)
@@ -354,16 +387,9 @@
    bodyscope (push frame scope)]
   (do
   (doseq [fl fnlists]
-  (walk-fn-arity! w (vec (rest (kids w fl))) bodyscope walk!))
+  (walk-fn-arity! w (vec (rest (kids w fl))) bodyscope walk! false))
   (walk-all! w (vec (drop 2 ks)) bodyscope walk!)))
-  (contains? #{"extend-type" "extend-protocol"} hs) (doseq [ch (vec (rest ks))]
-  (cond
-  (some? (sv w ch)) (walk! w ch scope)
-  (= "list" (kd w ch)) (let [ic (kids w ch)]
-  (do
-  (walk! w (nth ic 0 nil) scope)
-  (walk-fn-arity! w (vec (rest ic)) scope walk!)))
-  :else nil))
+  (contains? rc/EXTEND-FORMS hs) (walk-extension! w ks scope walk!)
   (= "as->" hs) (let [init (nth ks 1 nil)
    name (nth ks 2 nil)
    frame (rb/frame-of (:ctx w) (:view w) (if (some? (sv w name)) [name] []))]

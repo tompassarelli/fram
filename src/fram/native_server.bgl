@@ -21,9 +21,7 @@
 ;; log-byte-count tracks the canonical FRAMLOG length this store has written,
 ;; which is the watermark a checkpoint image records.
 (defrecord Store
-  [(canonical-log-path String)
-   (session schema/Session)
-   (log-byte-count Int)])
+  [(canonical-log-path String) (session schema/Session) (log-byte-count Int)])
 
 (defrecord Request [(frame t/RpcFrameV1)])
 (defrecord Response [(frame t/RpcFrameV1)])
@@ -38,10 +36,7 @@
    (boot-append (Vec Int))
    (snapshot-report String)])
 
-(defrecord RequestResult
-  [(status Int)
-   (request Request?)
-   (error String?)])
+(defrecord RequestResult [(status Int) (request Request?) (error String?)])
 
 (defrecord ResponseResult
   [(status Int)
@@ -69,8 +64,7 @@
   (->RequestResult status-fatal nil message))
 
 (defn failed-response
-  [(message String)
-   (store-result StoreResult)] ResponseResult
+  [(message String) (store-result StoreResult)] ResponseResult
   (->ResponseResult
    status-fatal nil message empty-bytes store-result false empty-bytes))
 
@@ -79,13 +73,14 @@
    status-ok store nil
    (storeresult-valid-log-bytes prior) empty-bytes ""))
 
+;; The whole log is already borrowed here; slicing it into chunks would copy
+;; every byte again.
 (defn- fold-store!
   [(canonical-log-path String)
    (space-id String)
    (log-bytes ByteSource)
-   (report String)] StoreResult
-  ;; The whole log is already borrowed here; slicing it into chunks would copy
-  ;; every byte again.
+   (report String)]
+  StoreResult
   (let [completed
         (log/consume-framlog-header!
          (log/start-framlog-stream space-id) log-bytes)
@@ -113,7 +108,8 @@
   [(canonical-log-path String)
    (space-id String)
    (log-bytes ByteSource)
-   (plan snapshot/BootPlan)] StoreResult
+   (plan snapshot/BootPlan)]
+  StoreResult
   (let [(image snapshot/Image?) (snapshot/bootplan-image plan)]
     (if (nil? image)
       (fold-store! canonical-log-path space-id log-bytes
@@ -160,7 +156,8 @@
   [(canonical-log-path String)
    (space-id String)
    (log-bytes ByteSource)
-   (snapshot-bytes ByteSource)] StoreResult
+   (snapshot-bytes ByteSource)]
+  StoreResult
   (let [plan (snapshot/plan-snapshot-boot! true snapshot-bytes log-bytes
                                            space-id)]
     (if (= :replay (snapshot/bootplan-route plan))
@@ -169,8 +166,7 @@
                    (snapshot/bootplan-report plan)))))
 
 (defn wrap-rpc-response
-  [(request-frame t/RpcFrameV1)
-   (rpc-response t/RpcResponse)] Response
+  [(request-frame t/RpcFrameV1) (rpc-response t/RpcResponse)] Response
   (->Response
    (t/->RpcFrameV1 :response 0
                    (t/rpcframev1-request-id request-frame)
@@ -183,7 +179,8 @@
    (store Store)
    (frame t/RpcFrameV1)
    (request t/RpcRequest)
-   (now-ms Int)] ResponseResult
+   (now-ms Int)]
+  ResponseResult
   (let [session (store-session store)
         root (schema/store-of session)
         served-version (term-store/current-sequence root)
@@ -248,7 +245,8 @@
   [(store-result StoreResult)
    (store Store)
    (request-value Request)
-   (now-ms Int)] ResponseResult
+   (now-ms Int)]
+  ResponseResult
   (let [frame (request-frame request-value)
         request (t/rpcframev1-request frame)]
     (if request
@@ -313,13 +311,15 @@
   [(canonical-log-path String)
    (space-id String)
    (log-bytes ByteSource)
-   (snapshot-bytes ByteSource)] StoreResult
+   (snapshot-bytes ByteSource)]
+  StoreResult
   (boot-store! canonical-log-path space-id log-bytes snapshot-bytes))
 
 (defn server-store-dispatch!
   [(store-result StoreResult)
    (request-result RequestResult)
-   (now-ms Int)] ResponseResult
+   (now-ms Int)]
+  ResponseResult
   (let [store (storeresult-store store-result)
         request-value (requestresult-request request-result)]
     (if (and (= status-ok (storeresult-status store-result))

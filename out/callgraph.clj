@@ -4,14 +4,14 @@
             [cheshire.core :as json]
             [resolve :as rsv]))
 
-(defn parse-corpus [^String path]
+(defn parse-corpus! [^String path]
   (let [skips (atom 0)
    lines (str/split-lines (slurp path))
    acc (reduce (fn [st l] (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (:cur st)) (:out st) (conj (vec (:out st)) (:cur st)))} (if (str/starts-with? l "[") (let [t (try
   (edn/read-string l)
   (catch Exception e
     nil))]
-  (if (nil? t) (let [_ (swap! skips inc)]
+  (if (nil? t) (let [_ (swap! skips (fn [n] (inc n)))]
   st) (assoc st :cur (assoc (:cur st) :triples (conj (vec (:triples (:cur st))) t))))) st))) {:cur {} :out []} lines)
    blocks (if (empty? (:cur acc)) (vec (:out acc)) (conj (vec (:out acc)) (:cur acc)))]
   (if (pos? (deref skips)) (binding [*out* *err*]
@@ -77,7 +77,7 @@
 
 (defn -main [& args]
   (let [facts-path (str (nth (vec args) 0))
-   blocks (parse-corpus facts-path)
+   blocks (parse-corpus! facts-path)
    graph (build-graph blocks)
    defns (vec (:defns graph))
    edges (vec (:edges graph))

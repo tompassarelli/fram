@@ -8,10 +8,7 @@
 (require clojure.string :as str)
 
 (defrecord AggregateSpec [(operator Keyword) (argument Int?)])
-(defrecord HavingClause
-  [(operator Keyword)
-   (aggregate-index Int)
-   (value Any)])
+(defrecord HavingClause [(operator Keyword) (aggregate-index Int) (value Any)])
 (defrecord FindSpec
   [(relation String)
    (grouping (Vec Int))
@@ -26,8 +23,7 @@
 (defalias TextAttributeScope (U (Set Any) Nil))
 (defrecord Projection [(edb d/Db) (candidates d/CandidateSources)])
 (defrecord ProjectionResult
-  [(projection Projection?)
-   (error d/QueryEvaluationError?)])
+  [(projection Projection?) (error d/QueryEvaluationError?)])
 (defrecord QueryError [(code Keyword) (message String)])
 (defrecord CompileResult [(plan QueryPlan?) (errors (Vec QueryError))])
 (defrecord QueryResult
@@ -36,8 +32,7 @@
    (over-limit Int?)
    (maximum Int?)])
 (defrecord QueryExecutionResult
-  [(query-result QueryResult?)
-   (error d/QueryEvaluationError?)])
+  [(query-result QueryResult?) (error d/QueryEvaluationError?)])
 (defrecord QueryPage
   [(rows (Vec d/Tuple))
    (next String?)
@@ -48,8 +43,7 @@
 (defalias NumericAtom (Dyn Int Float))
 (defrecord AggregateGroup [(key d/Tuple) (members (Vec d/Tuple))])
 (defrecord AggregateGroups
-  [(by-key (Map String AggregateGroup))
-   (order (Vec String))])
+  [(by-key (Map String AggregateGroup)) (order (Vec String))])
 
 (def ^:dynamic *query-control* d/QueryControl? nil)
 
@@ -78,16 +72,15 @@
   (->AggregateSpec operator argument))
 
 (defn having-clause
-  [(operator Keyword)
-   (aggregate-index Int)
-   (value Any)] HavingClause
+  [(operator Keyword) (aggregate-index Int) (value Any)] HavingClause
   (->HavingClause operator aggregate-index value))
 
 (defn aggregate-find
   [(relation String)
    (grouping (Vec Int))
    (aggregates (Vec AggregateSpec))
-   (having (Vec HavingClause))] FindSpec
+   (having (Vec HavingClause))]
+  FindSpec
   (->FindSpec relation grouping aggregates having))
 
 (defn order-clause [(column Int) (direction Keyword)] OrderClause
@@ -97,15 +90,15 @@
   [(find FindSpec)
    (strata (Vec (Vec d/Rule)))
    (order (Vec OrderClause))
-   (limit Int?)] QueryPlan
+   (limit Int?)]
+  QueryPlan
   (->QueryPlan find strata order limit))
 
 (defn query-plan [(find FindSpec) (strata (Vec (Vec d/Rule)))] QueryPlan
   (ordered-query-plan find strata [] nil))
 
 (defn- literal-text-attribute-scope
-  [(literal d/Literal)
-   (scope TextAttributeScope)] TextAttributeScope
+  [(literal d/Literal) (scope TextAttributeScope)] TextAttributeScope
   (if (nil? scope)
     nil
     (if (and (= :relation (d/literal-kind literal))
@@ -117,8 +110,7 @@
       scope)))
 
 (defn- rule-text-attribute-scope
-  [(rule d/Rule)
-   (scope TextAttributeScope)] TextAttributeScope
+  [(rule d/Rule) (scope TextAttributeScope)] TextAttributeScope
   (reduce
    (fn [(current TextAttributeScope) (literal d/Literal)] TextAttributeScope
      (literal-text-attribute-scope literal current))
@@ -195,14 +187,9 @@
 (defn- failure-result [(errors (Vec QueryError))] QueryResult
   (->QueryResult [] errors nil nil))
 (defn- limited-result
-  [(error-value QueryError)
-   (count-value Int)
-   (maximum Int)] QueryResult
+  [(error-value QueryError) (count-value Int) (maximum Int)] QueryResult
   (->QueryResult [] [error-value] count-value maximum))
-(defn- success-page
-  [(rows (Vec d/Tuple))
-   (next String?)
-   (more Bool)] QueryPage
+(defn- success-page [(rows (Vec d/Tuple)) (next String?) (more Bool)] QueryPage
   (->QueryPage rows next more [] nil))
 (defn- failure-page [(errors (Vec QueryError))] QueryPage
   (->QueryPage [] nil false errors nil))
@@ -210,19 +197,18 @@
   (->QueryPage [] nil false [error-value] maximum))
 
 (defn project-with-candidates
-  [(propositions (Vec t/Triple))
-   (candidates d/CandidateSources)] Projection
+  [(propositions (Vec t/Triple)) (candidates d/CandidateSources)] Projection
   (->Projection (d/edb propositions) candidates))
 
 (defn project-with-source
   [(propositions (Vec t/Triple))
    (relation String)
-   (source d/CandidateSourceValue)] Projection
+   (source d/CandidateSourceValue)]
+  Projection
   (project-with-candidates propositions {relation source}))
 
 (defn- projection-from-candidates-result
-  [(database d/Db)
-   (result d/CandidateSourcesResult)] ProjectionResult
+  [(database d/Db) (result d/CandidateSourcesResult)] ProjectionResult
   (let [error-value (d/candidatesourcesresult-error result)]
     (if (some? error-value)
       (->ProjectionResult nil error-value)
@@ -235,8 +221,7 @@
    (d/build-text-candidates-result propositions)))
 
 (defn project-with-occurrences-result
-  [(propositions (Vec t/Triple))
-   (occurrences (Vec t/Triple))] ProjectionResult
+  [(propositions (Vec t/Triple)) (occurrences (Vec t/Triple))] ProjectionResult
   (let [(database d/Db) (d/edb-with-occurrences propositions occurrences)]
     (projection-from-candidates-result
      database (d/build-text-candidates-result propositions))))
@@ -255,8 +240,7 @@
   (projection-or-raise (project-result propositions)))
 
 (defn project-with-occurrences
-  [(propositions (Vec t/Triple))
-   (occurrences (Vec t/Triple))] Projection
+  [(propositions (Vec t/Triple)) (occurrences (Vec t/Triple))] Projection
   (projection-or-raise
    (project-with-occurrences-result propositions occurrences)))
 
@@ -274,9 +258,7 @@
               (if (some? name) (conj acc name) acc)))
           (empty-string-set) terms))
 
-(defn- term-errors
-  [(terms (Vec d/QueryTerm))
-   (context String)] (Vec QueryError)
+(defn- term-errors [(terms (Vec d/QueryTerm)) (context String)] (Vec QueryError)
   (reduce (fn [(acc (Vec QueryError)) (term d/QueryTerm)] (Vec QueryError)
             (if (d/query-term? term)
               acc
@@ -287,7 +269,8 @@
 (defn- unbound-errors
   [(terms (Vec d/QueryTerm))
    (bound (Set String))
-   (context String)] (Vec QueryError)
+   (context String)]
+  (Vec QueryError)
   (reduce (fn [(acc (Vec QueryError)) (name String)] (Vec QueryError)
             (if (contains? bound name)
               acc
@@ -317,7 +300,8 @@
   [(literal d/Literal)
    (known (Set String))
    (arities (Map String Int))
-   (bound (Set String))] (Vec QueryError)
+   (bound (Set String))]
+  (Vec QueryError)
   (let [kind (d/literal-kind literal)
         arguments (d/literal-arguments literal)
         base-errors (term-errors arguments "literal")]
@@ -390,8 +374,7 @@
     [:else #{}]))
 
 (defn- text-literal-errors
-  [(literal d/Literal)
-   (bound (Set String))] (Vec QueryError)
+  [(literal d/Literal) (bound (Set String))] (Vec QueryError)
   (if (and (= :relation (d/literal-kind literal))
            (contains? d/text-relations (d/literal-relation literal)))
     (let [relation (d/literal-relation literal)
@@ -422,7 +405,8 @@
 (defn- rule-errors
   [(rule d/Rule)
    (known (Set String))
-   (arities (Map String Int))] (Vec QueryError)
+   (arities (Map String Int))]
+  (Vec QueryError)
   (let [head-relation (d/rule-head-relation rule)
         head-arguments (d/rule-head-arguments rule)
         head-errors
@@ -475,7 +459,8 @@
 (defn- dependency-edges [(rules (Vec d/Rule))] (Map String (Set String))
   (reduce (fn
             [(acc (Map String (Set String)))
-             (rule d/Rule)] (Map String (Set String))
+             (rule d/Rule)]
+            (Map String (Set String))
             (let [head (d/rule-head-relation rule)]
               (update acc head
                       (fn [(current (U (Set String) Nil))] (Set String)
@@ -484,9 +469,7 @@
           {} rules))
 
 (defn- reaches?
-  [(start String)
-   (target String)
-   (edges (Map String (Set String)))] Bool
+  [(start String) (target String) (edges (Map String (Set String)))] Bool
   (loop [(frontier (Vec String)) (vec (get edges start (empty-string-set)))
          (position Int) 0
          (seen (Set String)) (empty-string-set)]
@@ -531,8 +514,7 @@
      (empty-query-errors) rules)))
 
 (defn- forward-errors
-  [(strata (Vec (Vec d/Rule)))
-   (all-derived (Set String))] (Vec QueryError)
+  [(strata (Vec (Vec d/Rule))) (all-derived (Set String))] (Vec QueryError)
   (loop [(position Int) 0
          (lower (Set String)) base-relations
          (errors (Vec QueryError)) (empty-query-errors)]
@@ -546,8 +528,7 @@
              (fn [(acc (Vec QueryError)) (rule d/Rule)] (Vec QueryError)
                (reduce
                 (fn
-                  [(inner (Vec QueryError))
-                   (relation String)] (Vec QueryError)
+                  [(inner (Vec QueryError)) (relation String)] (Vec QueryError)
                   (if (and (contains? all-derived relation)
                            (not (contains? available relation)))
                     (conj inner (query-error :query-forward-reference
@@ -561,7 +542,8 @@
 (defn- find-errors
   [(find FindSpec)
    (derived (Set String))
-   (arities (Map String Int))] (Vec QueryError)
+   (arities (Map String Int))]
+  (Vec QueryError)
   (let [relation (findspec-relation find)
         arity (get arities relation)
         relation-errors
@@ -577,7 +559,8 @@
           (let [group-errors
                 (reduce (fn
                           [(acc (Vec QueryError))
-                           (position Int)] (Vec QueryError)
+                           (position Int)]
+                          (Vec QueryError)
                           (if (and (>= position 0)
                                    (and (some? arity) (< position arity)))
                             acc
@@ -588,7 +571,8 @@
                 (reduce
                  (fn
                    [(acc (Vec QueryError))
-                    (spec AggregateSpec)] (Vec QueryError)
+                    (spec AggregateSpec)]
+                   (Vec QueryError)
                    (let [operator (aggregatespec-operator spec)
                          argument (aggregatespec-argument spec)]
                      (cond
@@ -610,7 +594,8 @@
                 (reduce
                  (fn
                    [(acc (Vec QueryError))
-                    (clause HavingClause)] (Vec QueryError)
+                    (clause HavingClause)]
+                   (Vec QueryError)
                    (cond
                      [(not (contains? d/comparison-operators
                                      (havingclause-operator clause)))
@@ -641,8 +626,7 @@
     (get arities (findspec-relation find))))
 
 (defn- order-errors
-  [(plan QueryPlan)
-   (arities (Map String Int))] (Vec QueryError)
+  [(plan QueryPlan) (arities (Map String Int))] (Vec QueryError)
   (let [arity (result-arity (queryplan-find plan) arities)
         clause-errors
         (loop [(remaining (Vec OrderClause)) (queryplan-order plan)
@@ -682,8 +666,7 @@
 (defn validate-plan [(plan QueryPlan)] (Vec QueryError)
   (let [strata (queryplan-strata plan)
         rules (reduce (fn
-                        [(acc (Vec d/Rule))
-                         (stratum (Vec d/Rule))] (Vec d/Rule)
+                        [(acc (Vec d/Rule)) (stratum (Vec d/Rule))] (Vec d/Rule)
                         (vec (concat acc stratum)))
                       (empty-rules) strata)
         derived (derived-relations rules)
@@ -985,7 +968,8 @@
   (let [(by-key (Map String d/Tuple))
         (reduce (fn
                   [(acc (Map String d/Tuple))
-                   (row d/Tuple)] (Map String d/Tuple)
+                   (row d/Tuple)]
+                  (Map String d/Tuple)
                   (assoc acc (row-key row) row))
                 {} rows)
         (keys (Vec String))
@@ -1085,9 +1069,7 @@
         [:else (compare (term-key left) (term-key right))]))))
 
 (defn- ordered-row-compare
-  [(order (Vec OrderClause))
-   (left d/Tuple)
-   (right d/Tuple)] Int
+  [(order (Vec OrderClause)) (left d/Tuple) (right d/Tuple)] Int
   (loop [remaining order]
     (if (empty? remaining)
       (compare (row-key left) (row-key right))
@@ -1106,7 +1088,8 @@
 (defn- merge-ordered-row-vectors
   [(order (Vec OrderClause))
    (left (Vec d/Tuple))
-   (right (Vec d/Tuple))] (Vec d/Tuple)
+   (right (Vec d/Tuple))]
+  (Vec d/Tuple)
   (loop [(left-index Int) 0
          (right-index Int) 0
          (merged (Vec d/Tuple)) []]
@@ -1128,8 +1111,7 @@
               (conj merged (nth right right-index)))])))
 
 (defn- merge-sort-ordered-rows
-  [(order (Vec OrderClause))
-   (rows (Vec d/Tuple))] (Vec d/Tuple)
+  [(order (Vec OrderClause)) (rows (Vec d/Tuple))] (Vec d/Tuple)
   (if (<= (count rows) 1)
     rows
     (let [(middle Int) (quot (count rows) 2)
@@ -1153,7 +1135,8 @@
 (defn- evaluate-plan-result!
   [(projection Projection)
    (plan QueryPlan)
-   (control d/QueryControl?)] d/QueryEvaluationResult
+   (control d/QueryControl?)]
+  d/QueryEvaluationResult
   (d/run-strata-db-with-candidates-result!
    (projection-edb projection)
    (queryplan-strata plan)
@@ -1263,9 +1246,7 @@
             0.0 rows)))
 
 (defn- extreme-value
-  [(rows (Vec d/Tuple))
-   (position Int)
-   (maximum? Bool)] NumericAtom?
+  [(rows (Vec d/Tuple)) (position Int) (maximum? Bool)] NumericAtom?
   (reduce (fn [(best NumericAtom?) (row d/Tuple)] NumericAtom?
             (let [candidate (required-number (nth row position))]
               (if (nil? best)
@@ -1298,9 +1279,7 @@
       [:else 0])))
 
 (defn- comparison-number
-  [(operator Keyword)
-   (left NumericAtom)
-   (right NumericAtom)] Bool
+  [(operator Keyword) (left NumericAtom) (right NumericAtom)] Bool
   (let [left-number (numeric-float left)
         right-number (numeric-float right)]
     (cond
@@ -1313,15 +1292,13 @@
       [:else false])))
 
 (defn- aggregate-values
-  [(rows (Vec d/Tuple))
-   (specs (Vec AggregateSpec))] (Vec NumericAtom)
+  [(rows (Vec d/Tuple)) (specs (Vec AggregateSpec))] (Vec NumericAtom)
   (mapv (fn [(spec AggregateSpec)] NumericAtom
           (aggregate-value rows spec))
         specs))
 
 (defn- append-aggregate-values
-  [(row d/Tuple)
-   (values (Vec NumericAtom))] d/Tuple
+  [(row d/Tuple) (values (Vec NumericAtom))] d/Tuple
   (reduce (fn [(current d/Tuple) (value NumericAtom)] d/Tuple
             (if (integer? value)
               (let [(integer-value Int) value
@@ -1333,9 +1310,7 @@
           row values))
 
 (defn- having-passes?
-  [(row d/Tuple)
-   (grouping-count Int)
-   (clauses (Vec HavingClause))] Bool
+  [(row d/Tuple) (grouping-count Int) (clauses (Vec HavingClause))] Bool
   (every?
    (fn [(clause HavingClause)] Bool
      (comparison-number
@@ -1385,7 +1360,8 @@
 (defn run-plan-projected-result!
   [(projection Projection)
    (plan QueryPlan)
-   (control d/QueryControl?)] QueryExecutionResult
+   (control d/QueryControl?)]
+  QueryExecutionResult
   (let [errors (validate-plan plan)]
     (if (not (empty? errors))
       (->QueryExecutionResult (failure-result errors) nil)
@@ -1414,7 +1390,8 @@
   [(propositions (Vec t/Triple))
    (occurrences (Vec t/Triple))
    (plan QueryPlan)
-   (control d/QueryControl?)] QueryExecutionResult
+   (control d/QueryControl?)]
+  QueryExecutionResult
   (let [(projection-result ProjectionResult)
         (project-with-occurrences-result propositions occurrences)
         (projection-value Projection?) (projection-result-projection projection-result)
@@ -1431,8 +1408,7 @@
          :rpc/native-query-failed
          "query projection produced no result"))])))
 
-(defn- execution-result-or-raise!
-  [(execution QueryExecutionResult)] QueryResult
+(defn- execution-result-or-raise! [(execution QueryExecutionResult)] QueryResult
   (let [result (queryexecutionresult-query-result execution)
         error-value (queryexecutionresult-error execution)]
     (cond
@@ -1452,15 +1428,14 @@
 (defn run-plan-projected-controlled!
   [(projection Projection)
    (plan QueryPlan)
-   (control d/QueryControl?)] QueryResult
+   (control d/QueryControl?)]
+  QueryResult
   (try
     (execution-result-or-raise!
      (run-plan-projected-result! projection plan control))
     (catch (problem Exception) (abort-result problem))))
 
-(defn run-plan-projected!
-  [(projection Projection)
-   (plan QueryPlan)] QueryResult
+(defn run-plan-projected! [(projection Projection) (plan QueryPlan)] QueryResult
   (run-plan-projected-controlled! projection plan *query-control*))
 
 (defn run-projected! [(projection Projection) (plan QueryPlan)] QueryResult
@@ -1510,10 +1485,7 @@
                (page-cursor (nth rows (- count-value 1))) nil)]
     (success-page rows next more)))
 
-(defn- envelope-size
-  [(rows-size Int)
-   (next Any)
-   (more Bool)] Int
+(defn- envelope-size [(rows-size Int) (next Any) (more Bool)] Int
   (+ (utf8-size "rows:") rows-size (utf8-size "|next:")
      (utf8-size (pr-str next)) (utf8-size "|more:")
      (utf8-size (pr-str more))))
@@ -1557,10 +1529,7 @@
       [:else (recur (inc position))])))
 
 (defn run-page-plan-projected!
-  [(projection Projection)
-   (plan QueryPlan)
-   (limit Any)
-   (after Any)] QueryPage
+  [(projection Projection) (plan QueryPlan) (limit Any) (after Any)] QueryPage
   (let [validation-errors (validate-plan plan)]
     (cond
       [(not (empty? validation-errors)) (failure-page validation-errors)]
@@ -1610,15 +1579,13 @@
              (catch (problem Exception) (abort-page problem)))))])))
 
 (defn run-page-projected!
-  [(projection Projection)
-   (plan QueryPlan)
-   (limit Any)
-   (after Any)] QueryPage
+  [(projection Projection) (plan QueryPlan) (limit Any) (after Any)] QueryPage
   (run-page-plan-projected! projection plan limit after))
 
 (defn run-page!
   [(propositions (Vec t/Triple))
    (plan QueryPlan)
    (limit Any)
-   (after Any)] QueryPage
+   (after Any)]
+  QueryPage
   (run-page-plan-projected! (project propositions) plan limit after))

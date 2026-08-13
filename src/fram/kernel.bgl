@@ -20,15 +20,11 @@
 (def vocabulary-grouping Keyword :grouped-under)
 (def kernel-vocabulary-prefix String ":kernel/")
 
-(defn profile-header
-  [(profile-id Any)
-   (kind String)
-   (mode String)] t/Triple
+(defn profile-header [(profile-id Any) (kind String) (mode String)] t/Triple
   (t/triple profile-id kind mode))
 
 (defn relational-profile-declaration
-  [(space-id String)
-   (profile-id Any)] t/Triple
+  [(space-id String) (profile-id Any)] t/Triple
   (t/triple space-id profile-anchor
             (profile-header profile-id relational-profile-kind
                             observe-profile-mode)))
@@ -40,9 +36,7 @@
   (= profile-anchor (t/triple-t2 value)))
 
 (defn- profile-has-rule?
-  [(triples (Vec t/Triple))
-   (profile-id Any)
-   (rule String)] Bool
+  [(triples (Vec t/Triple)) (profile-id Any) (rule String)] Bool
   (not (empty?
         (filterv (fn [(value t/Triple)] Bool
                    (and (= profile-id (t/triple-t1 value))
@@ -51,8 +45,7 @@
                  triples))))
 
 (defn declared-relational-profile?
-  [(triples (Vec t/Triple))
-   (space-id String)] Bool
+  [(triples (Vec t/Triple)) (space-id String)] Bool
   (not
    (empty?
     (filterv
@@ -81,8 +74,7 @@
                  triples)))
 
 (defn declared-vocabulary-rule?
-  [(triples (Vec t/Triple))
-   (space-id String)] Bool
+  [(triples (Vec t/Triple)) (space-id String)] Bool
   (not (empty?
         (filterv (fn [(profile-id Any)] Bool
                    (profile-has-rule? triples profile-id
@@ -109,8 +101,7 @@
 ;; R5 reads the whole space, so it cannot join R1-R4's per-proposition verdict:
 ;; the grouping that licenses a spelling lives in a sibling proposition.
 (defn vocabulary-lint-errors
-  [(triples (Vec t/Triple))
-   (proposition t/Triple)] (Vec String)
+  [(triples (Vec t/Triple)) (proposition t/Triple)] (Vec String)
   (let [(t2 Any) (t/triple-t2 proposition)]
     (if (and (namespaced-vocabulary? t2)
              (not (grouped-vocabulary? triples t2)))
@@ -156,8 +147,7 @@
     (if r4 errors3 (conj errors3 "R4"))))
 
 (defn lint-declared-profile
-  [(triples (Vec t/Triple))
-   (space-id String)] (Vec t/Triple)
+  [(triples (Vec t/Triple)) (space-id String)] (Vec t/Triple)
   (if (not (declared-relational-profile? triples space-id))
     []
     (let [(vocabulary? Bool) (declared-vocabulary-rule? triples space-id)]
@@ -197,28 +187,19 @@
              (= term (t/triple-t3 value)))
            triples))
 
-(defn by-t12
-  [(triples (Vec t/Triple))
-   (t1 Any)
-   (t2 Any)] (Vec t/Triple)
+(defn by-t12 [(triples (Vec t/Triple)) (t1 Any) (t2 Any)] (Vec t/Triple)
   (filterv (fn [(value t/Triple)] Bool
              (and (= t1 (t/triple-t1 value))
                   (= t2 (t/triple-t2 value))))
            triples))
 
-(defn by-t23
-  [(triples (Vec t/Triple))
-   (t2 Any)
-   (t3 Any)] (Vec t/Triple)
+(defn by-t23 [(triples (Vec t/Triple)) (t2 Any) (t3 Any)] (Vec t/Triple)
   (filterv (fn [(value t/Triple)] Bool
              (and (= t2 (t/triple-t2 value))
                   (= t3 (t/triple-t3 value))))
            triples))
 
-(defn by-t13
-  [(triples (Vec t/Triple))
-   (t1 Any)
-   (t3 Any)] (Vec t/Triple)
+(defn by-t13 [(triples (Vec t/Triple)) (t1 Any) (t3 Any)] (Vec t/Triple)
   (filterv (fn [(value t/Triple)] Bool
              (and (= t1 (t/triple-t1 value))
                   (= t3 (t/triple-t3 value))))

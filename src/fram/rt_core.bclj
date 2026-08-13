@@ -83,8 +83,7 @@
 
 (def DIGEST-RE Regex (re-pattern "[0-9a-f]{64}"))
 
-(defn edit-batch-envelope-marker?
-  [(record (Map Keyword (Dyn String Int)))] Bool
+(defn edit-batch-envelope-marker? [(record (Map Keyword (Dyn String Int)))] Bool
   (and (map? record) (contains? record :fram-edit-envelope)))
 
 (defn digest? [(value String)] Bool
@@ -97,8 +96,7 @@
   (and (= "@log:gen" (:l op)) (= "generation" (:p op))))
 
 (defn valid-edit-batch-envelope?
-  [(record (Map Keyword (Dyn String Int)))
-   (expected-seal String)] Bool
+  [(record (Map Keyword (Dyn String Int))) (expected-seal String)] Bool
   (let [base (:fram-edit-base-version record) final (:fram-edit-final-version record) ops (:fram-edit-ops record) installed (:fram-edit-installed record) lines (:fram-edit-line-count record)]
     (and (map? record)
       (= EDIT-BATCH-ENVELOPE-KEYS (set (keys record)))
@@ -152,9 +150,8 @@
    (old-sha String?)
    (new-sha1 String?)
    (live-line1-sha String?)
-   (live-prefix-sha String?)] Keyword
-  :raises
-  (U AllocationError RewriteCrashError)
+   (live-prefix-sha String?)]
+  Keyword :raises (U AllocationError RewriteCrashError)
   (cond
     (nil? live-ino)
     (throw (ex-info (str "rewrite intent present but " server-path " does not exist — refusing to classify") {:path server-path :fram/doctor-refusal true}))
@@ -171,7 +168,8 @@
 
 (defn log-envelope
   [(canonical-log String)
-   (req (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)))))))] (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)))) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String))))))))
+   (req (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)))))))]
+  (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)))) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String))))))))
   (let [base {:op :for-log :expected-log canonical-log :request req}]
     (if (contains? req :fmt) (assoc base :fmt (:fmt req)) base)))
 
@@ -214,7 +212,8 @@
 
 (defn server-status-response
   [(port Int)
-   (resp (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String)))))))] String
+   (resp (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String)))))))]
+  String
   (cond
     (integer? (:version resp))
     (str "server UP on 127.0.0.1:" port " (v" (:version resp) ")")
@@ -237,16 +236,15 @@
   (str "server DOWN on 127.0.0.1:" port " — start it with bin/fram-up"))
 
 (defn warm-read-response
-  [(resp (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))))] (U (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))) Nil)
+  [(resp (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))))]
+  (U (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))) Nil)
   (if (and (map? resp) (= "unknown op" (:error resp))) nil resp))
 
 (defn warm-read-for-log-response
-  [(resp (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))))] (U (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))) Nil)
+  [(resp (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))))]
+  (U (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))) Nil)
   (if (or (= "unknown op" (:error resp)) (contains? resp :reject)) nil resp))
 
 (defunion :throwable
   RewriteCrashError
-  (RewriteCrash
-    [(message String)
-     (path String)
-     (doctor-refusal Bool)]))
+  (RewriteCrash [(message String) (path String) (doctor-refusal Bool)]))

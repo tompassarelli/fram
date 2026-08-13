@@ -114,8 +114,6 @@
 (defn- nn [e]
   e)
 
-(def COLON3 #{":-" ":" ":raises"})
-
 (defn- push [frame scope]
   (into [frame] scope))
 
@@ -134,17 +132,18 @@
   (= "list" k) (let [kids (rr/ordered-children ctx node)
    h (str (rr/head-sym ctx view node))
    brk? (fn [e] (rb/brackets? ctx view e))
-   cap-arity (fn [forms] (let [bi (loop [i 0]
+   cap-arity (fn [forms macro?] (let [param-index (loop [i 0]
   (if (>= i (count forms)) nil (if (brk? (nth forms i)) i (recur (inc i)))))
-   pv (if (nil? bi) nil (nth forms bi))
+   signature-forms (if (nil? param-index) [] (vec (drop param-index forms)))
+   sig (rb/signature-tail ctx view signature-forms macro?)
+   pv (:params sig)
    frame (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv)))
    or-vals (if (nil? pv) [] (reduce (fn [acc kd] (into acc (rb/collect-or-vals ctx view kd))) [] (vec (rest (rr/ordered-children ctx pv)))))
-   body (loop [xs (if (nil? bi) [] (vec (drop (+ bi 1) forms)))]
-  (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))]
+   body (vec (:body sig))]
   (into (reduce (fn [acc o] (into acc (capture-refs m o scope B newnm))) [] or-vals) (reduce (fn [acc b] (into acc (capture-refs m b (push frame scope) B newnm))) [] body))))]
   (cond
   (contains? rc/PARAM-FORMS h) (let [after-name (if (contains? #{"defn" "defn-" "defmacro"} h) (vec (drop 2 kids)) (vec (rest kids)))]
-  (if (some? (some (fn [f] (if (brk? f) true nil)) after-name)) (cap-arity after-name) (reduce (fn [acc a] (if (and (= "list" (rr/kind-of ctx view a)) (brk? (nth (rr/ordered-children ctx a) 0 nil))) (into acc (cap-arity (rr/ordered-children ctx a))) acc)) [] after-name)))
+  (if (some? (some (fn [f] (if (brk? f) true nil)) after-name)) (cap-arity after-name (= "defmacro" h)) (reduce (fn [acc a] (if (and (= "list" (rr/kind-of ctx view a)) (brk? (nth (rr/ordered-children ctx a) 0 nil))) (into acc (cap-arity (rr/ordered-children ctx a) false)) acc)) [] after-name)))
   (contains? rc/LET-FORMS h) (let [bracket (nth kids 1 nil)
    pairs (if (and (some? bracket) (brk? bracket)) (rb/let-bind-pairs ctx view bracket) [])
    acc0 [scope []]
@@ -182,23 +181,27 @@
    fnlists (if (and (some? bracket) (brk? bracket)) (vec (filter (fn [f] (= "list" (rr/kind-of ctx view f))) (vec (rest (rr/ordered-children ctx bracket))))) [])
    frame (rb/frame-of ctx view (vec (keep (fn [f] (nth (rr/ordered-children ctx f) 0 nil)) fnlists)))
    bodyscope (push frame scope)
-   cap-fn (fn [forms] (let [bi (loop [i 0]
-  (if (>= i (count forms)) nil (if (brk? (nth forms i)) i (recur (inc i)))))
-   pv (if (nil? bi) nil (nth forms bi))
+   cap-fn (fn [forms] (let [sig (rb/signature-tail ctx view forms false)
+   pv (:params sig)
    pframe (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv)))
-   fbody (loop [xs (if (nil? bi) [] (vec (drop (+ bi 1) forms)))]
-  (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))]
+   fbody (vec (:body sig))]
   (reduce (fn [x b] (into x (capture-refs m b (push pframe bodyscope) B newnm))) [] fbody)))]
   (into (reduce (fn [acc fl] (into acc (cap-fn (vec (rest (rr/ordered-children ctx fl)))))) [] fnlists) (reduce (fn [acc b] (into acc (capture-refs m b bodyscope B newnm))) [] (vec (drop 2 kids)))))
-  (contains? #{"extend-type" "extend-protocol"} h) (reduce (fn [acc ch] (if (= "list" (rr/kind-of ctx view ch)) (let [ic (rr/ordered-children ctx ch)
+  (contains? #{"extend-type" "extend-protocol"} h) (reduce (fn [acc ch] (cond
+  (some? (rr/sym-val ctx view ch)) acc
+  (= "list" (rr/kind-of ctx view ch)) (let [ic (rr/ordered-children ctx ch)
    rest-ic (vec (rest ic))
-   bi (loop [i 0]
-  (if (>= i (count rest-ic)) nil (if (brk? (nth rest-ic i)) i (recur (inc i)))))
-   pv (if (nil? bi) nil (nth rest-ic bi))
+   sig (rb/signature-tail ctx view rest-ic false)
+   pv (:params sig)
    pframe (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv)))
-   fbody (loop [xs (if (nil? bi) [] (vec (drop (+ bi 1) rest-ic)))]
-  (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))]
-  (into (into acc (capture-refs m (nth ic 0 nil) scope B newnm)) (reduce (fn [x b] (into x (capture-refs m b (push pframe scope) B newnm))) [] fbody))) (into acc (capture-refs m ch scope B newnm)))) [] (vec (rest kids)))
+   fbody (vec (:body sig))]
+  (into (into acc (capture-refs m (nth ic 0 nil) scope B newnm)) (reduce (fn [x b] (into x (capture-refs m b (push pframe scope) B newnm))) [] fbody)))
+  :else acc)) [] (vec (rest kids)))
+  (= "extend" h) (let [tail (vec (rest kids))
+   target (nth tail 0 nil)
+   body (vec (drop 2 tail))
+   initial (if (some? target) (capture-refs m target scope B newnm) [])]
+  (reduce (fn [acc form] (into acc (capture-refs m form scope B newnm))) initial body))
   (= "as->" h) (let [init (nth kids 1 nil)
    nmn (nth kids 2 nil)
    frame (rb/frame-of ctx view (if (some? (rr/sym-val ctx view nmn)) [(nn nmn)] []))

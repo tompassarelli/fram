@@ -30,10 +30,7 @@
         (or (< n 20) (and (= n 20) (<= (.compareTo value u64-max) 0)))))
     false))
 
-(defn- authority-fail!
-  [(code String)
-   (path String)
-   (message String)] Any
+(defn- authority-fail! [(code String) (path String) (message String)] Any
   (throw (ex-info message {:authority/code code :authority/path path})))
 
 (defn unicode-scalar-string? [(value Any)] Bool
@@ -127,22 +124,26 @@
   (sha256-text (jcs-json-no-number-no-null-canonical! value)))
 
 (defn- ensure-authority!
-  [(condition Any)
-   (code String)
-   (path String)
-   (message String)] Nil
+  [(condition Any) (code String) (path String) (message String)] Nil
   (if condition nil (authority-fail! code path message)))
 
 (defn- closed-object!
   [(value Any)
    (required (Vec String))
    (optional (Vec String))
-   (path String)] (Map String Any)
+   (path String)]
+  (Map String Any)
   (if (map? value)
     (let [(m (Map String Any)) value (keys0 (Vec String)) (vec (sort (set (keys m)))) (allowed (Vec String)) (vec (concat required optional)) (missing (Vec String)) (filterv (fn
-                                                                                                                                  [(key String)] Bool (not (contains? m key))) required) (unknown (Vec Any)) (filterv (fn
-                                                                                                                                                                                                              [(key Any)] Bool (or (not (string? key)) (not (some (fn
-                                                                                                                                                                                                                                                                      [(allowed-key String)] Bool (= allowed-key key)) allowed)))) keys0)]
+                                                                                                                                                                                [(key String)]
+                                                                                                                                                                                Bool
+                                                                                                                                                                                (not (contains? m key))) required) (unknown (Vec Any)) (filterv (fn
+                                                                                                                                                                                                                                                  [(key Any)]
+                                                                                                                                                                                                                                                  Bool
+                                                                                                                                                                                                                                                  (or (not (string? key)) (not (some (fn
+                                                                                                                                                                                                                                                                                       [(allowed-key String)]
+                                                                                                                                                                                                                                                                                       Bool
+                                                                                                                                                                                                                                                                                       (= allowed-key key)) allowed)))) keys0)]
       (do
         (ensure-authority! (empty? missing)
           "missing-key"
@@ -196,7 +197,8 @@
 
 (defn- string-object! [(value Any) (path String)] (Map String Any)
   (if (map? value)
-    (let [(m (Map String Any)) value (bad (Vec Any)) (filterv (fn [(key Any)] Bool (not (clean-authority-string? key))) (vec (sort (set (keys m)))))]
+    (let [(m (Map String Any)) value (bad (Vec Any)) (filterv (fn
+                                                                [(key Any)] Bool (not (clean-authority-string? key))) (vec (sort (set (keys m)))))]
       (do
         (ensure-authority! (empty? bad)
           "invalid-object-key"
@@ -258,8 +260,12 @@
 
 (defn validate-tool-catalog! [(value Any)] (Map String Any)
   (let [m (closed-object! value ["catalogVersion" "tools"] [] "tools") tools (vector-value! (get m "tools") "tools.tools") normalized (mapv (fn
-                                                                                                                                              [(tool Any)] (Map String Any) (validate-tool-descriptor! tool "tools.tools[]")) tools) names (mapv (fn
-                                                                                                                                                                                                                                                     [(tool (Map String Any))] String (str (get tool "name"))) normalized)]
+                                                                                                                                              [(tool Any)]
+                                                                                                                                              (Map String Any)
+                                                                                                                                              (validate-tool-descriptor! tool "tools.tools[]")) tools) names (mapv (fn
+                                                                                                                                                                                                                     [(tool (Map String Any))]
+                                                                                                                                                                                                                     String
+                                                                                                                                                                                                                     (str (get tool "name"))) normalized)]
     (do
       (ensure-authority! (= "fram.graph-edit-tools/v1" (clean-text! (get m "catalogVersion") "tools.catalogVersion"))
         "catalog-version"
@@ -354,13 +360,24 @@
   [(source-root-relative-to-checkout Any)
    (graph-version Any)
    (entries-value Any)
-   (ast-module-ids-value Any)] (Map String Any)
+   (ast-module-ids-value Any)]
+  (Map String Any)
   (let [source-root (clean-text! source-root-relative-to-checkout "manifest.sourceRootRelativeToCheckout") version (decimal-text! graph-version "manifest.graphVersion") entries (mapv (fn
-                                                                                                                                                                                         [(entry Any)] (Map String Any) (validate-module-entry! entry)) (vector-value! entries-value "manifest.entries")) module-ids (mapv (fn
-                                                                                                                                                                                                                                                                                                                               [(entry (Map String Any))] String (str (get entry "moduleId"))) entries) source-paths (mapv (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                               [(entry (Map String Any))] String (str (get entry "sourcePath"))) entries) module-aliases (mapv ascii-case-alias module-ids) path-aliases (mapv ascii-case-alias source-paths) ast-module-ids (clean-string-vector! ast-module-ids-value "manifest.astModuleIds") known (set module-ids) orphans (filterv (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             [(module-id String)] Bool (not (contains? known module-id))) ast-module-ids) ordered (vec (sort-by (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    [(entry (Map String Any))] (Map String Any) entry) module-entry-compare entries)) mapping-core {"manifestVersion" "fram.module-manifest/v1" "sourceRootRelativeToCheckout" source-root "entries" ordered} snapshot-core (assoc mapping-core "graphVersion" version)]
+                                                                                                                                                                                         [(entry Any)]
+                                                                                                                                                                                         (Map String Any)
+                                                                                                                                                                                         (validate-module-entry! entry)) (vector-value! entries-value "manifest.entries")) module-ids (mapv (fn
+                                                                                                                                                                                                                                                                                              [(entry (Map String Any))]
+                                                                                                                                                                                                                                                                                              String
+                                                                                                                                                                                                                                                                                              (str (get entry "moduleId"))) entries) source-paths (mapv (fn
+                                                                                                                                                                                                                                                                                                                                                          [(entry (Map String Any))]
+                                                                                                                                                                                                                                                                                                                                                          String
+                                                                                                                                                                                                                                                                                                                                                          (str (get entry "sourcePath"))) entries) module-aliases (mapv ascii-case-alias module-ids) path-aliases (mapv ascii-case-alias source-paths) ast-module-ids (clean-string-vector! ast-module-ids-value "manifest.astModuleIds") known (set module-ids) orphans (filterv (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    [(module-id String)]
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    Bool
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    (not (contains? known module-id))) ast-module-ids) ordered (vec (sort-by (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               [(entry (Map String Any))]
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               (Map String Any)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               entry) module-entry-compare entries)) mapping-core {"manifestVersion" "fram.module-manifest/v1" "sourceRootRelativeToCheckout" source-root "entries" ordered} snapshot-core (assoc mapping-core "graphVersion" version)]
     (do
       (ensure-authority! (portable-relative-path? source-root true)
         "invalid-source-root"
@@ -394,7 +411,9 @@
 
 (defn validate-normalized-module-manifest! [(value Any)] (Map String Any)
   (let [m (closed-object! value ["manifestVersion" "sourceRootRelativeToCheckout" "graphVersion" "mappingDigest" "snapshotDigest" "entries"] [] "manifest") entries (vector-value! (get m "entries") "manifest.entries") module-ids (mapv (fn
-                                                                                                                                                                                                                                            [(entry Any)] String (str (get (validate-module-entry! entry) "moduleId"))) entries) expected (normalize-module-manifest! (get m "sourceRootRelativeToCheckout") (get m "graphVersion") entries module-ids)]
+                                                                                                                                                                                                                                            [(entry Any)]
+                                                                                                                                                                                                                                            String
+                                                                                                                                                                                                                                            (str (get (validate-module-entry! entry) "moduleId"))) entries) expected (normalize-module-manifest! (get m "sourceRootRelativeToCheckout") (get m "graphVersion") entries module-ids)]
     (do
       (ensure-authority! (= "fram.module-manifest/v1" (clean-text! (get m "manifestVersion") "manifest.manifestVersion"))
         "manifest-version"
@@ -897,7 +916,8 @@
   [(m (Map String Any))
    (prepare (Map String Any))
    (commit (Map String Any))
-   (projection (Map String Any))] Nil
+   (projection (Map String Any))]
+  Nil
   (let [outcome (clean-text! (get m "outcome") "receipt.outcome") spec-value (get receipt-transition-table outcome)]
     (do
       (ensure-authority! (some? spec-value)
@@ -940,7 +960,8 @@
 (defn- validate-receipt-version-relations!
   [(prepare (Map String Any))
    (commit (Map String Any))
-   (projection (Map String Any))] Nil
+   (projection (Map String Any))]
+  Nil
   (let [prepare-status (str (get prepare "status")) commit-status (str (get commit "status")) projection-status (str (get projection "status"))]
     (do
       (when (= prepare-status "accepted")

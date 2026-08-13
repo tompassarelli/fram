@@ -148,7 +148,7 @@
 
 (defn -main [& args]
   (let [corpus-path (if (empty? (vec args)) "build/gjoa.facts" (str (nth (vec args) 0)))
-   blocks (cg/parse-corpus corpus-path)
+   blocks (cg/parse-corpus! corpus-path)
    graph (cg/build-graph blocks)
    defns (:defns graph)
    by-name (:by-name graph)

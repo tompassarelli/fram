@@ -202,7 +202,7 @@
 
 ;; --- binding extraction -----------------------------------------------------
 (def PARAM-FORMS rc/PARAM-FORMS)   ; have a [param] vector
-(def DEF-FORMS   rc/DEF-FORMS)    ; module value binding: (def name :- T val)
+(def DEF-FORMS   rc/DEF-FORMS)    ; module value binding: (def name T val)
 (def VALUE-DEFS  rc/VALUE-DEFS)    ; value-shaped forms, including nested fn/fn*
 (def TOPLEVEL-VALUE-DEFS rc/TOPLEVEL-VALUE-DEFS) ; actual module bindings
 (def TYPE-DEFS   rc/TYPE-DEFS)
@@ -240,7 +240,6 @@
 ;; `(m ([args] body) ([a b] body))`. A SYMBOL is a legal designator. A seq that is NOT a
 ;; method form sitting where a designator belongs = a runtime-expression target -> reject.
 (defn extend-target-lint [form] (rc/extend-target-lint form))
-(def TYPE-COLON  rc/TYPE-COLON)  ; inline type-annotation markers (`:` is legal in field/param position)
 (def LET-FORMS   rc/LET-FORMS)
 (def FOR-FORMS   rc/FOR-FORMS)             ; binding vector carries :when/:while/:let modifiers
 (def MATCH-FORMS rc/MATCH-FORMS)                    ; (match expr [pattern body] ...) — patterns bind + ref ctors
@@ -252,7 +251,7 @@
 (defn map-node?         [e] (rb/map-node? rctx *view* e))
 (defn collect-bind-syms [node]    (rb/collect-bind-syms rctx *view* node))  ; symbol leaves a pattern binds
 (defn collect-or-vals   [node]    (rb/collect-or-vals rctx *view* node))    ; :or DEFAULT value-exprs (live refs)
-(defn param-binds       [bracket] (rb/param-binds rctx *view* bracket))     ; param names from [x :- T y]
+(defn param-binds       [bracket] (rb/param-binds rctx *view* bracket))     ; parameter names from [(x T) y]
 ;; let/loop bindings are SEQUENTIAL — binding i's value (and :or defaults) see bindings
 ;; 0..i-1. let-bind-pairs returns ORDERED entries [bind-syms value-node or-default-vals]
 ;; so walk/capture can build the frame incrementally (a flat outer-scope walk misses
@@ -293,8 +292,6 @@
 (def ctor-prefix rc/ctor-prefix)
 (defn bound-render! [node nm bt] (rw/bound-render! (walk-env) node nm bt))
 (defn walk-type [node] (rw/walk-type! (walk-env) node))
-(defn resolve-type-after-colon! [nodes] (rw/resolve-type-after-colon! (walk-env) (vec nodes)))
-(defn resolve-types-in-bracket! [bracket] (rw/resolve-types-in-bracket! (walk-env) bracket))
 (defn walk [node scope] (rw/walk! (walk-env) node (vec scope)))
 (defn walk-all [nodes scope] (rw/walk-all! (walk-env) (vec nodes) (vec scope) rw/walk!))
 (defn walk-fn-arity [forms scope] (rw/walk-fn-arity! (walk-env) (vec forms) (vec scope) rw/walk!))

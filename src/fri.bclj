@@ -8,14 +8,9 @@
 (def MAGIC String fp/MAGIC)
 (def FMT Int fp/FMT)
 (defn source-binding
-  [(space-id String)
-   (fingerprint String)
-   (valid-bytes Int)] Any
+  [(space-id String) (fingerprint String) (valid-bytes Int)] Any
   (fp/source-binding space-id fingerprint valid-bytes))
-(defn write-fri!
-  [(dump Any)
-   (path String)
-   (source Any)] Any
+(defn write-fri! [(dump Any) (path String) (source Any)] Any
   (fp/write-fri! dump path source))
 (defn open-fri! [(path String) (source Any)] Any (fp/open-fri! path source))
 (defn close-fri! [(image Any)] Nil (fp/close-fri! image))
@@ -33,20 +28,11 @@
 (defn by-t1 [(image Any) (term Any)] Any (fp/by-t1 image term))
 (defn by-t2 [(image Any) (term Any)] Any (fp/by-t2 image term))
 (defn by-t3 [(image Any) (term Any)] Any (fp/by-t3 image term))
-(defn by-t12
-  [(image Any)
-   (t1 Any)
-   (t2 Any)] Any
+(defn by-t12 [(image Any) (t1 Any) (t2 Any)] Any
   (fp/by-t12 image t1 t2))
-(defn by-t23
-  [(image Any)
-   (t2 Any)
-   (t3 Any)] Any
+(defn by-t23 [(image Any) (t2 Any) (t3 Any)] Any
   (fp/by-t23 image t2 t3))
-(defn by-t13
-  [(image Any)
-   (t1 Any)
-   (t3 Any)] Any
+(defn by-t13 [(image Any) (t1 Any) (t3 Any)] Any
   (fp/by-t13 image t1 t3))
 (defn live-occurrences-as-of [(image Any) (sequence Int)] Any
   (fp/live-occurrences-as-of image sequence))

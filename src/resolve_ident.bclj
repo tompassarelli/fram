@@ -99,19 +99,13 @@
 (defn by-subject [(g Graph) (subject Any)] (Vec Any)
   (rot/occurrences (rot/by-t1 (view g) subject)))
 
-(defn by-subject-predicate
-  [(g Graph)
-   (subject Any)
-   (predicate Any)] (Vec Any)
+(defn by-subject-predicate [(g Graph) (subject Any) (predicate Any)] (Vec Any)
   (rot/occurrences (rot/by-t12 (view g) subject predicate)))
 
 (defn by-predicate [(g Graph) (predicate Any)] (Vec Any)
   (rot/occurrences (rot/by-t2 (view g) predicate)))
 
-(defn by-predicate-value
-  [(g Graph)
-   (predicate Any)
-   (value Any)] (Vec Any)
+(defn by-predicate-value [(g Graph) (predicate Any) (value Any)] (Vec Any)
   (rot/occurrences (rot/by-t23 (view g) predicate value)))
 
 (defn proposition-at [(g Graph) (occurrence Any)] Any
@@ -175,16 +169,10 @@
   (let [(node t/Triple) (txn/mint! b)] (do (ordinal g node) node)))
 
 (defn assert-on!
-  [(b (Atom txn/Builder))
-   (subject Any)
-   (predicate Any)
-   (value Any)] Any
+  [(b (Atom txn/Builder)) (subject Any) (predicate Any) (value Any)] Any
   (txn/assert! b (t/triple subject predicate value)))
 
-(defn retract-on!
-  [(g Graph)
-   (b (Atom txn/Builder))
-   (occurrence Any)] Any
+(defn retract-on! [(g Graph) (b (Atom txn/Builder)) (occurrence Any)] Any
   (let [(p Any) (proposition-at g occurrence)]
     (if (nil? p) nil (txn/retract! b p))))
 
@@ -193,11 +181,7 @@
     (when (pos? (txn/operation-count b)) (txn/commit! (graph-store g) b))
     (refresh! g)))
 
-(defn assert!
-  [(g Graph)
-   (subject Any)
-   (predicate Any)
-   (value Any)] Any
+(defn assert! [(g Graph) (subject Any) (predicate Any) (value Any)] Any
   (let [(b (Atom txn/Builder)) (open g) (occurrence Any) (assert-on! b subject predicate value)]
     (do (commit! g b) occurrence)))
 

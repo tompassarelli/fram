@@ -37,10 +37,7 @@
    (boot-append (Vec Int))
    (error String?)])
 
-(defrecord BytesResult
-  [(status Int)
-   (bytes (Vec Int))
-   (error String?)])
+(defrecord BytesResult [(status Int) (bytes (Vec Int)) (error String?)])
 
 (defrecord FrameDecodeResult [(frame t/TransactionFrame?) (error String?)])
 
@@ -48,21 +45,12 @@
 ;; start-sequence and end-sequence are the ref's record of the member's span,
 ;; 0 when it records none; the tail is named by no ref and carries 0 for both.
 (defrecord ChainPiece
-  [(bytes ByteSource)
-   (start-sequence Int)
-   (end-sequence Int)])
+  [(bytes ByteSource) (start-sequence Int) (end-sequence Int)])
 
-(defrecord ChainFold
-  [(ok Bool)
-   (valid-bytes Int)
-   (error String?)])
+(defrecord ChainFold [(ok Bool) (valid-bytes Int) (error String?)])
 
 (defrecord HeaderFields
-  [(ok Bool)
-   (space-id String)
-   (flags Int)
-   (header-bytes Int)
-   (error String?)])
+  [(ok Bool) (space-id String) (flags Int) (header-bytes Int) (error String?)])
 
 (defn failed-boot [(message String)] BootResult
   (->BootResult status-fatal nil 0 [] message))
@@ -105,10 +93,7 @@
                            shifted)))))]
         (recur (+ position 1) (bit-and crc32-mask next-crc))))))
 
-(defn crc32-range-source
-  [(bytes ByteSource)
-   (start Int)
-   (end Int)] Int
+(defn crc32-range-source [(bytes ByteSource) (start Int) (end Int)] Int
   (loop [position start crc crc32-mask]
     (if (>= position end)
       (bit-and crc32-mask (bit-xor crc crc32-mask))
@@ -124,10 +109,7 @@
                            shifted)))))]
         (recur (+ position 1) (bit-and crc32-mask next-crc))))))
 
-(defn crc32-range
-  [(bytes (Vec Int))
-   (start Int)
-   (end Int)] Int
+(defn crc32-range [(bytes (Vec Int)) (start Int) (end Int)] Int
   (loop [position start crc crc32-mask]
     (if (>= position end)
       (bit-and crc32-mask (bit-xor crc crc32-mask))
@@ -191,9 +173,7 @@
                              (deref (wire/encoder-bytes encoder)) nil))))))))
 
 (defn decode-frame-payload-range!
-  [(bytes ByteSource)
-   (start Int)
-   (end Int)] FrameDecodeResult
+  [(bytes ByteSource) (start Int) (end Int)] FrameDecodeResult
   (let [decoder (wire/->Decoder bytes (atom start) end (atom 0)
                                 (wire/empty-error-cell))]
     (if (< (- end start) 12)
@@ -272,9 +252,7 @@
 ;; replayed frame allocates its rows and nothing shaped like a term tree.
 ;; Mirrors decode-frame-payload-range!'s validation, spelling for spelling.
 (defn- intern-wire-term!
-  [(decoder wire/Decoder)
-   (root (Atom t/TermStore))
-   (depth Int)] Int
+  [(decoder wire/Decoder) (root (Atom t/TermStore)) (depth Int)] Int
   (if (not (wire/decoder-node-limited! decoder depth max-codec-count
                                        max-term-depth))
     -1
@@ -342,7 +320,8 @@
   [(root (Atom t/TermStore))
    (bytes ByteSource)
    (start Int)
-   (end Int)] term-store/TransactionReplayResult
+   (end Int)]
+  term-store/TransactionReplayResult
   (let [decoder (wire/->Decoder bytes (atom start) end (atom 0)
                                 (wire/empty-error-cell))]
     (if (< (- end start) 12)
@@ -408,9 +387,7 @@
                      "FRAMLOG contains an unknown operation action")]))))])))))
 
 (defn consume-framlog-frames!
-  [(stream BootStream)
-   (bytes ByteSource)
-   (position Int)] BootStream
+  [(stream BootStream) (bytes ByteSource) (position Int)] BootStream
   ;; replay is a loop, not a self-call: one C stack frame per FRAMLOG frame
   ;; overflows the wasm stack a few hundred commits in.
   (loop [(stream BootStream) stream (position Int) position]
@@ -456,8 +433,7 @@
                             "FRAMLOG transaction sequence does not advance"))))]))]))]))))
 
 (defn consume-framlog-header!
-  [(stream BootStream)
-   (bytes ByteSource)] BootStream
+  [(stream BootStream) (bytes ByteSource)] BootStream
   (let [minimum-header-bytes (+ (count framlog-magic) 8)]
     (cond
       [(= 0 (count bytes))
@@ -528,14 +504,16 @@
 (defn successful-boot!
   [(root (Atom t/TermStore))
    (valid-log-bytes Int)
-   (boot-append (Vec Int))] BootResult
+   (boot-append (Vec Int))]
+  BootResult
   (->BootResult status-ok (canonical-store-copy! (term-store/close-fold! root))
                 valid-log-bytes boot-append nil))
 
 (defn replay-complete-frames!
   [(decoder wire/Decoder)
    (root (Atom t/TermStore))
-   (header-bytes Int)] BootResult
+   (header-bytes Int)]
+  BootResult
   (loop [valid-log-bytes header-bytes]
     (let [remaining (wire/decoder-remaining decoder)]
       (cond
@@ -587,9 +565,7 @@
                      (term-store/replay-transaction! root frame)
                      (recur (deref (wire/decoder-position decoder))))]))]))]))))
 
-(defn boot-framlog!
-  [(configured-space-id String)
-   (bytes ByteSource)] BootResult
+(defn boot-framlog! [(configured-space-id String) (bytes ByteSource)] BootResult
   (cond
     [(= 0 (count bytes))
      (let [header (encode-header! configured-space-id)]
@@ -687,7 +663,8 @@
    (header-bytes Int)
    (start-sequence Int)
    (end-sequence Int)
-   (sealed Bool)] ChainFold
+   (sealed Bool)]
+  ChainFold
   (loop [(position Int) header-bytes
          (first-frame Bool) true
          (last-sequence Int) 0]
@@ -765,9 +742,7 @@
                             "FRAMLOG transaction sequence does not advance"))))]))]))]))))
 
 (defn- chain-piece-at
-  [(segments (Vec ChainPiece))
-   (tail ChainPiece)
-   (index Int)] ChainPiece
+  [(segments (Vec ChainPiece)) (tail ChainPiece) (index Int)] ChainPiece
   (if (< index (count segments)) (nth segments index) tail))
 
 ;; Fold a branch: every sealed segment in ref order, then its tail. A sealed
@@ -776,7 +751,8 @@
 (defn boot-framlog-chain!
   [(configured-space-id String)
    (segments (Vec ChainPiece))
-   (tail ChainPiece)] BootResult
+   (tail ChainPiece)]
+  BootResult
   (let [first-header (decode-framlog-header! (chainpiece-bytes (chain-piece-at segments tail 0)))]
     (cond
       [(not (headerfields-ok first-header))
@@ -879,8 +855,7 @@
                                  (deref (wire/encoder-bytes out)) nil))))))))))
 
 (defn encode-store-append!
-  [(root (Atom t/TermStore))
-   (lower-exclusive Int)] BytesResult
+  [(root (Atom t/TermStore)) (lower-exclusive Int)] BytesResult
   (let [current (term-store/current-sequence root)]
     (cond
       [(or (< lower-exclusive 0) (> lower-exclusive current))

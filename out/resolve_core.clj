@@ -80,8 +80,6 @@
 (defn ^Boolean writable-def-head? [^String h]
   (contains? WRITABLE-DEFS h))
 
-(def TYPE-COLON #{":-" ":"})
-
 (def LET-FORMS #{"binding" "with-local-vars" "loop" "when-some" "when-let*" "if-let" "with-redefs" "let" "when-let" "if-some" "with-open" "if-let*" "dotimes"})
 
 (def FOR-FORMS #{"doseq" "for"})

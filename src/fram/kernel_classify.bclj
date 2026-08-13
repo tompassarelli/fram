@@ -64,7 +64,8 @@
   [(declared-present Bool)
    (declared-single Bool)
    (configured Bool)
-   (p String)] Bool
+   (p String)]
+  Bool
   (if declared-present
     declared-single
     (or configured (vec-member? fallback-single p) (emoji-single? p))))
@@ -73,10 +74,7 @@
 
 (defn key-of-group [(l String) (p String)] String (str l key-sep p))
 
-(defn key-of-triple
-  [(l String)
-   (p String)
-   (r String)] String
+(defn key-of-triple [(l String) (p String) (r String)] String
   (str l key-sep p key-sep r))
 
 (defn normalize-ref-value [(value-kind String) (r String)] String
@@ -84,20 +82,13 @@
     (str "@" r)
     r))
 
-(defrecord LeaseParts
-  [(holder String)
-   (exp Int)
-   (epoch Int)
-   (valid Bool)])
+(defrecord LeaseParts [(holder String) (exp Int) (epoch Int) (valid Bool)])
 
 (defn lease-invalid [] LeaseParts (->LeaseParts "" 0 0 false))
 
 (defn lease-subject [(res String)] String (str "@lease:" res))
 
-(defn lease-encode
-  [(holder String)
-   (exp Int)
-   (epoch Int)] String
+(defn lease-encode [(holder String) (exp Int) (epoch Int)] String
   (str holder "|" exp "|" epoch))
 
 (defn lease-decode [(v String)] LeaseParts
