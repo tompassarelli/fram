@@ -889,6 +889,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
           RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          RELEASE_TAG_OBJECT: ${{ steps.release.outputs['tag-object'] }}
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
@@ -896,7 +897,7 @@ jobs:
             exit 1
           fi
           gh release create "$RELEASE_TAG" --verify-tag \
-            --target "$RELEASE_COMMIT" --title "$RELEASE_TAG" --generate-notes \
+            --title "$RELEASE_TAG" --generate-notes \
             "${{ steps.bun_client.outputs.archive }}" \
             "${{ steps.bun_client.outputs.receipt }}" \
             "${{ steps.cloudflare_do.outputs.archive }}" \
@@ -905,3 +906,15 @@ jobs:
             "${{ steps.cloudflare_wasm.outputs.receipt }}" \
             "${{ steps.native.outputs.archive }}" \
             "${{ steps.native.outputs.receipt }}"
+
+          [[ "$(gh release view "$RELEASE_TAG" --json tagName --jq .tagName)" == \
+            "$RELEASE_TAG" ]]
+          remote_tag_type="$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.type)"
+          remote_tag_object="$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)"
+          [[ "$remote_tag_type" == tag ]]
+          [[ "$remote_tag_object" == "$RELEASE_TAG_OBJECT" ]]
+          [[ "$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/tags/$remote_tag_object" \
+            --jq .object.sha)" == "$RELEASE_COMMIT" ]]
