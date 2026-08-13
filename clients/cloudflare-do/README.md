@@ -256,7 +256,7 @@ additional conservative ceiling. The Worker also reports the exact FRAM engine
 memory budget and guest-arena sizing it observed at runtime. The tracked profile
 uses a 64 MiB engine budget and eight-page arena growth so FRAM compacts before
 an allocation spike can consume the isolate ceiling. That budget is an engine
-control, not a claim that the Worker fits: the full cgroup row must still pass.
+control, not evidence that the Worker fits: the full cgroup row must still pass.
 The process-tree row is deliberately stricter than an
 isolate-only limit, but it is not a measurement of Cloudflare production
 isolate accounting. The receipt is capacity evidence only: it does not prove a
