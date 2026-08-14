@@ -1,7 +1,7 @@
 # kind	source	destination
 # .bgl modules are canonically native (fram:bin/fram-native-build); kind
 # `beagle-core` also projects them onto the hosted out/ tree from that one source.
-beagle	src/fram/rt_core.bclj	out/fram/rt_core.clj
+beagle-core	src/fram/rt_core.bgl	out/fram/rt_core.clj
 copy	src/fram/rt.clj	out/fram/rt.clj
 copy	src/fram/kernel_host.clj	out/fram/kernel_host.clj
 copy	src/fram/json.clj	out/fram/json.clj
@@ -26,7 +26,7 @@ beagle-core	src/fram/text_index.bgl	out/fram/text_index.clj
 beagle-core	src/fram/text_search.bgl	out/fram/text_search.clj
 beagle-core	src/snapshot_read.bgl	out/snapshot_read.clj
 beagle-core	src/commit_plan.bgl	out/commit_plan.clj
-beagle	src/fram/kernel_classify.bclj	out/fram/kernel_classify.clj
+beagle-core	src/fram/kernel_classify.bgl	out/fram/kernel_classify.clj
 beagle	src/fram/branch.bclj	out/fram/branch.clj
 beagle	src/fram/fold.bclj	out/fram/fold.clj
 beagle	src/fram/fri_replay.bclj	out/fram/fri_replay.clj
