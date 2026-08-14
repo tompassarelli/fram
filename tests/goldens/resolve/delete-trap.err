@@ -1,3 +1,0 @@
-================ authoring: delete ================
-deleted def `banner` in "trap" (1 wrapper form-edge(s) superseded; subtree orphaned + dropped on render; 0 orphaned refs)
-projected -> /tmp/resolve-golden-run/delete-trap.d/resolved-trap.bjs.edn   <- /tmp/resolve-golden-run/corpus/trap.bjs

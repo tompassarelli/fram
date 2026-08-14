@@ -207,39 +207,3 @@ then pass their current values into graph-authored functions. The other 16
 dynamic roots have no external binder and can move behind that entry; qualified
 read-only exports such as `n-forms-walked` may be value aliases if their Var is
 never rebound.
-
-## Golden observation
-
-Probe:
-
-```sh
-bash ~/code/fram/tests/resolve_golden.sh verify ~/code/fram/tests/goldens/resolve
-```
-
-Observed exit 1, not the requested 11/11 green. Of 44 artifacts across the 11
-cases, 43 were byte-identical. The only drift was
-`resolve-bjs.proj`, which gained the 282-line
-`resolved-trap-collision.bjs.edn` projection. `git diff HEAD` was empty for
-`~/code/fram/resolve.clj`, `~/code/fram/coord_daemon.clj`,
-`~/code/fram/tests/resolve_golden.sh`,
-`~/code/fram/tests/goldens/resolve`, and
-`~/code/fram/codegraph/test/trap-collision.bjs`; the mismatch is pre-existing
-on current main. I did not recapture, mask, or edit the golden.
-
-Worst-fit clue: 105 defs are already PASS-THROUGH and only 282 reader-form lines
-remain substantive, but package and tool wiring still names the physical root
-`~/code/fram/resolve.clj`, while 23 externally bound Vars require namespace-preserving
-identity. Those seams make a file deletion unsafe even if the residual logic
-were mechanically moved.
-
-Not done: no resolver, Beagle module, build wiring, fixture, or golden changed;
-no graph edit or adoption occurred; no original was deleted. Beagle doctor
-functional canaries and emitters were live, but the daemon revive failed and
-the repair-loop status remained DEGRADED; this did not affect the Babashka
-reader accounting or the raw Clojure golden execution.
-
-blocked-by-plan — current main's committed resolve golden already disagrees
-with its resolver/corpus on one unmasked projection, so the requested 11/11
-read-only bar cannot be met without a separate behavior/golden decision.
-
-VERDICT: switch is not legal now — remaining cut list: corpus/store frame residue 52 defs / 81 form lines; extract/emit residue 16 / 46; CLI/main 2 / 109; other 8 / 46; then preserve the 23 externally bound Vars in a namespace-`resolve` host shim and update every physical-root-path consumer before deleting `~/code/fram/resolve.clj`.

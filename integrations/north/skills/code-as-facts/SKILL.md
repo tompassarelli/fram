@@ -57,8 +57,8 @@ does not recompile, writes no tree.
 | Intent | Tool | Notes |
 |---|---|---|
 | Add a new top-level def | `mcp__fram__add-def` | `upsert-form` with a new name; appends a wrapper `fN` edge |
-| Replace a def by name | `mcp__fram__add-def` | `upsert-form` with an existing name; supersedes its `fN` edge |
-| Replace a defn's body | `mcp__fram__set-body` | supersedes the post-params `fN` edges |
+| Replace a def by name | `mcp__fram__add-def` | `upsert-form` with an existing name; withdraws its live wrapper `fN` assertion, then asserts the replacement edge |
+| Replace a defn's body | `mcp__fram__set-body` | withdraws the live body-slot `fN` assertion(s), then asserts the newly minted body at the first body slot |
 | Rename a def | `mcp__fram__rename-def` | O(1), scope-correct via `refers_to`, shadow-safe |
 | Insert a form after an anchor | `mcp__fram__insert-after` | ordered placement |
 | Insert any valid top-level form before a named def | `mcp__fram__insert-before` | ordered wrapper edge; candidate compilation must pass |

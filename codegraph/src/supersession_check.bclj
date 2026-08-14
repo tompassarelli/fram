@@ -1,10 +1,11 @@
 #lang beagle/clj
 
 ;; ============================================================================
-;; Falsify "superseded (not deleted)": after a rename, show the OLD red
+;; Falsify "withdrawn (not deleted)": after a rename, show the OLD red
 ;; assertion and its LIVE crimson successor COEXISTING on the same node, old
-;; marked not-live, and the live view excluding it. If this is real, supersession
-;; is a graph of occurrences; if not, "superseded" was a euphemism for overwrite.
+;; marked not-live, and the live view excluding it. If this is real, withdrawal
+;; relates an exact retraction occurrence to an exact assertion occurrence; if
+;; not, "withdrawn" was a euphemism for overwrite.
 ;;
 ;;   bb -cp ~/code/fram/out -m supersession-check      ; reads /tmp/trap.edn
 ;; ============================================================================
@@ -121,7 +122,7 @@
       (occurrence-label
         (t/operationoccurrence-coordinate
           (t/withdrawal-assertion withdrawal)))
-      "  (the retraction that supersedes the old assertion)")
+      "  (the retraction occurrence that withdraws the old assertion occurrence)")
     (println)
     (println "same node for old & new?   "
       (= (t/triple-t1 old-proposition) (t/triple-t1 new-proposition)))
@@ -131,7 +132,7 @@
       (mapv (fn [(p Any)] String (pr-str (t/triple-t3 p)))
         (filterv (fn [(p Any)] Bool (= "v" (t/triple-t2 p)))
           (propositions-of ctx node))))
-    (println "=> old red assertion EXISTS, marked not-live; new crimson assertion is live; same node. Supersession is real:"
+    (println "=> old red assertion EXISTS, marked not-live; new crimson assertion is live; same node. Withdrawal is real:"
       (and (some? (assertion-occurrence-of occurrences old-proposition))
         (not (live-occurrence? ctx old-occurrence))
         (live-occurrence? ctx new-occurrence)

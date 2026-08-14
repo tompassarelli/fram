@@ -34,6 +34,10 @@
 ;; originals did not — Beagle's purity gate makes the write visible. resolve.clj
 ;; keeps the old bare spellings in its wrappers, so no caller moves.
 ;;
+;; Binding declarations are structural per outer entry: a bare binding or one
+;; complete `(binding-form Type)` / `(binding-form Type constraint)` form. The
+;; walk never reconstructs a declaration from adjacent tokens.
+;;
 ;; PER-DEF NOTES (adoption strips interior comments; the rationale lives here):
 ;;   bind!        one refers_to edge + the resolved counter. THE write.
 ;;   bind-xmod!   cross-module hit: refers_to plus the RENDER markers —
@@ -51,16 +55,22 @@
 ;;                cross-module import surface; a compound `(Vec Any)` or a
 ;;                bracket vector recurses elementwise.
 ;;   walk-binding-types!  resolve only the type child of structural
-;;                `(binding-form Type)` nodes selected by their grammar role.
-;;   walk-all!    walk each node in the SAME scope, in order. Order is
-;;                load-bearing: the goldens compare byte-for-byte.
+;;                `(binding-form Type)` / `(binding-form Type constraint)` nodes
+;;                selected by their grammar role; constraints are ordinary
+;;                reference expressions.
+;;   walk-all!    walk each node in the SAME scope and source order so reference
+;;                materialization and diagnostics remain deterministic.
 ;;   walk-pat-heads!  a `match` pattern's constructor heads are TYPE references,
 ;;                nested sub-patterns included.
-;;   walk-fn-arity!  one arity: params bind in the body, structural param types
-;;                and the positional return resolve to type defs, `:or` defaults
-;;                evaluate in the OUTER scope (before the params bind — a real
-;;                capture bug if walked inside), and optional `:raises Type` is
-;;                partitioned before the body. Macros have no return slot.
+;;   walk-fn-arity!  one arity: params bind in the body; structural param types
+;;                and the positional return resolve to type defs; binding-local
+;;                constraints and `:or` defaults evaluate in the OUTER scope
+;;                (before the params bind — a real capture bug if walked inside);
+;;                a direct defn's optional `:raises Type` is read from its owned
+;;                slot before the body. Macros have no return slot.
+;;   walk-signature-types! / walk-method-types!  declaration signatures own and
+;;                walk their type and constraint children in the declaration's
+;;                surrounding scope.
 ;;   walk!        the dispatcher. Symbol → the resolution ladder; list → the
 ;;                binding-form vocabulary (type defs, def, fn/defn arities, let,
 ;;                for/doseq, match, letfn, extend-type, as->), else an ordinary
@@ -232,22 +242,36 @@
         (wf w (nth cs 0 nil) scope)
         (doseq [ch (vec (rest cs))] (walk-pat-heads! w ch scope wf))))))
 
+(defn- walk-fn-signature!
+  [(w Walk)
+   (signature Any)
+   (scope (Vec Any))
+   (wf Any)
+   (macro? Bool)]
+  Any
+  (when (some? signature)
+    (let [params (get signature :params) binds (rb/param-binds (:ctx w) (:view w) params) constraints (rb/param-constraint-nodes (:ctx w) (:view w) params) or-vals (reduce (fn
+                                                                                                                                                                                [(acc (Vec Any))
+                                                                                                                                                                                 (binding Any)]
+                                                                                                                                                                                (Vec Any)
+                                                                                                                                                                                (into acc (rb/collect-or-vals (:ctx w) (:view w) binding))) [] (vec (rest (kids w params)))) frame (rb/frame-of (:ctx w) (:view w) binds) return-type (get signature :return-type) raises-type (get signature :raises-type)]
+      (do
+        (when (not macro?)
+          (walk-binding-types! w (rb/param-type-nodes (:ctx w) (:view w) params)))
+        (when (some? return-type) (walk-type! w return-type))
+        (when (some? raises-type) (walk-type! w raises-type))
+        (walk-all! w constraints scope wf)
+        (walk-all! w or-vals scope wf)
+        (walk-all! w (get signature :body) (push frame scope) wf)))))
+
 (defn walk-fn-arity!
   [(w Walk) (forms (Vec Any)) (scope (Vec Any)) (wf Any) (macro? Bool)] Any
-  (let [signature (rb/signature-tail (:ctx w) (:view w) forms macro?)]
-    (when (some? signature)
-      (let [params (get signature :params) binds (rb/param-binds (:ctx w) (:view w) params) or-vals (reduce (fn
-                                                                                                              [(acc (Vec Any))
-                                                                                                               (binding Any)]
-                                                                                                              (Vec Any)
-                                                                                                              (into acc (rb/collect-or-vals (:ctx w) (:view w) binding))) [] (vec (rest (kids w params)))) frame (rb/frame-of (:ctx w) (:view w) binds) return-type (get signature :return-type) raises-type (get signature :raises-type)]
-        (do
-          (when (not macro?)
-            (walk-binding-types! w (rb/param-type-nodes (:ctx w) (:view w) params)))
-          (when (some? return-type) (walk-type! w return-type))
-          (when (some? raises-type) (walk-type! w raises-type))
-          (walk-all! w or-vals scope wf)
-          (walk-all! w (get signature :body) (push frame scope) wf))))))
+  (walk-fn-signature! w
+    (rb/signature-parts
+      (:ctx w) (:view w) forms macro? false)
+    scope
+    wf
+    macro?))
 
 (defn walk-quasi!
   [(w Walk) (node Any) (scope (Vec Any)) (quoted? Bool) (wf Any) (qsf Any)] Any
@@ -326,7 +350,8 @@
         (swap! (:ntype w) (fn [(n Int)] Int (inc n)))
         true))))
 
-(defn- walk-signature-types! [(w Walk) (signature Any)] Any
+(defn- walk-signature-types!
+  [(w Walk) (signature Any) (scope (Vec Any)) (wf Any)] Any
   (when (some? signature)
     (do
       (walk-binding-types! w
@@ -334,69 +359,109 @@
       (when (some? (get signature :return-type))
         (walk-type! w (get signature :return-type)))
       (when (some? (get signature :raises-type))
-        (walk-type! w (get signature :raises-type))))))
+        (walk-type! w (get signature :raises-type)))
+      (walk-all! w
+        (rb/param-constraint-nodes (:ctx w) (:view w) (get signature :params))
+        scope
+        wf))))
 
-(defn- walk-method-types! [(w Walk) (method Any)] Any
-  (when (= "list" (kd w method))
+(defn- walk-method-types!
+  [(w Walk) (raw-method Any) (scope (Vec Any)) (wf Any)] Any
+  (let [method (rr/unwrap-meta (:ctx w) (:view w) raw-method)]
+    (when (= "list" (kd w method))
     (walk-signature-types! w
-      (rb/signature-tail (:ctx w) (:view w)
+      (rb/signature-parts (:ctx w) (:view w)
         (vec (rest (kids w method)))
-        false))))
+        false
+        false)
+      scope
+      wf))))
 
-(defn- walk-type-def! [(w Walk) (ks (Vec Any))] Any
+(defn- walk-protocol-method-types!
+  [(w Walk) (raw-method Any) (scope (Vec Any)) (wf Any)] Any
+  (let [parts (rm/protocol-method-parts
+                (:ctx w) (:view w) raw-method)]
+    (when (some? parts)
+      (walk-signature-types! w
+        {:params (get parts :params)
+         :return-type (get parts :return-type)
+         :raises-type nil}
+        scope
+        wf))))
+
+(defn- walk-type-def! [(w Walk) (ks (Vec Any)) (scope (Vec Any)) (wf Any)] Any
   (let [head (str (sv w (nth ks 0 nil))) name-index (rc/type-name-index head (sv w (nth ks 1 nil))) members (vec (drop (inc name-index) ks))]
     (cond
-      (contains? #{"defrecord" "deftype"} head)
-      (doseq [member members]
-        (cond
-          (brk? w member)
-          (walk-binding-types! w
-            (rb/param-type-nodes (:ctx w) (:view w) member))
-          (and (= "deftype" head) (= "list" (kd w member)))
-          (walk-method-types! w member)
-          (and (= "deftype" head) (some? (sv w member)))
-          (walk-type! w member)
-          :else
-          nil))
-      (contains? #{"defprotocol" "definterface"} head)
-      (doseq [method members] (walk-method-types! w method))
-      (= "defunion" head)
-      (doseq [member members]
-        (cond
-          (= "list" (kd w member))
-          (let [fields (first (filterv (fn [(child Any)] Bool (brk? w child))
-                                (vec (rest (kids w member)))))]
-            (when (some? fields)
+      (= "defrecord" head)
+      (let [fields (nth ks 2 nil)]
+        (when (and (some? fields) (brk? w fields))
+          (do
+            (walk-binding-types! w
+              (rb/param-type-nodes (:ctx w) (:view w) fields))
+            (walk-all! w
+              (rb/param-constraint-nodes (:ctx w) (:view w) fields)
+              scope
+              wf))))
+      (= "deftype" head)
+      (let [fields (nth ks 2 nil)]
+        (do
+          (when (and (some? fields) (brk? w fields))
+            (do
               (walk-binding-types! w
-                (rb/param-type-nodes (:ctx w) (:view w) fields))))
-          (some? (sv w member))
-          (let [binding (tr w (sv w member))]
+                (rb/param-type-nodes (:ctx w) (:view w) fields))
+              (walk-all! w
+                (rb/param-constraint-nodes (:ctx w) (:view w) fields)
+                scope
+                wf)))
+          (doseq [raw-member (vec (drop 3 ks))]
+            (let [member (rr/unwrap-meta (:ctx w) (:view w) raw-member)]
+              (cond
+                (= "list" (kd w member))
+                (walk-method-types! w member scope wf)
+                (some? (sv w member))
+                (walk-type! w member)
+                :else
+                nil)))))
+      (contains? #{"defprotocol" "definterface"} head)
+      (doseq [method members]
+        (walk-protocol-method-types! w method scope wf))
+      (= "defunion" head)
+      (doseq [raw-member members]
+        (let [member (rr/unwrap-meta (:ctx w) (:view w) raw-member)
+              parts (rm/union-member-parts (:ctx w) (:view w) raw-member)]
+        (cond
+          (some? (get parts :fields))
+          (let [fields (get parts :fields)]
+            (do
+              (walk-binding-types! w
+                (rb/param-type-nodes (:ctx w) (:view w) fields))
+              (walk-all! w
+                (rb/param-constraint-nodes (:ctx w) (:view w) fields)
+                scope
+                wf)))
+          (some? (get parts :name))
+          (let [binding (tr w (sv w (get parts :name)))]
             (when (and (some? binding) (not= binding member))
               (do
                 (bind! w member binding)
                 (swap! (:ntype w) (fn [(n Int)] Int (inc n))))))
           :else
-          nil))
+          nil)))
       :else
       nil)))
 
-(defn- first-bracket-index [(w Walk) (forms (Vec Any))] Any
-  (loop [i 0]
-    (if (>= i (count forms))
-      nil
-      (if (brk? w (nth forms i)) i (recur (inc i))))))
-
 (defn- walk-executable!
-  [(w Walk) (forms (Vec Any)) (scope (Vec Any)) (wf Any) (macro? Bool)] Any
-  (let [param-index (first-bracket-index w forms)]
-    (if (some? param-index)
-      (walk-fn-arity! w (vec (drop param-index forms)) scope wf macro?)
-      (when (not macro?)
-        (doseq [clause (vec (filter (fn [(form Any)] Bool
-                                      (and (= "list" (kd w form))
-                                        (brk? w (nth (kids w form) 0 nil))))
-                              forms))]
-          (walk-fn-arity! w (kids w clause) scope wf false))))))
+  [(w Walk)
+   (head String)
+   (forms (Vec Any))
+   (scope (Vec Any))
+   (wf Any)]
+  Any
+  (doseq [signature
+          (rb/executable-signatures
+            (:ctx w) (:view w) head forms)]
+    (walk-fn-signature! w
+      signature scope wf (= "defmacro" head))))
 
 (defn- walk-value-def! [(w Walk) (ks (Vec Any)) (scope (Vec Any)) (wf Any)] Any
   (let [tail (vec (drop 2 ks)) first-node (nth tail 0 nil) typed? (and (>= (count tail) 2) (not= "string" (kd w first-node))) value-node (last tail)]
@@ -411,17 +476,18 @@
         (when (some? (nth tail 0 nil)) (wf w (nth tail 0) scope))
         (when (some? (nth tail 1 nil)) (walk-type! w (nth tail 1)))
         (walk-all! w (vec (drop 2 tail)) scope wf))
-      (doseq [item tail]
-        (cond
-          (some? (sv w item))
-          (walk-type! w item)
-          (= "list" (kd w item))
-          (let [method (kids w item)]
-            (do
-              (when (some? (nth method 0 nil)) (wf w (nth method 0) scope))
-              (walk-fn-arity! w (vec (rest method)) scope wf false)))
-          :else
-          nil)))))
+      (doseq [raw-item tail]
+        (let [item (rr/unwrap-meta (:ctx w) (:view w) raw-item)]
+          (cond
+            (some? (sv w item))
+            (walk-type! w item)
+            (= "list" (kd w item))
+            (let [method (kids w item)]
+              (do
+                (when (some? (nth method 0 nil)) (wf w (nth method 0) scope))
+                (walk-fn-arity! w (vec (rest method)) scope wf false)))
+            :else
+            nil))))))
 
 (defn walk! [(w Walk) (node Any) (scope (Vec Any))] Any
   (let [k (kd w node)]
@@ -451,30 +517,30 @@
           (= "quasiquote" hs)
           (walk-quasi! w node scope false walk! walk-quasi-seq!)
           (contains? rc/TYPE-DEFS hs)
-          (walk-type-def! w ks)
+          (walk-type-def! w ks scope walk!)
           (contains? rc/DEF-FORMS hs)
           (walk-value-def! w ks scope walk!)
           (contains? rc/PARAM-FORMS hs)
           (walk-executable! w
+            hs
             (if (contains? #{"defn" "defn-" "defmacro"} hs)
               (vec (drop 2 ks))
               (vec (rest ks)))
             scope
-            walk!
-            (= "defmacro" hs))
+            walk!)
           (contains? rc/LET-FORMS hs)
           (let [bracket (nth ks 1 nil) ok (and (some? bracket) (brk? w bracket)) _ (when ok (walk-binding-types! w (rb/let-type-nodes (:ctx w) (:view w) bracket))) pairs (if ok (rb/let-bind-pairs (:ctx w) (:view w) bracket) []) final (reduce (fn
                                                                                                                                                                                                                                                     [(sc (Vec Any))
                                                                                                                                                                                                                                                      (p Any)]
                                                                                                                                                                                                                                                     (Vec Any)
-                                                                                                                                                                                                                                                    (let [bsyms (nth p 0) vnode (nth p 1) orvals (nth p 2)] (do (walk-all! w orvals sc walk!) (when (some? vnode) (walk! w vnode sc)) (push (rb/frame-of (:ctx w) (:view w) bsyms) sc)))) scope pairs)]
+                                                                                                                                                                                                                                                    (let [bsyms (nth p 0) vnode (nth p 1) orvals (nth p 2) constraint (nth p 3 nil)] (do (walk-all! w orvals sc walk!) (when (some? constraint) (walk! w constraint sc)) (when (some? vnode) (walk! w vnode sc)) (push (rb/frame-of (:ctx w) (:view w) bsyms) sc)))) scope pairs)]
             (walk-all! w (vec (drop 2 ks)) final walk!))
           (contains? rc/FOR-FORMS hs)
           (let [bracket (nth ks 1 nil) ok (and (some? bracket) (brk? w bracket)) _ (when ok (walk-binding-types! w (rb/for-type-nodes (:ctx w) (:view w) bracket))) entries (if ok (rb/for-bind-pairs (:ctx w) (:view w) bracket) []) final (reduce (fn
                                                                                                                                                                                                                                                       [(sc (Vec Any))
                                                                                                                                                                                                                                                        (e Any)]
                                                                                                                                                                                                                                                       (Vec Any)
-                                                                                                                                                                                                                                                      (if (= :expr (nth e 0)) (do (walk! w (nth e 1) sc) sc) (let [bsyms (nth e 1) vnode (nth e 2) orvals (nth e 3)] (do (walk-all! w orvals sc walk!) (when (some? vnode) (walk! w vnode sc)) (push (rb/frame-of (:ctx w) (:view w) bsyms) sc))))) scope entries)]
+                                                                                                                                                                                                                                                      (if (= :expr (nth e 0)) (do (walk! w (nth e 1) sc) sc) (let [bsyms (nth e 1) vnode (nth e 2) orvals (nth e 3) constraint (nth e 4 nil)] (do (walk-all! w orvals sc walk!) (when (some? constraint) (walk! w constraint sc)) (when (some? vnode) (walk! w vnode sc)) (push (rb/frame-of (:ctx w) (:view w) bsyms) sc))))) scope entries)]
             (walk-all! w (vec (drop 2 ks)) final walk!))
           (contains? rc/MATCH-FORMS hs)
           (do

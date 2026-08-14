@@ -47,16 +47,16 @@
 ;; Every piece of computed resolution state lives in a dynamic var with an INERT
 ;; root binding (nil / empty atom). `resolve-edn!` rebinds them all to a FRESH
 ;; store before loading EDN, so the resolver runs over an ARBITRARY bound store
-;; (a server's warm in-memory store) — not a load-time global. The CLI path is
-;; byte-identical: it just calls `resolve-edn!` inside the same binding scope and
-;; reads the bound vars exactly as before. Predicate/marker VALUE IDS are
+;; (a server's warm in-memory store) — not a load-time global. The CLI path calls
+;; `resolve-edn!` inside the same binding scope and therefore observes the same
+;; store-local state and semantics. Predicate/marker VALUE IDS are
 ;; store-local (cnf interns ids per store), so they MUST be recomputed against
 ;; the fresh store and are dynamic too — keeping a root-store value id would write
 ;; a foreign id into store B (the load-bearing seam GATE B guards).
 ;; S2: `ctx` is the TermStore atom exposed to store-level callers; `rctx` is the
 ;; authoring/read Graph over that same store. `tx` and `SUP` have no successor in
-;; a frame store (a transaction is a frame; supersedes is withdrawal) and survive
-;; ONLY as bound Vars for the external shim surface.
+;; the frame store: transactions are frames, and retractions create occurrence-native
+;; withdrawal records. They survive ONLY as bound Vars for the external shim surface.
 (def ^:dynamic ctx nil)
 (def ^:dynamic rctx nil)
 (def ^:dynamic tx  nil)
@@ -80,7 +80,8 @@
 ;; *resolve-walk?* — does resolve-warm-store! run the whole-corpus lexical walk
 ;; (run-resolution!, ~the dominant verb-setup cost)? The walk WRITES refers_to over
 ;; every module. The MINIMAL-OP authoring path (server :edit-min) does NOT need that
-;; walk: set-body/upsert-form mint/supersede AST facts and never read refers_to, and
+;; walk: set-body/upsert-form assert and withdraw structural propositions without
+;; reading refers_to, and
 ;; rename's no-capture check reads refers_to that the server has ALREADY materialized
 ;; on the store (the clone inherits it) — so re-walking is pure waste AND would double
 ;; the inherited edges. Bound false by do-edit-min => corpus tables only, no walk. The
@@ -335,8 +336,9 @@
 (def ^:dynamic global-exports {})
 ;; module-name -> {type-name -> type-def name-leaf}
 ;; types export implicitly too; a consumer's :refer/:as of a record/union/protocol
-;; resolves here. Without it, a foreign type in a `:- T` annotation never tracks a
-;; rename and a cross-module delete of the type false-reports 'safe'.
+;; resolves here. Without it, a foreign type child in a structural
+;; `(binding-form T)` declaration never tracks a rename and a cross-module delete
+;; of the type false-reports 'safe'.
 (def ^:dynamic global-type-exports {})
 ;; module-name -> {"point-x" -> [type-name-leaf field]}
 ;; synthesized field accessors export too; the cross-module half of the local *aresolve*,
@@ -598,14 +600,14 @@
 (defn binding-name [B] (rv/binding-name rctx *view* BOUND REFERS B))
 
 ;; ============================================================================
-;; AUTHORING — mint a NEW datum subtree into the SAME fact store (the inverse of
+;; AUTHORING — mint a NEW datum subtree into the SAME Term store (the inverse of
 ;; facts-roundtrip's datum->facts projection). This is what makes add-def / set-body a
-;; FACT OPERATION, not a text splice: a Clojure EDN datum (the structured edit
-;; spec the agent emits, e.g. `(defn add-two [x :- Int] :- Int (+ x 2))`) is walked
-;; into fresh entities carrying `kind`/`v`/`fN` facts — exactly the reader-datum
+;; graph operation, not a text splice: a Clojure EDN datum (the structured edit
+;; spec the agent emits, e.g. `(defn add-two [(x Int)] Int (+ x 2))`) is walked
+;; into fresh entities carrying `kind`/`v`/`fN` structural propositions — exactly the reader-datum
 ;; shape --emit-edn projects — and registered in file->ents so extract-file! emits
-;; them. The wrapper/body fN edges are then wired (append) or SUPERSEDED (replace),
-;; reusing the rename template (assert new, supersede old; reads filter superseded).
+;; them. The wrapper/body fN propositions are then asserted (append) or withdrawn
+;; (replace), reusing the rename template; the live view excludes withdrawn assertions.
 ;; The renderer reconstructs purely from fN/tail, so a minted subtree round-trips
 ;; byte-stable, and any reference in it resolves via the SAME lexical walk (a fresh
 ;; pass over forms-of after minting), giving scope-correctness for free.
@@ -623,17 +625,16 @@
 (defn mint-leaf! [src kind v] (rmi/mint-leaf! (mint-env) src kind v))
 ;; mint-datum! — THE MINT (M1 Cut I; logic + the per-branch re-encoding rationale
 ;; in src/resolve_mint.bclj). An EDN datum becomes fresh entities carrying
-;; kind/v/fN facts, in the SAME allocation order the original used (the goldens
-;; compare bytes). Reader metadata, regex and set objects are re-encoded as the
+;; kind/v/fN structural propositions in deterministic file-local allocation order.
+;; Reader metadata, regex and set objects are re-encoded as the
 ;; `(#%meta …)` / `(#%regex …)` / `(#%set …)` nodes beagle's own reader produces.
 (defn mint-datum! [src d] (rmi/mint-datum! (mint-env) src d))
 
-;; the body fN edges of a defn form = the consecutive fN child facts whose slot is
+;; the body fN edges of a defn form = the consecutive fN child propositions whose slot is
 ;; AFTER the params bracket (everything --emit-edn put at f5,f6,... in `defn` :122).
-(defn fN-facts [parent] (rmi/fN-facts (mint-env) parent))  ; -> [[N fact-id child-node] ...] over LIVE fN edges, ordered
-;; supersede a fact WITHOUT a replacement value (e.g. retiring a wrapper/body fN edge).
-;; The supersedes edge needs a subject; a fresh entity is fine — the live-view filter
-;; keys off the superseded :r (the old fact id), not the subject (cnf.bclj:105-106,116).
+(defn fN-facts [parent] (rmi/fN-facts (mint-env) parent))  ; -> [[N assertion-occurrence child-node] ...] over LIVE fN edges, ordered
+;; Retract a live structural proposition without a replacement value. The kernel
+;; records the withdrawal target occurrence; no domain proposition is manufactured.
 (defn retire-fact! [oldc] (rmi/retire-fact! (mint-env) oldc))
 
 ;; --- delete projection: omit a top-level form + its subtree, renumber siblings ---
@@ -726,7 +727,7 @@
 ;; resolve-edn! of emit-edn(text)) AND the GRAPH path (run-verb-warm!, over a
 ;; LOG-booted warm store via resolve-warm-store!). They are store-agnostic by
 ;; construction — they read the dynamic ctx/tx/SUP/srcs/frame tables and write
-;; via c/fact!/retire-fact!/mint-datum!, never touching text — so the same code
+;; via the assertion/retraction helpers and mint-datum!, never touching text — so the same code
 ;; runs unchanged under either binding scope.
 ;;
 ;; *project-srcs* selects which module(s) author-emit! / extract-file! project.
@@ -736,18 +737,27 @@
 ;; Default = nil => "all srcs" (verbatim text-path behavior).
 (defn- emit-srcs [] (rmi/emit-srcs (vec srcs)))
 ;; *capture-only?* — the MINIMAL-OP graph edit (server :edit-min) runs the verb ONLY
-;; to capture its fact mint/supersede ops; it does NOT want the verb's two heavy
+;; to capture its structural assertion/retraction operations; it does NOT want the verb's two heavy
 ;; downstream SIDE EFFECTS: (1) re-resolve! (a whole-corpus lexical re-walk that
 ;; writes DERIVED refers_to edges — discarded, since the server re-resolves SCOPED
 ;; over the real store after the commit), and (2) author-emit-scoped! (rendering the
-;; module's resolved EDN to disk — the minimal path commits fact ops, not text).
-;; Bound true by do-edit-min so the verb does its fact work and stops. The CLI/text
+;; module's resolved EDN to disk — the minimal path commits store operations, not text).
+;; Bound true by do-edit-min so the verb does its graph work and stops. The CLI/text
 ;; path leaves it false => verbatim behavior (re-resolve + project EDN).
 (def ^:dynamic *capture-only?* false)
-;; like author-emit!, but only over *project-srcs* (the affected module on the graph path).
-(defn author-emit-scoped! [op detail]
-  (rmi/author-emit-scoped! (emit-env) (vec (emit-srcs))
-                           *capture-only?* op detail))
+;; Like author-emit!, but only over the verb environment's selected sources. The
+;; closure constructed by verb-env carries the caller's output directory and
+;; project-source selection; projection stays on the host path so scalar integers
+;; are restored before the rows reach disk.
+(defn author-emit-scoped! [resolve-out project-srcs op detail]
+  (when-not *capture-only?*
+    (let [selected-srcs (rmi/emit-srcs-for project-srcs (vec srcs))
+          output-path (fn [src] (rmi/out-path-for resolve-out src))]
+      (doseq [src selected-srcs]
+        (extract-file! src (output-path src)))
+      (binding [*out* *err*]
+        (doseq [line (rmi/author-emit-lines op detail selected-srcs output-path)]
+          (println line))))))
 
 ;; D1: resolve a scope to its target module at a dot-SEGMENT boundary. A raw substring
 ;; filter (str/includes?) collides a module with any sibling it PREFIXES — scope
@@ -858,7 +868,7 @@
 ;; with the resolve.clj-local helpers the verbs call (mint/retire/extract/
 ;; capture-refs/…), which ride as function VALUES exactly as Cut G's xres/tres/
 ;; ares did. `binding [*out* *err*]` cannot move namespace, so stderr reporting is
-;; the `warn` closure, called once per LINE (the goldens compare bytes).
+;; the `warn` closure, called once per LINE to preserve deterministic diagnostics.
 ;; *reject!* is passed at BOTH arities: callers bind it as `(fn [code] …)` (the
 ;; unit tests) or `(fn [code & [detail]] …)` (the server), so each call site keeps
 ;; the arity the original used — 1 everywhere but replace-in-body's structured
@@ -867,21 +877,24 @@
 (defn verb-env
   ([] (verb-env nil nil))
   ([resolve-out project-srcs]
-   (rvb/make-verb!
-    {:ctx rctx :view *view* :KIND KIND :Vp Vp
-     :srcs srcs :capture-only? *capture-only?*
-     :emit-srcs (rmi/emit-srcs-for project-srcs (vec srcs))
-     :reject! *reject!* :author-emit author-emit-scoped!
-     :extract-file extract-file!
-     :out-path (fn [src] (rmi/out-path-for resolve-out src))
-     :def-binding def-binding :typeframe file-typeframe :modframe file-modframe
-     :forms-of forms-of :module-name module-name :parse-require parse-require
-     :capture-refs capture-refs :ultimate ultimate :BOUND BOUND :REFERS REFERS
-     :wrapper-of wrapper-of :form-for-victim form-for-victim
-     :descendants descendants :retire retire-fact! :reresolve re-resolve!
-     :ents (rco/file-entity-map file->ents) :mint mint-datum!
-     :register register! :scope-srcs scope->srcs :fn-facts fN-facts
-     :FIXED FIXED})))
+   (let [output-path (fn [src] (rmi/out-path-for resolve-out src))]
+     (rvb/make-verb!
+      {:ctx rctx :view *view* :KIND KIND :Vp Vp
+       :srcs srcs :capture-only? *capture-only?*
+       :emit-srcs (rmi/emit-srcs-for project-srcs (vec srcs))
+       :reject! *reject!*
+       :author-emit (fn [op detail]
+                      (author-emit-scoped! resolve-out project-srcs op detail))
+       :extract-file extract-file!
+       :out-path output-path
+       :def-binding def-binding :typeframe file-typeframe :modframe file-modframe
+       :forms-of forms-of :module-name module-name :parse-require parse-require
+       :capture-refs capture-refs :ultimate ultimate :BOUND BOUND :REFERS REFERS
+       :wrapper-of wrapper-of :form-for-victim form-for-victim
+       :descendants descendants :retire retire-fact! :reresolve re-resolve!
+       :ents (rco/file-entity-map file->ents) :mint mint-datum!
+       :register register! :scope-srcs scope->srcs :fn-facts fN-facts
+       :FIXED FIXED}))))
 
 ;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
 (defn verb-rename! [old new target] (rvb/verb-rename! (verb-env) old new target))
@@ -924,9 +937,9 @@
 
 
 ;; set-body — replace a def/defn's body with a freshly-minted body datum (M1 Cut H;
-;; logic in src/resolve_verbs.bclj). Handles BOTH shapes — a defn, whose body follows
-;; the [param] vector, and a plain value-def, whose body follows the NAME — symmetric
-;; under an optional `:- T` return annotation.
+;; logic in src/resolve_verbs.bclj). Handles BOTH shapes: an executable body follows
+;; `[params] Return` and optional `:raises Error`; a plain value-def's body is its
+;; final meaningful slot, after any positional type and docstring.
 (defn verb-set-body! [name scope datum] (rvb/verb-set-body! (verb-env) name scope datum))
 
 ;; verb-replace-in-body! — swap ONE interior form of def `name` (matched by `old-datum`)
@@ -942,8 +955,8 @@
    (rvb/verb-replace-in-body! (verb-env) name scope old-datum new-datum within-datum)))
 
 ;; delete — remove a top-level def by name (M1 Cut H; logic in
-;; src/resolve_verbs.bclj). FACT-NATIVE + fail-closed: the EFFECT is a supersede of
-;; the wrapper's fN form-edge fact(s) pointing at the deleted form(s), so the
+;; src/resolve_verbs.bclj). Graph-native + fail-closed: the effect withdraws
+;; the wrapper's fN form-edge assertion(s) pointing at the deleted form(s), so the
 ;; minimal-op harvest sees a RETRACT and the render reachability filter drops the
 ;; orphaned subtree — ONE mechanism, both drivers. A delete that would ORPHAN a
 ;; surviving reference REFUSES (no facts mutated).
@@ -962,7 +975,7 @@
 ;; corpus-from-store! (srcs/frames derived from the store's `name` facts), runs
 ;; the lexical walk, then invokes our body. Inside that scope we bind
 ;; *project-srcs* to the affected module and call the SAME verb function the text
-;; path calls — minting/superseding fact ops against LOG-RESIDENT node identity,
+;; path calls — asserting/withdrawing structural propositions against log-resident node identity,
 ;; projecting render EDN for ONLY that module. NO src/fram/*.bclj is ever read:
 ;; the corpus, the verb's targets, and the projection all come from the store.
 ;;

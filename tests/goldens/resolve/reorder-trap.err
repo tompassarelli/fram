@@ -1,3 +1,0 @@
-================ authoring: reorder ================
-moved def `banner` after `red` in "trap" (wrapper order-key re-spelled; SAME subtree, 0 node churn)
-projected -> /tmp/resolve-golden-run/reorder-trap.d/resolved-trap.bjs.edn   <- /tmp/resolve-golden-run/corpus/trap.bjs

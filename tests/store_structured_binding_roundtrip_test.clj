@@ -4,7 +4,8 @@
          '[fram.schema :as s]
          '[clojure.string :as str]
          '[clojure.java.io :as io]
-         '[babashka.process :as proc])
+         '[babashka.process :as proc]
+         '[resolve-binds :as rb])
 
 (def root (System/getProperty "user.dir"))
 (def beagle-home
@@ -33,11 +34,16 @@
 
 ;; The graph representation must retain one typed binding as one structured
 ;; list. Aggregate destructuring is likewise one parameter entry, even though
-;; it introduces multiple local names.
+;; it introduces multiple local names. A constraint remains the third child of
+;; that same binding rather than becoming an adjacent parameter.
 (resolve/resolve-edn! []
   (fn []
     (let [named (resolve/mint-datum! "demo" '(who String))
           named-kids (resolve/ordered-children named)
+          constrained (resolve/mint-datum!
+                       "demo"
+                       '(who String validator?))
+          constrained-kids (resolve/ordered-children constrained)
           aggregate (resolve/mint-datum!
                      "demo"
                      '([left right] (HVec Int Int)))
@@ -50,6 +56,10 @@
               (and (= "list" (resolve/kind-of named))
                    (= ["who" "String"]
                       (mapv resolve/sym-val named-kids))))
+      (check! "constrained binding is one three-child list"
+              (and (= "list" (resolve/kind-of constrained))
+                   (= ["who" "String" "validator?"]
+                      (mapv resolve/sym-val constrained-kids))))
       (check! "typed destructuring remains one binding plus one type"
               (and (= 2 (count aggregate-kids))
                    (= "#%brackets"
@@ -62,7 +72,14 @@
                    (= "Config" (resolve/sym-val (second config-kids))))))))
 
 (def seed (str work "/demo.bclj"))
-(spit seed "#lang beagle/clj\n(ns demo)\n(def seed-marker Int 0)\n")
+(spit seed
+      (str "#lang beagle/clj\n"
+           "(ns demo)\n"
+           "(defrecord Point [(value String)])\n"
+           "(defn validator? [(value Point)] Bool true)\n"
+           "(defn canonical [(who Point validator?)] Point who)\n"
+           "(defn shifted junk [(ghost Point validator?)] Point ghost)\n"
+           "(defn malformed [(broken Point validator?)] Point)\n"))
 (def seed-edn (str work "/demo.edn"))
 (def emit-result
   (proc/sh {:out :string :err :string}
@@ -75,6 +92,80 @@
     (def rendered-edn (str work "/rendered.edn"))
     (resolve/resolve-edn! [seed-edn]
       (fn []
+        (let [src (first resolve/srcs)
+              forms (resolve/forms-of src)
+              named-form (fn [expected]
+                           (some (fn [form]
+                                   (let [children
+                                         (resolve/ordered-children form)]
+                                     (when (= expected
+                                              (resolve/sym-val
+                                               (nth children 1 nil)))
+                                       form)))
+                                 forms))
+              signatures (fn [form]
+                           (let [children
+                                 (resolve/ordered-children form)]
+                             (rb/executable-signatures
+                              resolve/rctx
+                              resolve/*view*
+                              (resolve/head-sym form)
+                              (vec (drop 2 children)))))
+              direct-binding (fn [form]
+                               (let [params
+                                     (some #(when (= "#%brackets"
+                                                     (resolve/head-sym %))
+                                              %)
+                                           (resolve/ordered-children form))]
+                                 (second
+                                  (resolve/ordered-children params))))
+              canonical (named-form "canonical")
+              shifted (named-form "shifted")
+              malformed (named-form "malformed")
+              canonical-signatures (signatures canonical)
+              canonical-parts
+              (rb/typed-binding-parts
+               resolve/rctx resolve/*view* (direct-binding canonical))
+              shifted-parts
+              (rb/typed-binding-parts
+               resolve/rctx resolve/*view* (direct-binding shifted))
+              malformed-parts
+              (rb/typed-binding-parts
+               resolve/rctx resolve/*view* (direct-binding malformed))
+              canonical-body
+              (last (resolve/ordered-children canonical))
+              shifted-body (last (resolve/ordered-children shifted))
+              module-defs (resolve/module-defs src)
+              module-types (resolve/module-types src)]
+          (check! "parser facts preserve one three-child constrained binding"
+                  (= ["who" "Point" "validator?"]
+                     (mapv resolve/sym-val
+                           (resolve/ordered-children
+                            (direct-binding canonical)))))
+          (check! "canonical executable slots produce one resolver signature"
+                  (= 1 (count canonical-signatures)))
+          (check! "shifted and incomplete executable slots produce no signature"
+                  (and (empty? (signatures shifted))
+                       (empty? (signatures malformed))))
+          (check! "canonical type, constraint, and body references resolve"
+                  (and (= (get module-types "Point")
+                          (resolve/refers-target (:type canonical-parts)))
+                       (= (get module-defs "validator?")
+                          (resolve/refers-target
+                           (:constraint canonical-parts)))
+                       (= (:binding canonical-parts)
+                          (resolve/refers-target canonical-body))))
+          (check! "shifted executable children gain no resolver semantics"
+                  (every? nil?
+                          [(resolve/refers-target (:type shifted-parts))
+                           (resolve/refers-target
+                            (:constraint shifted-parts))
+                           (resolve/refers-target shifted-body)]))
+          (check! "incomplete executable children gain no resolver semantics"
+                  (every? nil?
+                          [(resolve/refers-target (:type malformed-parts))
+                           (resolve/refers-target
+                            (:constraint malformed-parts))])))
         (binding [resolve/*reject!*
                   (fn [code]
                     (throw (ex-info (str "verb rejected " code) {})))]
@@ -97,6 +188,12 @@
               (zero? (:exit render-result)))
       (check! "rendered source preserves the structured typed binding"
               (str/includes? rendered "(who String)"))
+      (check! "rendered source preserves the constrained binding"
+              (str/includes? rendered "(who Point validator?)"))
+      (check! "rendered source preserves shifted and incomplete slots as data"
+              (and (str/includes? rendered "(defn shifted junk")
+                   (str/includes? rendered
+                                  "(defn malformed [(broken Point validator?)] Point)")))
       (check! "rendered source preserves the positional return type"
               (str/includes? rendered "] String"))
       (let [syntax-result (proc/sh {:out :string :err :string}

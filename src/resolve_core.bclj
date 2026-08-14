@@ -252,6 +252,25 @@
   (let [leaf (if (seq? datum) (first datum) datum)]
     (when (symbol? leaf) (str leaf))))
 
+(defn- union-member-datum-name [(datum Any)] (U String Nil)
+  (cond
+    (symbol? datum)
+    (str datum)
+    (and (seq? datum)
+      (= 2 (count datum))
+      (symbol? (first datum))
+      (vector? (second datum)))
+    (str (first datum))
+    :else
+    nil))
+
+(defn- protocol-member-datum-name [(datum Any)] (U String Nil)
+  (when (and (seq? datum)
+          (= 3 (count datum))
+          (symbol? (first datum))
+          (vector? (second datum)))
+    (str (first datum))))
+
 (defn reuse-logical-datum [(datum Any) (node Any)] Any
   (if (seq? datum)
     (let [items (vec datum) leaf (first items) marker (copy-reader-meta (->ReuseNode node) leaf) rebuilt (apply list (cons marker (rest items)))]
@@ -264,7 +283,7 @@
     (let [items (vec datum) head (str (first items)) name-index (type-name-index head (second items)) top-name (logical-datum-name (nth items name-index nil)) base (if (and (named-def-head? head) (some? top-name)) {[:top top-name] top-name} {}) member-start (cond (= "defunion" head) (inc name-index) (contains? #{"definterface" "defprotocol"} head) 2 :else -1) role (if (= "defunion" head) :variant :member)]
       (if (< member-start 0)
         base
-        (reduce (fn [(acc (Map Any String)) (i Int)] (Map Any String) (let [nm (logical-datum-name (nth items i nil))] (if (nil? nm) acc (assoc acc [role nm] nm))))
+        (reduce (fn [(acc (Map Any String)) (i Int)] (Map Any String) (let [raw (nth items i nil) nm (if (= :variant role) (union-member-datum-name raw) (protocol-member-datum-name raw))] (if (nil? nm) acc (assoc acc [role nm] nm))))
           base
           (range member-start (count items)))))))
 
@@ -276,7 +295,7 @@
                                                                                                                      (role Keyword)
                                                                                                                      (i Int)]
                                                                                                                     (Vec Any)
-                                                                                                                    (let [raw (nth xs i nil) nm (logical-datum-name raw) old-node (if (nil? nm) nil (get old-bindings [role nm]))] (if (nil? old-node) xs (assoc xs i (reuse-logical-datum raw old-node))))) with-top (if (named-def-head? head) (replace-one items :top name-index) items) member-start (cond (= "defunion" head) (inc name-index) (contains? #{"definterface" "defprotocol"} head) 2 :else -1) role (if (= "defunion" head) :variant :member) rewritten (if (< member-start 0) with-top (reduce (fn
+                                                                                                                    (let [raw (nth xs i nil) nm (cond (= :variant role) (union-member-datum-name raw) (= :member role) (protocol-member-datum-name raw) :else (logical-datum-name raw)) old-node (if (nil? nm) nil (get old-bindings [role nm]))] (if (nil? old-node) xs (assoc xs i (reuse-logical-datum raw old-node))))) with-top (if (named-def-head? head) (replace-one items :top name-index) items) member-start (cond (= "defunion" head) (inc name-index) (contains? #{"definterface" "defprotocol"} head) 2 :else -1) role (if (= "defunion" head) :variant :member) rewritten (if (< member-start 0) with-top (reduce (fn
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     [(xs (Vec Any))
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      (i Int)]
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     (Vec Any)

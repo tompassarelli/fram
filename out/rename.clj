@@ -118,7 +118,7 @@
   (println (str "edit: rename symbol `" old-name "` -> `" new-name "` in files matching \"" target-substr "\""))
   (println (str "renamed (target file): " renamed " symbol occurrences"))
   (println (str "preserved (other files, same name, untouched): " preserved " occurrences"))
-  (println (str "superseded assertions (recoverable, nothing deleted): " renamed))
+  (println (str "withdrawn assertions (recoverable, nothing deleted): " renamed))
   (println (str "live propositions in store: " (count (c/live-propositions ctx))))
   (doseq [i (range (count srcs))]
   (println (str "projected -> " (nth outs i) "   <- " (nth srcs i)))))))))

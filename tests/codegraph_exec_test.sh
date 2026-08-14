@@ -121,7 +121,7 @@ fi
 # supersession_check reads this exact path; it is the module's own interface.
 cp "$trap_edn" /tmp/trap.edn
 if timeout 240 bb -cp out -m supersession-check > "$scratch/sup.out" 2>&1 &&
-   grep -Fq 'Supersession is real: true' "$scratch/sup.out"; then
+   grep -Fq 'Withdrawal is real: true' "$scratch/sup.out"; then
   pass "supersession_check: the withdrawn assertion survives, not-live, on the same node"
 else
   fail "supersession_check: $(tail -3 "$scratch/sup.out" | tr '\n' ' ')"

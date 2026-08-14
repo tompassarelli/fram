@@ -1,15 +1,15 @@
 #lang beagle/clj
 
 ;; ============================================================================
-;; resolve-verbs — THE AUTHORING VERBS: an edit is a FACT OPERATION.
+;; resolve-verbs — THE AUTHORING VERBS: an edit is a structural graph operation.
 ;; ============================================================================
 ;; Stage M1 Cut H of the engine core port (north thread
 ;; 019f9f0e-de2a-7759-bb10-db8b14be6fad). These are the standalone authoring
 ;; verbs — rename / upsert-form / insert-form / insert-comment / set-body /
 ;; replace-in-body / delete / reorder — plus the graph-path dispatcher. Each one
 ;; checks its INVARIANTS first (collision, no-capture, no-orphaned-refs, shape,
-;; anchor uniqueness) and, only if every one holds, mutates FACTS: mint the new
-;; subtree, supersede the edges it replaces, never touch text. A rejected edit
+;; anchor uniqueness) and, only if every one holds, asserts the new subtree and
+;; withdraws the structural edges it replaces, never touching text. A rejected edit
 ;; mutates nothing.
 ;;
 ;; The verbs are STORE-AGNOSTIC by construction — they read the corpus tables and
@@ -46,8 +46,8 @@
 ;;      or a ^:dynamic var that cannot change namespace — not host interop.
 ;;
 ;;   3. `binding [*out* *err*]` CANNOT MOVE (it rebinds a host dynamic var), so
-;;      stderr reporting is one closure, `warn`, called once per LINE. The
-;;      goldens compare bytes, so line order and spelling are preserved verbatim.
+;;      stderr reporting is one closure, `warn`, called once per LINE. CLI
+;;      consumers depend on deterministic line order and stable diagnostic spelling.
 ;;
 ;;   4. TWO REJECT ARITIES. Callers bind *reject!* with either arity — tests
 ;;      bind `(fn [code] …)`, the server `(fn [code & [detail]] …)` — so the
@@ -67,7 +67,7 @@
 ;;                     same anchor get distinct ties and BOTH land (commute).
 ;;   verb-insert-comment! author a standalone line comment (Turtle #6): a
 ;;                     kind="comment" node + one `text` seg + a commentN edge.
-;;   verb-set-body!    replace a def/defn's body: supersede every body fN edge,
+;;   verb-set-body!    replace a def/defn's body: withdraw every body fN assertion,
 ;;                     mint the new body, wire it at the first body slot. Handles
 ;;                     both the defn shape (body after the [param] vector) and
 ;;                     the value-def shape (body after the NAME).
@@ -75,7 +75,7 @@
 ;;                     addressed structurally by an anchor datum, reusing the
 ;;                     matched edge's EXACT position literal (byte-stable; the
 ;;                     def is never re-minted, so siblings + comments survive).
-;;   verb-delete!      remove a top-level def by superseding the wrapper's form
+;;   verb-delete!      remove a top-level def by withdrawing the wrapper's form
 ;;                     edge; fail-closed on any surviving reference (orphans).
 ;;   verb-reorder!     MOVE a def by re-spelling its wrapper order key — same
 ;;                     subtree, zero node churn, identity preserved.
@@ -402,8 +402,8 @@
      (str "REJECTED — " head "\n" (str/join "\n" lines) "\n  remedy: " remedy)}))
 
 ;; ---------------------------------------------------------------------------
-;; delete — remove a top-level def by name. FACT-NATIVE + fail-closed: the
-;; EFFECT is a supersede of the wrapper's fN form-edge fact(s) pointing at the
+;; delete — remove a top-level def by name. Graph-native + fail-closed: the
+;; effect withdraws the wrapper's fN form-edge assertion(s) pointing at the
 ;; deleted form(s). Retiring that edge makes the form unreachable from the
 ;; beagle-file wrapper, so (a) the minimal-op harvest (do-edit-min) sees a
 ;; RETRACT of the wrapper edge and (b) the render path's reachability filter
@@ -462,14 +462,14 @@
           scope
           "\" ("
           (deref retired)
-          " wrapper form-edge(s) superseded; subtree orphaned + dropped on render; 0 orphaned refs)")))))
+          " wrapper form-edge assertion(s) withdrawn; subtree orphaned + dropped on render; 0 orphaned refs)")))))
 
 ;; ---------------------------------------------------------------------------
 ;; reorder — MOVE an existing top-level def to a new position (after an anchor)
 ;; by RE-SPELLING its wrapper order key, NOT by re-minting the form.
 ;; insert-form+delete would churn node identity (refers_to identity edges to the
 ;; moved form's nodes would break, and a concurrent edit to it would be lost).
-;; The #36 CRDT design makes the in-place move trivial + sound: supersede the
+;; The #36 CRDT design makes the in-place move trivial + sound: withdraw the
 ;; moved form's existing wrapper fN edge and mint a NEW one at a between-path,
 ;; pointing at the SAME form root — zero node churn, identity preserved.
 ;; `(reorder X :after Y)` puts X immediately after Y; `:after nil`/"" -> FRONT.
@@ -562,7 +562,7 @@
               disp-name
               "` in \""
               scope
-              "\" (1 form minted as facts; refs resolved via refers_to)")))))))
+              "\" (1 form minted as structural propositions; refs resolved via refers_to)")))))))
 
 ;; ---------------------------------------------------------------------------
 ;; insert-form — the MIDDLE-INSERT (#36): insert a def AFTER an anchor def, at a
@@ -683,29 +683,55 @@
       (when (or (nil? form) (not (contains? rc/VALUE-DEFS (str (rr/head-sym ctx view d)))))
         (warn (str "REJECTED — `" name "` is not a def/defn with a body in \"" scope "\" (set-body needs a value binding; no facts mutated)."))
         (reject 5))
-      (let [fnf (:fn-facts v) mint (:mint v) kids (vec (fnf d)) head (str (rr/head-sym ctx view d)) param? (contains? rc/PARAM-FORMS head) anchor-edge (if param? (some (fn
-                                                                                                                                                                          [(e Any)]
-                                                                                                                                                                          Any
-                                                                                                                                                                          (when (rb/brackets? ctx view (nn (enode e))) e)) kids) (some (fn
-                                                                                                                                                                                                                                         [(e Any)]
-                                                                                                                                                                                                                                         Any
-                                                                                                                                                                                                                                         (when (= name (rr/sym-val ctx view (rr/unwrap-meta ctx view (nn (enode e))))) e)) kids)) anchor-n (if (some? anchor-edge) (ekey anchor-edge) -1) forms (if (and param? (>= anchor-n 0)) (mapv enode (filter (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                       [(e Any)]
-                                                                                                                                                                                                                                                                                                                                                                                                                                                       Bool
-                                                                                                                                                                                                                                                                                                                                                                                                                                                       (>= (ekey e) anchor-n)) kids)) []) sig (when param? (rb/signature-tail ctx view forms (= "defmacro" head))) first-body (when param? (first (:body sig))) body-start (if param? (some (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              [(e Any)]
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              (when (= first-body (enode e)) (ekey e))) kids) (when (seq kids) (ekey (last kids)))) body-start-n (nn (if (nil? body-start) -1 body-start)) body-slots (if (< body-start-n 0) [] (if param? (vec (filter (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          [(e Any)]
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          Bool
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          (>= (nn (ekey e)) body-start-n)) kids)) (vec (filter (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 [(e Any)]
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 Bool
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 (= (ekey e) body-start-n)) kids)))) new-root (mint src datum)]
+      (let [fnf (:fn-facts v)
+            mint (:mint v)
+            kids (vec (fnf d))
+            head (str (rr/head-sym ctx view d))
+            param? (contains? rc/PARAM-FORMS head)
+            tail (if (contains? #{"defn" "defn-" "defmacro"} head)
+                   (vec (drop 2 (mapv enode kids)))
+                   (vec (rest (mapv enode kids))))
+            signatures (if param?
+                         (rb/executable-signatures ctx view head tail)
+                         [])
+            sig (when (= 1 (count signatures))
+                  (nth signatures 0 nil))
+            params (get sig :params)
+            anchor-edge (when param?
+                          (some (fn
+                                  [(e Any)]
+                                  Any
+                                  (when (= params (enode e)) e))
+                            kids))
+            first-body (when param? (first (:body sig)))
+            body-start (if param?
+                         (when (some? anchor-edge)
+                           (some (fn
+                                   [(e Any)]
+                                   Any
+                                   (when (= first-body (enode e)) (ekey e)))
+                             kids))
+                         (when (seq kids) (ekey (last kids))))
+            body-start-n (nn (if (nil? body-start) -1 body-start))
+            body-slots (if (< body-start-n 0)
+                         []
+                         (if param?
+                           (vec (filter (fn
+                                          [(e Any)]
+                                          Bool
+                                          (>= (nn (ekey e)) body-start-n))
+                                  kids))
+                           (vec (filter (fn
+                                          [(e Any)]
+                                          Bool
+                                          (= (ekey e) body-start-n))
+                                  kids))))]
         (when (= 0 (count body-slots))
           (warn (str "REJECTED — `" name "` has no body fN edges to replace; no facts mutated."))
           (reject 5))
-        (let [retire (:retire v) emit (:emit v)]
+        (let [new-root (mint src datum)
+              retire (:retire v)
+              emit (:emit v)]
           (doseq [(e Any) body-slots] (retire (ecid e)))
           (ri/assert! ctx (nn d) (str "f" body-start-n) (nn new-root))
           (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
@@ -716,7 +742,7 @@
               scope
               "\" ("
               (count body-slots)
-              " body slot(s) superseded; new body minted as facts)")))))))
+              " body-slot assertion(s) withdrawn; new body minted as structural propositions)")))))))
 
 ;; ---------------------------------------------------------------------------
 ;; replace-in-body — SUB-DEF surgical edit. Replace ONE interior form inside a
@@ -808,7 +834,7 @@
                 "` in \""
                 scope
                 (when (some? within-datum) "\" (scoped by :within)")
-                "\" (1 fN edge superseded + re-pointed at a freshly-minted form; "
+                "\" (1 fN assertion withdrawn + re-pointed at a freshly-minted form; "
                 "def NOT re-emitted — siblings + comments preserved; refs via refers_to)"))))))))
 
 ;; ---------------------------------------------------------------------------
@@ -818,7 +844,7 @@
 ;; resolve-warm-store!, and a ^:dynamic var cannot change namespace (Cut B's
 ;; reason). Inside that scope the op table is ordinary dispatch, and it is here:
 ;; the SAME verb functions the text path calls, over a LOG-booted warm store,
-;; minting/superseding fact ops against log-resident node identity.
+;; asserting/withdrawing structural propositions against log-resident node identity.
 ;;
 ;; An unknown op is a hard stop (System/exit 2, via the `exit` closure), not a
 ;; *reject!* — a bad op is a caller bug, not a refused edit.

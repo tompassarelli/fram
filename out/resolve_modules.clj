@@ -37,6 +37,13 @@
    leaf (if (= "list" (rr/kind-of ctx view outer)) (nth (rr/ordered-children ctx outer) 0 nil) outer)]
   (rr/unwrap-meta ctx view leaf)))
 
+(defn protocol-method-parts [ctx view raw-method]
+  (let [method (rr/unwrap-meta ctx view raw-method)
+   children (rr/ordered-children ctx method)
+   name (rr/unwrap-meta ctx view (nth children 0 nil))]
+  (if (and (= "list" (rr/kind-of ctx view method)) (= 3 (count children)) (= "symbol" (rr/kind-of ctx view name)) (rb/brackets? ctx view (nth children 1 nil))) (do
+  {:name name :params (nth children 1) :return-type (nth children 2)}))))
+
 (defn module-defs [ctx view ents]
   (reduce (fn [acc f] (let [d (unwrap-def ctx view f)
    h (str (hd ctx view d))]
@@ -44,7 +51,8 @@
   (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [nl (logical-name-leaf* ctx view (nth (rr/ordered-children ctx d) 1 nil))
    nm (sv ctx view nl)]
   (if (or (nil? nm) (nil? nl)) acc (assoc acc nm nl)))
-  (contains? #{"definterface" "defprotocol"} h) (reduce (fn [a m] (let [nl (logical-name-leaf* ctx view m)
+  (contains? #{"definterface" "defprotocol"} h) (reduce (fn [a m] (let [parts (protocol-method-parts ctx view m)
+   nl (:name parts)
    nm (sv ctx view nl)]
   (if (or (nil? nm) (nil? nl)) a (assoc a nm nl)))) acc (vec (drop 2 (rr/ordered-children ctx d))))
   :else acc))) {} (forms-of ctx view ents)))
@@ -91,6 +99,14 @@
 (defn logical-name-leaf [ctx view node]
   (logical-name-leaf* ctx view node))
 
+(defn union-member-parts [ctx view raw-member]
+  (let [member (rr/unwrap-meta ctx view raw-member)
+   children (rr/ordered-children ctx member)]
+  (cond
+  (= "symbol" (rr/kind-of ctx view member)) {:name member :fields nil}
+  (and (= "list" (rr/kind-of ctx view member)) (= 2 (count children)) (= "symbol" (rr/kind-of ctx view (rr/unwrap-meta ctx view (nth children 0 nil)))) (rb/brackets? ctx view (nth children 1 nil))) {:name (rr/unwrap-meta ctx view (nth children 0)) :fields (nth children 1)}
+  :else nil)))
+
 (defn type-name-leaf [ctx view d]
   (let [children (rr/ordered-children ctx d)
    name-index (rc/type-name-index (hd ctx view d) (sv ctx view (nth children 1 nil)))]
@@ -102,27 +118,39 @@
    nm (sv ctx view nl)]
   (if (or (nil? nm) (nil? nl)) acc (assoc acc nm nl)))) {} defs)
    variants (reduce (fn [acc f] (let [d (unwrap-def ctx view f)]
-  (if (= "defunion" (hd ctx view d)) (reduce (fn [a v] (let [vn (logical-name-leaf ctx view v)
+  (if (= "defunion" (hd ctx view d)) (reduce (fn [a v] (let [parts (union-member-parts ctx view v)
+   vn (:name parts)
    nm (sv ctx view vn)]
   (if (or (nil? nm) (nil? vn)) a (assoc a nm vn)))) acc (let [children (rr/ordered-children ctx d)]
   (vec (drop (inc (rc/type-name-index (hd ctx view d) (sv ctx view (nth children 1 nil)))) children)))) acc))) {} defs)]
   (merge variants names)))
 
 (defn- field-binding-leaves [ctx view fields]
-  (vec (keep (fn [field] (let [parts (rb/typed-binding-parts ctx view field)
-   binding (if (nil? parts) nil (nth parts 0 nil))
+  (let [declarations (vec (rest (rr/ordered-children ctx fields)))
+   leaves (mapv (fn [field] (let [parts (rb/typed-binding-parts ctx view field)
+   binding (if (nil? parts) nil (:binding parts))
    leaf (if (nil? binding) nil (rr/unwrap-meta ctx view binding))]
   (if (some? (sv ctx view leaf)) (do
-  leaf)))) (vec (rest (rr/ordered-children ctx fields))))))
+  leaf)))) declarations)]
+  (if (every? some? leaves) leaves [])))
+
+(defn- add-field-accessors [ctx view acc owner fields]
+  (let [name (sv ctx view owner)]
+  (if (or (nil? name) (nil? fields) (not (rb/brackets? ctx view fields))) acc (let [prefix (str/lower-case (str name))]
+  (reduce (fn [result field] (let [field-name (sv ctx view field)]
+  (if (nil? field-name) result (assoc result (str prefix "-" (str field-name)) [owner field-name])))) acc (field-binding-leaves ctx view fields))))))
 
 (defn module-accessors [ctx view ents]
-  (reduce (fn [acc f] (let [d (unwrap-def ctx view f)]
-  (if (contains? #{"defrecord" "deftype"} (str (hd ctx view d))) (let [nl (type-name-leaf ctx view d)
-   nm (sv ctx view nl)
-   fb (first (filterv (fn [k] (rb/brackets? ctx view k)) (vec (drop 2 (rr/ordered-children ctx d)))))]
-  (if (or (nil? nm) (nil? fb)) acc (let [pfx (str/lower-case (str nm))]
-  (reduce (fn [a field] (let [fld (sv ctx view field)]
-  (if (nil? fld) a (assoc a (str pfx "-" (str fld)) [nl fld])))) acc (field-binding-leaves ctx view fb))))) acc))) {} (forms-of ctx view ents)))
+  (reduce (fn [acc form] (let [definition (unwrap-def ctx view form)
+   head (str (hd ctx view definition))
+   children (rr/ordered-children ctx definition)]
+  (cond
+  (contains? #{"defrecord" "deftype"} head) (let [fields (nth children 2 nil)]
+  (add-field-accessors ctx view acc (type-name-leaf ctx view definition) fields))
+  (= "defunion" head) (reduce (fn [result raw-member] (let [parts (union-member-parts ctx view raw-member)
+   fields (:fields parts)]
+  (if (nil? fields) result (add-field-accessors ctx view result (:name parts) fields)))) acc (vec (drop (inc (rc/type-name-index head (sv ctx view (nth children 1 nil)))) children)))
+  :else acc))) {} (forms-of ctx view ents)))
 
 (defn form-binding-leaves [ctx view form]
   (let [d (unwrap-def ctx view form)
@@ -132,10 +160,12 @@
    top-name (sv ctx view top)
    base (if (and (rc/named-def-head? h) (some? top) (some? top-name)) {[:top top-name] top} {})]
   (cond
-  (= "defunion" h) (reduce (fn [acc node] (let [leaf (logical-name-leaf ctx view node)
+  (= "defunion" h) (reduce (fn [acc node] (let [parts (union-member-parts ctx view node)
+   leaf (:name parts)
    nm (sv ctx view leaf)]
   (if (or (nil? leaf) (nil? nm)) acc (assoc acc [:variant nm] leaf)))) base (vec (drop (inc (rc/type-name-index h (sv ctx view (nth children 1 nil)))) children)))
-  (contains? #{"definterface" "defprotocol"} h) (reduce (fn [acc node] (let [leaf (logical-name-leaf ctx view node)
+  (contains? #{"definterface" "defprotocol"} h) (reduce (fn [acc node] (let [parts (protocol-method-parts ctx view node)
+   leaf (:name parts)
    nm (sv ctx view leaf)]
   (if (or (nil? leaf) (nil? nm)) acc (assoc acc [:member nm] leaf)))) base (vec (drop 2 children)))
   :else base)))

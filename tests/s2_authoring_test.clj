@@ -10,6 +10,7 @@
          '[resolve-read :as rr]
          '[resolve-corpus :as corpus]
          '[resolve-query :as query]
+         '[resolve-verbs :as rvb]
          '[resolve :as resolve])
 
 (def checks (atom []))
@@ -77,8 +78,16 @@
 ;; ---------------------------------------------- EDN boundary + verb + emit
 (def input (java.io.File/createTempFile "fram-s2-authoring-" ".edn"))
 (def output (java.io.File/createTempFile "fram-s2-projection-" ".edn"))
+(def automatic-output-dir
+  (.toFile
+   (java.nio.file.Files/createTempDirectory
+    "fram-s2-automatic-projection-"
+    (make-array java.nio.file.attribute.FileAttribute 0))))
+(def automatic-output (java.io.File. automatic-output-dir "resolved-demo.edn"))
 (.deleteOnExit input)
 (.deleteOnExit output)
+(.deleteOnExit automatic-output)
+(.deleteOnExit automatic-output-dir)
 (spit input
       (str "@file demo\n"
            "[1 \"kind\" \"list\"]\n"
@@ -97,6 +106,29 @@
            "[6 \"kind\" \"number\"]\n"
            "[6 \"v\" 42]\n"
            "[6 \"line\" 42]\n"))
+
+(defn projection-rows [file]
+  (mapv edn/read-string
+        (filter #(str/starts-with? % "[")
+                (str/split-lines (slurp file)))))
+
+;; Exercise the actual non-capture verb emission before the later direct
+;; extraction can satisfy any assertion accidentally. The explicit verb-env
+;; output directory also proves that author emission closes over its caller's
+;; scope instead of falling back to the module's global /tmp path.
+(resolve/resolve-edn!
+ [(.getAbsolutePath input)]
+ (fn []
+   (rvb/verb-upsert-form!
+    (resolve/verb-env (.getAbsolutePath automatic-output-dir) nil)
+    "demo"
+    '(def automatic-emission 7))))
+(check! "non-capture upsert automatically emits resolved EDN"
+        (.isFile automatic-output))
+(def automatic-projected-lines (projection-rows automatic-output))
+(check! "automatic author emission preserves scalar v and line integers"
+        (and (some #(= [(nth % 0) "v" 42] %) automatic-projected-lines)
+             (some #(= [(nth % 0) "line" 42] %) automatic-projected-lines)))
 
 (def captured-store (atom nil))
 (def captured-entities (atom nil))
@@ -137,10 +169,9 @@
 
 (check! "the complete resolve+verb flow commits once"
         (= 1 (c/transaction-count @captured-store)))
-(def projected-lines
-  (mapv edn/read-string
-        (filter #(str/starts-with? % "[")
-                (str/split-lines (slurp output)))))
+(def projected-lines (projection-rows output))
+(check! "later explicit extraction does not replace automatic-emission evidence"
+        (= automatic-projected-lines (projection-rows automatic-output)))
 (check! "projection remaps structural Term targets to local integer labels"
         (every? integer?
                 (map #(nth % 2)

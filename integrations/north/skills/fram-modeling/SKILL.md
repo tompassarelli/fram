@@ -46,7 +46,7 @@ its positions. Fram records that a writer asserted it; Fram does not certify
 truth. Nesting a Triple never asserts it independently.
 
 **Apply Fact Normal Form (FNF) only to propositions admitted by a fact-oriented
-profile, not to every assertion or recursive Term.** Require every semantic
+profile, not to every asserted proposition or recursive Term.** Require every semantic
 relationship that profile needs for interpretation, joins, classification, or
 validation to exist as an admitted Triple instead of only in Atom spelling, an
 assumed position, or an out-of-band schema cell. Other asserted profiles own
@@ -67,7 +67,7 @@ explicit development routes.
 
 - Decide whether the workload is fact-oriented. For another use of recursive
   Terms, name the profile and its admission, identity, and query rules. Do not
-  silently apply FNF to assertions governed by another profile, compound
+  silently apply FNF to propositions governed by another profile, compound
   values, or other non-asserted structure.
 - In a profile that reads the middle position as a relation, require that Term
   to name the relationship actually stated. Reject
@@ -117,13 +117,15 @@ explicit development routes.
   name.
 - Keep closed `:kernel/*` and `:rpc/*` protocol vocabulary out of application
   ontology.
-- Present stored data as Triples only. Do not place explanatory `:=` aliases in
-  a fact block; `:=` is not Fram syntax.
+- Present fact-profile domain proposition blocks as Triples only. Operation
+  occurrences and withdrawals remain system records and relations, not
+  manufactured Triples. Do not place explanatory `:=` aliases in a fact block;
+  `:=` is not Fram syntax.
 
 The FNF gate passes only when all seven answers are yes:
 
 1. Is the gate restricted to propositions admitted by a fact-oriented profile
-   rather than every assertion or nested Term?
+   rather than every asserted proposition or nested Term?
 2. Does each admitted proposition actually state a relationship under its
    profile instead of placing a noun in the relation role?
 3. Can every required relationship and membership be queried as a Triple
@@ -141,7 +143,8 @@ The FNF gate passes only when all seven answers are yes:
   `validate` are convenient CLI projections. For applications, use the Bun
   client’s `assert`, `retract`, or atomic `batch` methods. Every mutation is
   append-only; replacing a value is a retraction plus an assertion in one
-  transaction. Never edit FRAMLOG or generated `fram:out/` directly.
+  transaction. Never edit FRAMLOG or generated files in `fram:out/` directly;
+  `fram:out/resolve.clj` is the explicit hand-maintained exception.
 - **History is intrinsic.** An assertion creates an occurrence coordinate.
   FRAMLOG stores `assert` and `retract` operations; a successful content
   retraction withdraws the newest live equal assertion occurrence. That exact
@@ -195,9 +198,12 @@ The FNF gate passes only when all seven answers are yes:
 - **Executable contracts:** `fram:tests/triple_kernel_test.clj`,
   `fram:tests/triple_query_test.clj`, and
   `fram:tests/native_rpc_server_test.clj`.
-- **Beagle-authored engine code:** `fram:src/` is authoritative; generated
-  Clojure in `fram:out/` is a build projection. For editing that source, use
-  the `beagle-authoring` skill and its compiler-first loop.
+- **Engine source authority:** The sources declared in
+  `fram:build/generated-targets.d/*.tsv` are authoritative; their listed
+  `fram:out/` destinations are generated projections. The exceptions ledger
+  `fram:build/ungenerated-out.tsv` names deliberate hand-maintained outputs,
+  including `fram:out/resolve.clj`. For Beagle source, use the
+  `beagle-authoring` skill and its compiler-first loop.
 
 ## 4. Discipline (the smell tests)
 

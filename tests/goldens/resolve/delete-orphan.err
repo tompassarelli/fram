@@ -1,4 +1,0 @@
-================ delete + orphaned-reference invariant ================
-REJECTED — 2 reference(s) would be ORPHANED (no-orphaned-refs; no facts mutated):
-  orphan: reference node 147 (`red`)
-  orphan: reference node 470 (`red`)

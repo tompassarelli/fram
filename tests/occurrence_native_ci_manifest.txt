@@ -137,8 +137,9 @@ exclude	moved-graph-control	tests/pull_test.clj	tests/pull_test.clj#graph.?autho
 exclude	removed-flat-log	tests/query_cache_singleflight_test.clj	tests/query_cache_singleflight_test.clj#coordination\.log
 exclude	removed-flat-store	tests/query_test.clj	tests/query_test.clj#k/->Fact
 exclude	moved-graph-control	tests/receipt_envelope_producer_test.clj	tests/receipt_envelope_producer_test.clj#fram-edit
-exclude	moved-graph-control	tests/resolve_logical_identity_test.clj	tests/resolve_logical_identity_test.clj#replace-in-body
+run-bb	current-model	tests/resolve_logical_identity_test.clj	-
 run-bb	current-model	tests/resolve_mint_symbol_fallback_test.clj	-
+run-bb	current-model	tests/resolve_structural_declaration_test.clj	-
 exclude	moved-graph-control	tests/resolve_shim_identity_test.clj	tests/resolve_shim_identity_test.clj#out/resolve\.clj
 run-bb	current-model	tests/schema_test.clj	-
 exclude	removed-flat-store	tests/set_tx_test.clj	tests/set_tx_test.clj#->Fact
@@ -146,7 +147,7 @@ exclude	removed-flat-log	tests/show_reporter_join_test.clj	tests/show_reporter_j
 exclude	removed-flat-log	tests/slow_read_attribution_test.clj	tests/slow_read_attribution_test.clj#coordination\.log
 exclude	removed-flat-log	tests/snapshot_retention_test.clj	tests/snapshot_retention_test.clj#coordination\.log
 exclude	moved-graph-control	tests/store_anchor_disambig_test.clj	tests/store_anchor_disambig_test.clj#replace-in-body
-exclude	moved-graph-control	tests/store_structured_binding_roundtrip_test.clj	tests/store_structured_binding_roundtrip_test.clj#graph.?author
+run-bb	current-model	tests/store_structured_binding_roundtrip_test.clj	-
 exclude	moved-graph-control	tests/store_defcheck_test.clj	tests/store_defcheck_test.clj#graph.?author
 exclude	moved-graph-control	tests/store_delete_reorder_test.clj	tests/store_delete_reorder_test.clj#out/resolve\.clj
 exclude	removed-flat-store	tests/store_domain_test.clj	tests/store_domain_test.clj#c/entity!

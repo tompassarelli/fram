@@ -324,7 +324,7 @@
   (if (not (:capture-only? v)) (do
   (let [rr! (:reresolve v)]
   (rr!))))
-  (emit "delete" (str "deleted def `" name "` in \"" scope "\" (" (deref retired) " wrapper form-edge(s) superseded; subtree orphaned + dropped on render; 0 orphaned refs)")))))
+  (emit "delete" (str "deleted def `" name "` in \"" scope "\" (" (deref retired) " wrapper form-edge assertion(s) withdrawn; subtree orphaned + dropped on render; 0 orphaned refs)")))))
 
 (defn verb-reorder! [^Verb v ^String name ^String scope after-name]
   (let [ctx (:ctx v)
@@ -422,7 +422,7 @@
   (let [rr! (:reresolve v)]
   (rr!))))
   (let [emit (:emit v)]
-  (emit "upsert-form" (str (if (some? victim-entry) "replaced" "added") " top-level def `" disp-name "` in \"" scope "\" (1 form minted as facts; refs resolved via refers_to)")))))))
+  (emit "upsert-form" (str (if (some? victim-entry) "replaced" "added") " top-level def `" disp-name "` in \"" scope "\" (1 form minted as structural propositions; refs resolved via refers_to)")))))))
 
 (defn verb-insert-form! [^Verb v ^String scope ^String after-name datum]
   (let [ctx (:ctx v)
@@ -538,25 +538,27 @@
    kids (vec (fnf d))
    head (str (rr/head-sym ctx view d))
    param? (contains? rc/PARAM-FORMS head)
-   anchor-edge (if param? (some (fn [e] (if (rb/brackets? ctx view (nn (enode e))) (do
-  e))) kids) (some (fn [e] (if (= name (rr/sym-val ctx view (rr/unwrap-meta ctx view (nn (enode e))))) (do
-  e))) kids))
-   anchor-n (if (some? anchor-edge) (ekey anchor-edge) -1)
-   forms (if (and param? (>= anchor-n 0)) (mapv enode (filter (fn [e] (>= (ekey e) anchor-n)) kids)) [])
-   sig (if param? (do
-  (rb/signature-tail ctx view forms (= "defmacro" head))))
+   tail (if (contains? #{"defn" "defn-" "defmacro"} head) (vec (drop 2 (mapv enode kids))) (vec (rest (mapv enode kids))))
+   signatures (if param? (rb/executable-signatures ctx view head tail) [])
+   sig (if (= 1 (count signatures)) (do
+  (nth signatures 0 nil)))
+   params (:params sig)
+   anchor-edge (if param? (do
+  (some (fn [e] (if (= params (enode e)) (do
+  e))) kids)))
    first-body (if param? (do
   (first (:body sig))))
-   body-start (if param? (some (fn [e] (if (= first-body (enode e)) (do
-  (ekey e)))) kids) (if (seq kids) (do
+   body-start (if param? (if (some? anchor-edge) (do
+  (some (fn [e] (if (= first-body (enode e)) (do
+  (ekey e)))) kids))) (if (seq kids) (do
   (ekey (last kids)))))
    body-start-n (nn (if (nil? body-start) -1 body-start))
-   body-slots (if (< body-start-n 0) [] (if param? (vec (filter (fn [e] (>= (nn (ekey e)) body-start-n)) kids)) (vec (filter (fn [e] (= (ekey e) body-start-n)) kids))))
-   new-root (mint src datum)]
+   body-slots (if (< body-start-n 0) [] (if param? (vec (filter (fn [e] (>= (nn (ekey e)) body-start-n)) kids)) (vec (filter (fn [e] (= (ekey e) body-start-n)) kids))))]
   (if (= 0 (count body-slots)) (do
   (warn (str "REJECTED — `" name "` has no body fN edges to replace; no facts mutated."))
   (reject 5)))
-  (let [retire (:retire v)
+  (let [new-root (mint src datum)
+   retire (:retire v)
    emit (:emit v)]
   (doseq [e body-slots]
   (retire (ecid e)))
@@ -564,7 +566,7 @@
   (if (not (:capture-only? v)) (do
   (let [rr! (:reresolve v)]
   (rr!))))
-  (emit "set-body" (str "replaced body of `" name "` in \"" scope "\" (" (count body-slots) " body slot(s) superseded; new body minted as facts)")))))))
+  (emit "set-body" (str "replaced body of `" name "` in \"" scope "\" (" (count body-slots) " body-slot assertion(s) withdrawn; new body minted as structural propositions)")))))))
 
 (defn verb-replace-in-body! [^Verb v ^String name ^String scope old-datum new-datum within-datum]
   (let [ctx (:ctx v)
@@ -615,7 +617,7 @@
   (let [rr! (:reresolve v)]
   (rr!))))
   (emit "replace-in-body" (str "replaced 1 interior form inside `" name "` in \"" scope (if (some? within-datum) (do
-  "\" (scoped by :within)")) "\" (1 fN edge superseded + re-pointed at a freshly-minted form; " "def NOT re-emitted — siblings + comments preserved; refs via refers_to)"))))))))
+  "\" (scoped by :within)")) "\" (1 fN assertion withdrawn + re-pointed at a freshly-minted form; " "def NOT re-emitted — siblings + comments preserved; refs via refers_to)"))))))))
 
 (defn dispatch-verb! [^Verb v spec]
   (let [op (:op spec)

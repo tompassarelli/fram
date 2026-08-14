@@ -178,6 +178,16 @@
   (if (symbol? leaf) (do
   (str leaf)))))
 
+(defn- union-member-datum-name [datum]
+  (cond
+  (symbol? datum) (str datum)
+  (and (seq? datum) (= 2 (count datum)) (symbol? (first datum)) (vector? (second datum))) (str (first datum))
+  :else nil))
+
+(defn- protocol-member-datum-name [datum]
+  (if (and (seq? datum) (= 3 (count datum)) (symbol? (first datum)) (vector? (second datum))) (do
+  (str (first datum)))))
+
 (defn reuse-logical-datum [datum node]
   (if (seq? datum) (let [items (vec datum)
    leaf (first items)
@@ -196,7 +206,8 @@
   (contains? #{"definterface" "defprotocol"} head) 2
   :else -1)
    role (if (= "defunion" head) :variant :member)]
-  (if (< member-start 0) base (reduce (fn [acc i] (let [nm (logical-datum-name (nth items i nil))]
+  (if (< member-start 0) base (reduce (fn [acc i] (let [raw (nth items i nil)
+   nm (if (= :variant role) (union-member-datum-name raw) (protocol-member-datum-name raw))]
   (if (nil? nm) acc (assoc acc [role nm] nm)))) base (range member-start (count items)))))))
 
 (defn reuse-retained-bindings [datum old-bindings]
@@ -204,7 +215,10 @@
    head (str (first items))
    name-index (type-name-index head (second items))
    replace-one (fn [xs role i] (let [raw (nth xs i nil)
-   nm (logical-datum-name raw)
+   nm (cond
+  (= :variant role) (union-member-datum-name raw)
+  (= :member role) (protocol-member-datum-name raw)
+  :else (logical-datum-name raw))
    old-node (if (nil? nm) nil (get old-bindings [role nm]))]
   (if (nil? old-node) xs (assoc xs i (reuse-logical-datum raw old-node)))))
    with-top (if (named-def-head? head) (replace-one items :top name-index) items)

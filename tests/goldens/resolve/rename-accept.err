@@ -1,5 +1,0 @@
-================ Turtle #5 — O(1) shadow-correct rename ================
-edit: rename def `red` -> `scarlet` in "mod-a"
-FACTS EDITED: 1  (just the definition's name; references follow refers_to)
-projected -> /tmp/resolve-golden-run/rename-accept.d/resolved-mod-a.bjs.edn   <- /tmp/resolve-golden-run/corpus/mod-a.bjs
-projected -> /tmp/resolve-golden-run/rename-accept.d/resolved-mod-b.bjs.edn   <- /tmp/resolve-golden-run/corpus/mod-b.bjs

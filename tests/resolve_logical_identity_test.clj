@@ -198,7 +198,7 @@
       children (rr/ordered-children ctx capture-def)
       params (nth children 2)
       typed-param (first (rest (rr/ordered-children ctx params)))
-      param-type (second (rb/typed-binding-parts ctx nil typed-param))
+      param-type (:type (rb/typed-binding-parts ctx nil typed-param))
       return-type (nth children 3)
       body-ref (nth children 4)
       renamed-binding (rmi/mint-datum! mint source-id 'renamed-source)

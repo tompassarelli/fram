@@ -11,6 +11,11 @@ Corpus: gjoa `src` + `tools` + `tests` — **97 files, 193,179 claims**
 (29 EDN-unparseable leaf literals skipped — see caveats), **369 defns, 424
 resolved internal call-edges**.
 
+Syntax note: this report preserves the Beagle grammar used by its historical
+fixtures. Current bindings own their metadata structurally: `[x]`, `[(x T)]`,
+and `[x (y T constraint)]`; a function return type follows the parameter vector.
+Flattened adjacent metadata such as `[(x T) constraint]` is invalid.
+
 ---
 
 ## Benchmark A — scope-correct caller precision
@@ -82,9 +87,9 @@ transitive-closure rule computed **857 reaches-pairs in 2.3 s**, an exact
 **MATCH** to an independent in-process closure. Fram's domain-agnostic Datalog —
 written for life threads — computed code leverage unchanged.
 
-Caveat / next perf turtle: the v1 fixpoint is naive (cold-recompute); 2.3 s at
-424 edges flags **semi-naive evaluation** as the engine upgrade needed before
-graphs an order of magnitude larger.
+At the time of this turtle, the v1 fixpoint was naive (cold-recompute); 2.3 s at
+424 edges identified **semi-naive evaluation** as the next required engine
+upgrade. That upgrade has since landed in the current engine.
 
 ---
 
@@ -92,13 +97,20 @@ graphs an order of magnitude larger.
 
 Turtle #2 proved the graph is a queryable *index*. Turtle #3 proves it can be a
 *source of truth*: a beagle program round-trips through its claim graph losslessly,
-so you could author the graph and treat text as a regenerable view — exactly how
-Fram already treats a thread's markdown.
+so you can author the graph and treat text as a regenerable view.
+
+This datum-tree graph is a custom structural projection profile, not the
+fact-oriented profile governed by Fact Normal Form. Its `kind`, `v`, `fN`,
+`commentN`, and `segN` slots encode admitted program structure; they are not
+domain facts compressed into predicate spelling. Assertion identity remains the
+occurrence coordinate, and a withdrawal relates a retraction occurrence to the
+exact assertion occurrence it cancels.
 
 The key move: turtle-#2's AST claims are a lossy **query** projection (overlays
 drop types/params; reconstruction needs an AST unparser). Losslessness lives one
-layer down, at the **reader datum tree**, where type annotations (`:- Any`) are
-just tokens. So the gate is proven there. Two projections, both derived from the
+layer down, at the **reader datum tree**, where the historical type annotation
+tokens (`:- Any`; current binding equivalent `(x Any)`) remain structural
+children. So the gate is proven there. Two projections, both derived from the
 same source — verbose-but-lossless for truth, compact-but-lossy for queries.
 
 `racket beagle-lib/private/claims-roundtrip.rkt <dir>...` (or `bin/beagle-roundtrip`):
@@ -111,7 +123,7 @@ same source — verbose-but-lossless for truth, compact-but-lossy for queries.
 | projector is a **fixpoint** (`render = render∘parse∘render`, byte-stable) | **PASS** |
 
 The through-Fram proof is the thesis in full: `source → reader-claims → EDN → a
-real fram.cnf store (3,858 claims) → re-extracted claims → datum → idiomatic
+real Fram TermStore (3,858 claims) → re-extracted claims → datum → idiomatic
 beagle text → re-read → identical program`. The reverse path (`claims → datum →
 source`) — which **did not exist anywhere in beagle** — now does, un-desugaring
 the reader's internal forms (`[…]→(#%brackets …)`, `{…}→(#%map …)`,
@@ -128,10 +140,12 @@ regenerate the file on every edit, so you never depend on byte-preservation, onl
 on faithful structure + a stable formatter. Both are proven. (Comments themselves —
 dropped here — are captured and made rename-correct in **Turtle #6**.)
 
-Type annotations survive because Fram **transports** them as opaque tokens (`:-`,
-`Any` are just symbols) — it does not *understand* them; type-aware refactors are
-a later turtle, not a property we have now. Cost of losslessness: ~238 triples/form
-(vs the query projection's ~18) — the verbose/lossless vs compact/lossy trade.
+At this checkpoint, historical type annotations survived because Fram
+**transported** their tokens (`:-` and `Any`) without understanding them. The
+current structural equivalent keeps `Any` inside its owning `(binding Any)` form;
+type-aware refactors are a later turtle, not a property established here. Cost of
+losslessness: ~238 triples/form (vs the query projection's ~18) — the
+verbose/lossless vs compact/lossy trade.
 
 ---
 
@@ -167,15 +181,16 @@ corrupt it. **Turtle #6 lifts this** — comments are now captured and rename-co
 
 ### Falsification log — three queries, each one run
 
-**1. "superseded" — is it real, or overwrite with nicer vocabulary?**
+**1. "withdrawn" — is history real, or overwrite with nicer vocabulary?**
 *Query (`codegraph/src/supersession_check.bclj`):* dump the renamed node's
-propositions. Result: node 8 holds **both** the assertion `(8 "v" "red")` at
-occurrence `codegraph/1#26` `LIVE?=false` **and** `(8 "v" "crimson")` at
-`codegraph/2#1` `LIVE?=true`; the retirement is the kernel's own withdrawal
-triple — `codegraph/2#0` withdraws `codegraph/1#26` — not a user-level
-`supersedes` predicate. Same node, old still retrievable, live view returns only
-`["crimson"]`. **Supersession is a real occurrence graph** — history preserved,
-nothing deleted.
+propositions and occurrence history. Result: assertion occurrence
+`codegraph/1#26` carries `(8 "v" "red")` and is no longer live, while assertion
+occurrence `codegraph/2#1` carries `(8 "v" "crimson")` and is live. The kernel
+withdrawal relation records that retraction occurrence `codegraph/2#0`
+withdraws assertion occurrence `codegraph/1#26`; it does not manufacture a
+domain `supersedes` Triple. Same node, old occurrence still retrievable, live
+view returns only `["crimson"]`. **Withdrawal is occurrence-addressed** — history
+is preserved and nothing is deleted.
 
 **2. "valid beagle" was standing in for "faithful."**
 *Query (`test/faith.rkt`):* assert the mutated→projected→re-read tree equals the
@@ -272,12 +287,12 @@ What the resolution pass retires, all proven:
 
 | property | before | after `refers_to` | falsified by |
 |---|---|---|---|
-| **rename cost** | O(refs) (supersede each) | **O(1)** — 1 claim (the binding's name) | every falsifier: "CLAIMS EDITED: 1" |
+| **rename cost** | O(refs) (rewrite each) | **O(1)** — update the binding-name proposition | every falsifier: "CLAIMS EDITED: 1" |
 | **scope** | module heuristic | **exact, shadow-correct** | `let`/param/`{:keys}`/`for` shadowing |
 | **binders** | params + `let` only | + map-destructuring + `for`/`doseq` | `{:keys [red]}` and `(doseq [red …])` shadow held |
 | **cross-module** | (couldn't) | exported-def rename updates importers | `app.x` rename → `app.y` call + `:refer`; `app.z`'s own `red` untouched |
 | **import forms** | `:refer` only | + `:as`, `:rename`, **re-export chains** | `x/red`→`x/crimson`; `:rename` alias *kept*; A→B→C re-export propagated |
-| **types** | opaque tokens | **type-name references resolve** | rename `defrecord Color`→`Hue` updates all `:- Color`; `Int` untouched |
+| **types** | opaque tokens | **type-name references resolve** | rename `defrecord Color`→`Hue` updates every structural binding type child (historically `:- Color`); `Int` untouched |
 | **collision** | module-local guess | **exact** (id-based) | `crimson`-already-bound → REJECTED |
 | **orphan-on-delete** | (didn't exist) | a query: `refers_to` → a dead node | delete-referenced REFUSED; unreferenced allowed |
 | **non-corrupting** | — | resolve→project == source | **49/49 src/gjoa** projection-identity |
@@ -357,7 +372,7 @@ the file wrapper:
 The payoff: **the Turtle #5 identity machinery generalizes for free.** A symbol segment
 that resolves gets `refers_to <binding>` from the *same* lexical resolver (`resolve.clj`'s
 new comment pass); `extract-file!` already renders any `refers_to` node via the binding's
-*current* name; `rename` already supersedes only the binding. **Zero change to the
+*current* name; `rename` already updates only the binding name. **Zero change to the
 rename/projection core** — a comment reference renames for exactly the reason a code
 reference does. Concatenating a comment's segment `v`s reproduces its text — no offset
 arithmetic, no second formatter.
@@ -405,8 +420,9 @@ burden lives behind its own fixpoint.
 
 ## Other honest caveats
 
-- **Types transported, not understood.** `:- T` survives because Fram moves it as an
-  opaque token, not because anything type-checks. Type-aware refactors are #5+.
+- **Types transported, not understood.** At this historical checkpoint, `:- T`
+  survived as opaque tokens; the current equivalent is the type child in
+  `(binding T)`. Type-aware refactors are #5+.
 - **EDN escapes.** In the *query* path, 29 leaf literals used Racket escapes (`\e`)
   Clojure's EDN reader rejects; skipped on load (never call-graph predicates). The
   *round-trip* path's universal-safe encoder already handles them.
