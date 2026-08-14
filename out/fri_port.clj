@@ -360,7 +360,7 @@
   (.order ByteOrder/LITTLE_ENDIAN))
    dump-version (read-u16-le! buffer "TermStoreDump version")
    payload-flags (read-u16-le! buffer "payload flags")]
-  (if (not (= dump-version store/term-store-dump-version)) (fail "fri: legacy TermStore payload requires rebuild" :cache-rebuild-required) (if (not (= payload-flags PAYLOAD-FLAGS)) (fail "fri: unsupported payload flags" :invalid-fri-cache) (let [next-sequence (read-i64-le! buffer "next sequence")
+  (if (not (= dump-version store/term-store-dump-version)) (fail "fri: invalid TermStore payload version" :invalid-fri-cache) (if (not (= payload-flags PAYLOAD-FLAGS)) (fail "fri: unsupported payload flags" :invalid-fri-cache) (let [next-sequence (read-i64-le! buffer "next sequence")
    atoms (read-atoms! buffer)
    triples (read-triples! buffer atoms)
    transactions (read-transactions! buffer)
@@ -370,7 +370,7 @@
   (if (not (= 0 (.remaining buffer))) (fail "fri: trailing bytes in binary payload" :invalid-fri-cache) (if (not (= indexes (index-data triples))) (fail "fri: slot index does not match TripleRow table" :invalid-fri-cache) {:dump dump :indexes indexes})))))))
 
 (defn- validate-dump! [dump ^CacheSource source]
-  (if (not (t/term-store-dump? dump)) (fail "fri: legacy cache input requires rebuild from canonical FRAMLOG" :cache-rebuild-required) (if (not (= store/term-store-dump-version (t/termstoredump-version dump))) (fail "fri: legacy cache input requires rebuild from canonical FRAMLOG" :cache-rebuild-required) (if (not (= (cachesource-space-id source) (t/termstoredump-space-id dump))) (fail "fri: cache source and TermStore belong to different spaces" :cache-space-mismatch) (let [ctx (store/new-term-store (cachesource-space-id source))]
+  (if (not (t/term-store-dump? dump)) (fail "fri: invalid cache input" :invalid-fri-cache) (if (not (= store/term-store-dump-version (t/termstoredump-version dump))) (fail "fri: invalid cache input" :invalid-fri-cache) (if (not (= (cachesource-space-id source) (t/termstoredump-space-id dump))) (fail "fri: cache source and TermStore belong to different spaces" :cache-space-mismatch) (let [ctx (store/new-term-store (cachesource-space-id source))]
   (store/load-term-store! ctx dump)
   ctx)))))
 
@@ -406,25 +406,21 @@
   (write-bytes! path bytes)
   (->CacheReceipt FMT (cachesource-space-id source) (cachesource-fingerprint source) (cachesource-valid-bytes source) (sha256 bytes))))))
 
-(defn- ^Boolean bytes-prefix? [bytes prefix]
-  (and (>= (alength bytes) (alength prefix)) (Arrays/equals prefix (Arrays/copyOfRange bytes 0 (alength prefix)))))
-
 (defn- read-envelope! [^String path]
   (try
   (let [bytes (Files/readAllBytes (.toPath (File. path)))
-   legacy (strict-utf8 "FRAMFRI1" "legacy magic")]
-  (if (bytes-prefix? bytes legacy) (fail "fri: legacy cache requires rebuild from canonical FRAMLOG" :cache-rebuild-required) (let [buffer (doto (ByteBuffer/wrap bytes)
+   buffer (doto (ByteBuffer/wrap bytes)
   (.order ByteOrder/LITTLE_ENDIAN))
    magic (strict-utf8-string (read-fixed! buffer (count MAGIC) "cache magic") "cache magic")]
   (if (not (= magic MAGIC)) (fail "fri: invalid cache magic" :invalid-fri-cache) (let [format (read-u16-le! buffer "cache format")
    flags (read-u16-le! buffer "cache flags")]
-  (if (= format 1) (fail "fri: legacy cache format requires rebuild from canonical FRAMLOG" :cache-rebuild-required) (if (not (= format FMT)) (fail "fri: unsupported cache format" :invalid-fri-cache) (if (not (= flags FLAGS)) (fail "fri: unsupported cache flags" :invalid-fri-cache) (let [space-id (read-sized-text! buffer "SpaceId")
+  (if (not (= format FMT)) (fail "fri: unsupported cache format" :invalid-fri-cache) (if (not (= flags FLAGS)) (fail "fri: unsupported cache flags" :invalid-fri-cache) (let [space-id (read-sized-text! buffer "SpaceId")
    fingerprint (hex (read-fixed! buffer FINGERPRINT-BYTES "source fingerprint"))
    source-position (read-i64-le! buffer "source position")
    payload-sha (read-fixed! buffer FINGERPRINT-BYTES "payload checksum")
    payload-length (read-i64-le! buffer "payload length")]
   (if (or (< source-position 0) (or (< payload-length 0) (> payload-length 2147483647))) (fail "fri: invalid source position or payload length" :invalid-fri-cache) (let [payload (read-fixed! buffer payload-length "cache payload")]
-  (if (not (= 0 (.remaining buffer))) (fail "fri: cache has trailing bytes" :invalid-fri-cache) {:space-id space-id :fingerprint fingerprint :source-position source-position :payload-sha payload-sha :payload payload}))))))))))))
+  (if (not (= 0 (.remaining buffer))) (fail "fri: cache has trailing bytes" :invalid-fri-cache) {:space-id space-id :fingerprint fingerprint :source-position source-position :payload-sha payload-sha :payload payload})))))))))
   (catch clojure.lang.ExceptionInfo error
     (throw error))
   (catch Throwable error

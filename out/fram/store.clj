@@ -716,7 +716,7 @@
   (->TermStoreLoadResult false code message))
 
 (defn ^TermStoreLoadResult load-term-store-result! [ctx data]
-  (if (not (t/term-store-dump? data)) (term-store-load-error :migration-required "fram: legacy store dump requires one-shot migration") (if (not (= term-store-dump-version (t/termstoredump-version data))) (term-store-load-error :migration-required "fram: legacy TermStore dump requires one-shot migration") (let [atoms (t/termstoredump-atoms data)
+  (if (not (t/term-store-dump? data)) (term-store-load-error :invalid-term-store-dump "fram: invalid TermStore dump") (if (not (= term-store-dump-version (t/termstoredump-version data))) (term-store-load-error :invalid-term-store-dump "fram: invalid TermStore dump") (let [atoms (t/termstoredump-atoms data)
    rows (t/termstoredump-triples data)
    transactions (t/termstoredump-transactions data)
    operations (t/termstoredump-operations data)
