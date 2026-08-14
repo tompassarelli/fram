@@ -106,7 +106,6 @@
 (def successful-load (store/load-term-store-result! outcome-restored dump))
 
 (def wrong-space (store/new-term-store "other-space"))
-(def legacy-version (assoc dump :version 1))
 (def first-row (first (t/termstoredump-operations dump)))
 (def malformed-ordinal
   (assoc dump :operations
@@ -251,14 +250,6 @@
          (= :invalid-term-store-dump
             (store/termstoreloadresult-code malformed-load))
          (= malformed-before (store/dump-term-store malformed-target)))]
-   ["legacy dump versions require the one-shot migration"
-    (= :migration-required
-       (error-type #(store/load-term-store! (store/new-term-store "msa-space")
-                                            legacy-version)))]
-   ["untyped legacy dump shapes require the one-shot migration"
-    (= :migration-required
-       (error-type #(store/load-term-store! (store/new-term-store "msa-space")
-                                            {:version 1 :facts []})))]
    ["a dump cannot cross SpaceId boundaries"
     (= :space-mismatch (error-type #(store/load-term-store! wrong-space dump)))]
    ["malformed transaction-local ordinals are rejected"

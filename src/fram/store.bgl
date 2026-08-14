@@ -1249,12 +1249,12 @@
   [(ctx (Atom t/TermStore)) (data Any)] TermStoreLoadResult
   (if (not (t/term-store-dump? data))
     (term-store-load-error
-     :migration-required
-     "fram: legacy store dump requires one-shot migration")
+     :invalid-term-store-dump
+     "fram: invalid TermStore dump")
     (if (not (= term-store-dump-version (t/termstoredump-version data)))
       (term-store-load-error
-       :migration-required
-       "fram: legacy TermStore dump requires one-shot migration")
+       :invalid-term-store-dump
+       "fram: invalid TermStore dump")
       (let [(atoms (Vec t/AtomRow)) (t/termstoredump-atoms data)
             (rows (Vec t/TripleRow)) (t/termstoredump-triples data)
             (transactions (Vec t/TransactionRow)) (t/termstoredump-transactions data)
