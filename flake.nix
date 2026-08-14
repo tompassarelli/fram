@@ -219,7 +219,7 @@
               # but require an external Beagle toolchain and are not advertised
               # as self-contained package commands.
               case "$name" in
-                fram|fram-backup|fram-cutover|fram-server|fram-mcp) ;;
+                fram|fram-backup|fram-server|fram-mcp) ;;
                 *) continue ;;
               esac
               chmod +x "$s"
