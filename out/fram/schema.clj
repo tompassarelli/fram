@@ -1,6 +1,5 @@
 (ns fram.schema
   (:require [fram.types :as t]
-            [fram.store :as c]
             [fram.rotation :as rot]
             [fram.txn :as txn]))
 
@@ -114,9 +113,6 @@
   (txn/commit! (store-of s) builder)
   (refresh! s)))
 
-(defn- ^Boolean interned? [^Session s term]
-  (some? (c/known-term-handle (deref (store-of s)) term)))
-
 (defn predicate-ids [^Session s ^String spelling]
   (vec (distinct (concat (rot/subjects (rot/by-t23 (view s) predicate-name-predicate spelling)) (rot/subjects (rot/by-t23 (view s) predicate-alias-predicate spelling))))))
 
@@ -125,7 +121,7 @@
   (cond
   (> (count ids) 1) (throw (ex-info (str "predicate spelling collision: " spelling) {:predicate spelling :ids ids}))
   (= (count ids) 1) (first ids)
-  :else (if (interned? s spelling) spelling nil))))
+  :else nil)))
 
 (defn ^String predicate-name [^Session s pid]
   (let [events (rot/by-t12 (view s) pid predicate-name-predicate)

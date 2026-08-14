@@ -41,18 +41,6 @@
 (s/assert! sess open-subj "open_pred" "open-value")
 (def open-pid (s/resolve-predicate sess "open_pred"))
 
-;; A legacy integer node id is still a valid Term, and a proposition written
-;; straight to the store with no registry entry stays readable through schema.
-(def legacy-ctx (c/new-term-store "schema-test-legacy"))
-(def legacy-sess (s/session! legacy-ctx))
-(def legacy-pid "legacy_pred")
-(def legacy-subj 7)
-(c/commit-transaction!
- legacy-ctx [(c/assert-operation (t/triple legacy-subj legacy-pid "legacy-value"))])
-(s/refresh! legacy-sess)
-(def legacy-before (s/lookup-all legacy-sess legacy-subj "legacy_pred"))
-(s/assert! legacy-sess legacy-subj "legacy_pred" "new-value")
-
 (def status-pid (s/def-predicate! sess "status" "single" "literal"))
 (s/alias-predicate! sess "status" "state")
 (def status-subj (s/mint-node! sess "kind" "status-subject"))
@@ -143,11 +131,6 @@
          (= [open-pid] (s/find-by sess "predicate_name" "open_pred")))]
    ["canonical and colon alias resolve one predicate id"
     (= open-pid (s/resolve-predicate sess ":open_pred"))]
-   ["legacy no-registry facts project unchanged"
-    (and (= ["legacy-value"] legacy-before)
-         (= legacy-pid (s/resolve-predicate legacy-sess "legacy_pred"))
-         (= ["legacy-value" "new-value"]
-            (s/lookup-all legacy-sess legacy-subj "legacy_pred")))]
    ["alias and rename preserve predicate identity"
     (and (= status-pid renamed-status-pid)
          (= status-pid (s/resolve-predicate sess "status"))

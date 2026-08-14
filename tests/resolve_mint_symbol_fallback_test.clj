@@ -11,7 +11,7 @@
       (println "  actual:  " (pr-str actual))
       (swap! failures inc))))
 
-;; S2: a predicate IS its spelling Term and a node is a minted coordinate, so the
+;; A predicate is its spelling Term and a node is a minted coordinate, so the
 ;; projection's integers come from ri/ordinal! — view coordinates, not identity.
 (def ctx (ri/new-graph! "resolve-mint-symbol-fallback-test"))
 (def KIND "kind")
@@ -54,7 +54,7 @@
           (str "[" (ri/ordinal! ctx leaf) " \"v\" \"renamed-name\"]")
           (emit-line! emit nil leaf v-cid)))
 
-;; The widening's own bar: a projection integer must never be mistaken for a node.
+;; A projection integer is a view coordinate, never a node identity.
 (let [[leaf _] (symbol! "shape-probe")]
   (check! "a minted identity is a Term, and the ordinal that projects it is not"
           [true false]

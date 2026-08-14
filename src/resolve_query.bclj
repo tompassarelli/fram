@@ -151,8 +151,8 @@
 
 (def IS-PRIV String "is-priv")
 
-;; S2: the throwaway store is gone. An edge key is already a Term — a node
-;; coordinate, a legacy integer node, or a "src#leaf" string — so the Datalog EDB
+;; An edge key is already a Term — a minted node coordinate or a "src#leaf"
+;; string — so the Datalog EDB
 ;; is built straight from propositions and no id interning (and no inverse map)
 ;; stands between a query answer and the identity it names.
 (defn- edge-propositions [(edges (Vec Any)) (predicate String)] (Vec Any)

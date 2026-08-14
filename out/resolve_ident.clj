@@ -11,17 +11,11 @@
 (defn ^Boolean minted-node-id? [x]
   (txn/mint-coordinate? x))
 
-(defn ^Boolean legacy-node-id? [x]
-  (integer? x))
-
-(defn ^Boolean node-id? [x]
-  (or (minted-node-id? x) (legacy-node-id? x)))
-
 (defn ^Boolean literal? [x]
-  (not (node-id? x)))
+  (not (minted-node-id? x)))
 
 (defn literal! [x]
-  (if (node-id? x) (throw (ex-info "resolve: a code-graph literal may not be shaped like a node identity" {:type :ambiguous-code-literal :value x})) x))
+  (if (minted-node-id? x) (throw (ex-info "resolve: a code-graph literal may not be shaped like a node identity" {:type :ambiguous-code-literal :value x})) x))
 
 (defrecord Graph [store view writers ordinals])
 
@@ -96,7 +90,7 @@
 
 (defn target-at [^Graph g occurrence]
   (let [r (if (nil? occurrence) nil (value-at g occurrence))]
-  (if (node-id? r) r nil)))
+  (if (minted-node-id? r) r nil)))
 
 (defn live-propositions [^Graph g]
   (rot/propositions (rot/all-occurrences (view g))))
@@ -105,11 +99,11 @@
   (rot/live-occurrence? (view g) occurrence))
 
 (defn occurrence-order [occurrence]
-  (if (t/occurrence-coordinate? occurrence) [1 (t/triple-t3 (t/triple-t1 occurrence)) (t/triple-t3 occurrence)] [0 (if (integer? occurrence) occurrence 0) 0]))
+  (if (t/occurrence-coordinate? occurrence) [(t/triple-t3 (t/triple-t1 occurrence)) (t/triple-t3 occurrence)] (throw (ex-info "resolve: occurrence coordinate required" {:type :invalid-occurrence-coordinate :value occurrence}))))
 
 (defn ^String writer-of [^Graph g occurrence]
   (if (t/occurrence-coordinate? occurrence) (let [hit (get (graph-writers g) (t/triple-t1 occurrence))]
-  (if (nil? hit) "" (str hit))) ""))
+  (if (nil? hit) "" (str hit))) (throw (ex-info "resolve: occurrence coordinate required" {:type :invalid-occurrence-coordinate :value occurrence}))))
 
 (defn minted-count [^Graph g]
   (count (deref (graph-ordinals g))))

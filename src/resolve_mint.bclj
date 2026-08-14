@@ -579,10 +579,7 @@
 ;;        module rendered as just the orphaned old body). Skipped under the
 ;;        delete path, which has its own subtree machinery.
 (def INTERNAL-PREDS (Set String)
-  ;; `supersedes` remains a projection filter for legacy corpora; current writes
-  ;; use occurrence-native retractions and withdrawals.
-  #{"supersedes"
-    "refers_to"
+  #{"refers_to"
     "keep_spelling"
     "qualifier"
     "ctor_prefix"

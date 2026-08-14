@@ -1,4 +1,4 @@
-;; s2_authoring_test.clj — S2 authoring and Int->Term identity widening.
+;; s2_authoring_test.clj — authoring with minted Term identities.
 ;;   bb -cp out tests/s2_authoring_test.clj
 (require '[clojure.edn :as edn]
          '[clojure.string :as str]
@@ -21,10 +21,11 @@
 (def context (rr/context! store))
 (def node-a (rr/mint! context))
 (def node-b (rr/mint! context))
+(def node-c (rr/mint! context))
 (def predicate (t/triple "predicate-space" :predicate "edge"))
 
 (rr/assert! context node-a predicate node-b)
-(rr/assert! context 17 predicate node-a)
+(rr/assert! context node-c predicate node-a)
 (rr/assert! context node-a "line" 42)
 
 (check! "minted node identity is a Term transaction coordinate"
@@ -36,10 +37,10 @@
         (= [node-b]
            (mapv rr/event-value
                  (rr/events-by-subject-predicate context node-a predicate))))
-(check! "legacy Int nodes remain readable"
+(check! "minted Term subjects remain readable"
         (= [node-a]
            (mapv rr/event-value
-                 (rr/events-by-subject-predicate context 17 predicate))))
+                 (rr/events-by-subject-predicate context node-c predicate))))
 (check! "integer scalar values stay literal Terms"
         (= 42 (rr/pred-val context nil node-a "line")))
 (check! "staged authoring is visible before commit"
@@ -56,8 +57,8 @@
         (and (t/transaction-coordinate? coordinate)
              (= 1 (c/transaction-count store))
              (= 3 (c/operation-count store))))
-(check! "committed Term predicate and legacy Int subject remain queryable"
-        (= #{[node-a predicate node-b] [17 predicate node-a] [node-a "line" 42]}
+(check! "committed minted Term identities remain queryable"
+        (= #{[node-a predicate node-b] [node-c predicate node-a] [node-a "line" 42]}
            (set (map (fn [event]
                        (let [p (rot/proposition-of event)]
                          [(t/triple-t1 p) (t/triple-t2 p) (t/triple-t3 p)]))
@@ -208,5 +209,5 @@
       fails (remove second rows)]
   (doseq [[label ok] rows] (println (if ok "  [PASS] " "  [FAIL] ") label))
   (if (empty? fails)
-    (println "\nS2 authoring:" (count rows) "/" (count rows) "PASS")
-    (do (println "\nS2 authoring:" (count fails) "FAILED") (System/exit 1))))
+    (println "\nTerm authoring:" (count rows) "/" (count rows) "PASS")
+    (do (println "\nTerm authoring:" (count fails) "FAILED") (System/exit 1))))

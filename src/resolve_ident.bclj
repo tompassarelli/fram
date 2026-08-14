@@ -1,16 +1,12 @@
 #lang beagle/clj
 
 ;; resolve-ident — node identity for the authoring path, and the handle it reads
-;; and writes the recursive-Term store through. S2 of the store-migration ruling
-;; (GAP 2): node and predicate identifiers WIDEN Int -> Term, decided here only.
+;; and writes the recursive-Term store through.
 ;;
-;; A node is the minted coordinate `(tx-coordinate :mint-ordinal n)`; a corpus
-;; ingested before the widening names its nodes with plain integers, and the
-;; ruling forbids rewriting it, so both arms are identity. `node-id?` is the one
-;; total shape test that answers "reference or literal?" — the old layers asked
-;; the store which integers it had interned (`value-object?`) or just tested
-;; `int?`, which is the ambiguity this replaces. `literal!` enforces the
-;; complement at the write boundary, so no stored value is ever node-shaped.
+;; A node identity is the minted coordinate `(tx-coordinate :mint-ordinal n)`.
+;; `minted-node-id?` is the total shape test that answers "reference or
+;; literal?"; `literal!` enforces its complement at the write boundary, so no
+;; stored value is ever node-shaped.
 ;;
 ;; Integers in the `[subject predicate object]` EDN projection are VIEW
 ;; coordinates handed out by `ordinal!`, never identity; `load-edn!` lifts them
@@ -41,17 +37,11 @@
 
 (defn minted-node-id? [(x Any)] Bool (txn/mint-coordinate? x))
 
-(defn legacy-node-id? [(x Any)] Bool (integer? x))
+(defn literal? [(x Any)] Bool (not (minted-node-id? x)))
 
-(defn node-id? [(x Any)] Bool
-  (or (minted-node-id? x) (legacy-node-id? x)))
-
-(defn literal? [(x Any)] Bool (not (node-id? x)))
-
-;; The write-boundary half of the invariant node-id? reads, so "an integer in
-;; slot 2 is a reference" is a property of the graph, not a convention.
+;; The write-boundary half of the minted-node-id? invariant.
 (defn literal! [(x Any)] Any
-  (if (node-id? x)
+  (if (minted-node-id? x)
     (throw (ex-info "resolve: a code-graph literal may not be shaped like a node identity" {:type :ambiguous-code-literal :value x}))
     x))
 
@@ -126,11 +116,10 @@
   (let [(p Any) (proposition-at g occurrence)]
     (if (nil? p) nil (t/triple-t3 p))))
 
-;; The value slot AS A NODE REFERENCE: nil when the slot holds a literal — the
-;; old fact-r nil-propagation, decided by shape instead of by int?.
+;; The value slot as a node reference; nil when it holds a literal.
 (defn target-at [(g Graph) (occurrence Any)] Any
   (let [(r Any) (if (nil? occurrence) nil (value-at g occurrence))]
-    (if (node-id? r) r nil)))
+    (if (minted-node-id? r) r nil)))
 
 (defn live-propositions [(g Graph)] (Vec t/Triple)
   (rot/propositions (rot/all-occurrences (view g))))
@@ -138,21 +127,19 @@
 (defn live? [(g Graph) (occurrence Any)] Bool
   (rot/live-occurrence? (view g) occurrence))
 
-;; Total order on occurrences within one space (sequence, then ordinal), in
-;; place of the old monotonic fact cid; a legacy integer sorts ahead of every
-;; coordinate, as the oldest facts did.
+;; Total order on occurrences within one space: sequence, then ordinal.
 (defn occurrence-order [(occurrence Any)] (Vec Any)
   (if (t/occurrence-coordinate? occurrence)
-    [1 (t/triple-t3 (t/triple-t1 occurrence)) (t/triple-t3 occurrence)]
-    [0 (if (integer? occurrence) occurrence 0) 0]))
+    [(t/triple-t3 (t/triple-t1 occurrence)) (t/triple-t3 occurrence)]
+    (throw (ex-info "resolve: occurrence coordinate required" {:type :invalid-occurrence-coordinate :value occurrence}))))
 
 ;; The Term store records no writer (S1), so attribution rides on the handle's
-;; writers map; an unattributed occurrence reads "", as (str nil) did.
+;; writers map; an unattributed transaction reads "".
 (defn writer-of [(g Graph) (occurrence Any)] String
   (if (t/occurrence-coordinate? occurrence)
     (let [(hit Any) (get (graph-writers g) (t/triple-t1 occurrence))]
       (if (nil? hit) "" (str hit)))
-    ""))
+    (throw (ex-info "resolve: occurrence coordinate required" {:type :invalid-occurrence-coordinate :value occurrence}))))
 
 ;; ------------------------------------------------------------------ writes ---
 

@@ -224,7 +224,7 @@
   :else (capture-all kids scope)))
   :else [])))
 
-(def INTERNAL-PREDS #{"supersedes" "refers_to" "keep_spelling" "qualifier" "ctor_prefix" "accessor_field"})
+(def INTERNAL-PREDS #{"refers_to" "keep_spelling" "qualifier" "ctor_prefix" "accessor_field"})
 
 (defrecord Emit [ctx view BOUND REFERS FIXED ents wrapper-of descendants deleted-forms deleted-subtree])
 

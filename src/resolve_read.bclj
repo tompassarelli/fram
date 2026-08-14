@@ -21,10 +21,9 @@
 ;; explicitly; resolve.clj keeps a one-line wrapper per name that reads the var.
 ;; Every call site in resolve.clj, server.clj and the tests is unchanged.
 ;;
-;; S2 WIDENED THE IDENTITIES (store-migration ruling, GAP 2). `ctx` is a
-;; resolve-ident Graph — the store root paired with its live-occurrence rotation
-;; — not a raw fact store; node and predicate ids are Terms, not Ints; and what
-;; this layer called a fact cid is the ASSERTION OCCURRENCE COORDINATE. A
+;; `ctx` is a resolve-ident Graph: the store root paired with its live-occurrence
+;; rotation. Node and predicate ids are Terms, and a fact cid is the assertion
+;; occurrence coordinate. A
 ;; predicate need not be interned before it can be asked about, so the
 ;; "value-id missing -> nil" early exits are gone: an unregistered predicate
 ;; simply has no live occurrences. select-causal-1 and select-main-1 now agree,
@@ -174,17 +173,15 @@
 
 ;;     The writing agent of the tx that committed `cid`, as a string. "" when the
 
-;;     fact carries no tx (legacy/synthetic) — matching (str nil).
+;;     transaction has no writer attribution.
 
 ;;   fact-r
 
 ;;     ------------------------------------------------------------- node reads ---
 
-;;     The :r (right/object) slot of a fact as a node id. Every fact the readers
+;;     The :r (right/object) slot of a fact as a minted Term identity. A nil cid,
 
-;;     below reach carries an Int there; a nil cid, a missing fact or a non-int slot
-
-;;     all read as "no target", which is what the original's nil-propagation did.
+;;     missing fact, or literal slot reads as "no target".
 
 ;;   kind-of
 

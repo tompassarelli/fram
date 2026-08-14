@@ -36,8 +36,6 @@
 
 (require fram.types :as t)
 
-(require fram.store :as c)
-
 (require fram.rotation :as rot)
 
 (require fram.txn :as txn)
@@ -128,21 +126,18 @@
 (defn- commit! [(s Session) (builder (Atom txn/Builder))] Session
   (do (txn/commit! (store-of s) builder) (refresh! s)))
 
-(defn- interned? [(s Session) (term Any)] Bool
-  (some? (c/known-term-handle (deref (store-of s)) term)))
-
 (defn predicate-ids [(s Session) (spelling String)] (Vec Any)
   (vec (distinct (concat (rot/subjects (rot/by-t23 (view s) predicate-name-predicate spelling)) (rot/subjects (rot/by-t23 (view s) predicate-alias-predicate spelling))))))
 
-;; An unregistered spelling resolves to the Term itself when the store already
-;; knows it, and to nil otherwise — the legacy value-id fallback, unchanged.
+;; Predicate identity is resolved only through stored canonical-name and alias
+;; propositions. An unregistered spelling has no identity yet.
 (defn resolve-predicate [(s Session) (spelling String)] Any
   (let [(ids (Vec Any)) (predicate-ids s spelling)]
     (cond
       [(> (count ids) 1)
        (throw (ex-info (str "predicate spelling collision: " spelling) {:predicate spelling :ids ids}))]
       [(= (count ids) 1) (first ids)]
-      [:else (if (interned? s spelling) spelling nil)])))
+      [:else nil])))
 
 (defn predicate-name [(s Session) (pid Any)] String
   (let [(events (Vec t/OperationOccurrence)) (rot/by-t12 (view s) pid predicate-name-predicate) (raw Any) (if (empty? events) pid (t/triple-t3 (rot/proposition-of (last events))))]

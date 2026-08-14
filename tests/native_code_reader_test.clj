@@ -111,7 +111,7 @@
               (not-any? #(str/starts-with? % "@knownx#") subjects))
       (check! "projected EDN cites the resolved root"
               (str/starts-with? projected (str "@file " (:root citation) "\n")))
-      (check! "projected EDN restores numeric graph node ids"
+      (check! "projected EDN uses numeric view coordinates for minted identities"
               (and (re-find #"(?m)^\[[0-9]+ \"kind\"" projected)
                    (not (str/includes? projected "@known#"))))
       (check! "rendered Beagle text preserves its snapshot citation"
