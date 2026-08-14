@@ -6,7 +6,7 @@
 ;;             op (the RSS-win scenario) — reads served from the mmap primitives.
 ;;   on-mat  — as `on`, then ONE whole-corpus op (materialize + warm) to document the
 ;;             lazy-materialize cost.
-;; Reuses the VmHWM /proc reader idiom from tests/apparatus_r1/cells/perf_104k.clj.
+;; VmHWM supplies the process high-water RSS from /proc.
 ;;   bb -cp out bench/beyond-ram/measure.clj <mode> <log>
 (require '[fram.store :as c] '[fram.schema :as s] '[clojure.string :as str])
 (load-file "server.clj")

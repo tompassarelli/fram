@@ -20,7 +20,6 @@ private-docs/
 # Internal agent notes / status / scratch / handoffs — NOT user-facing docs.
 # Keep out of git. Put private notes under docs/private/.
 docs/private/
-bench/vs-datascript/.cpcache/
 __pycache__/
 
 # direnv's realized devShell profile (.envrc)

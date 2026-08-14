@@ -1,1 +1,0 @@
-{:managed true, :ops [{:tx 1, :op "assert", :l "@log:gen", :p "generation", :r "g"}]}
