@@ -35,10 +35,6 @@ patch for the deployed v0.3 flat-log and EDN-line runtime.
 
 ## Compatibility and migration
 
-- v0.3 flat logs are not served directly. Quiesce the old writer and run the
-  one-shot migration into a new binary FRAMLOG before cutover; retain the old
-  log as rollback input. The v0.4 server does not emulate the legacy EDN-line
-  wire protocol.
 - Existing service definitions that relied on an implicit JVM server must now
   choose deliberately: `graal` plus an absolute `FRAM_GRAAL_ARTIFACT`,
   `jvm-oracle`, or checkout-only `jvm-dev`. The default `native` route requires

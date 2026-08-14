@@ -46,7 +46,7 @@ Performance work belongs first in those private rows, indexes, and materialized
 projections. A public `TupleN` Term would change equality, codecs, nesting, and
 query semantics; physical layout alone does not justify that semantic change.
 
-Binary FRAMLOG v1 is authoritative. Its header fixes the SpaceId; transaction frames carry a logical sequence and ordered assert/retract operations using the recursive Term codec. Replay rebuilds liveness and indexes. A one-shot migration converts the legacy flat log; serving has no dual semantic path.
+Binary FRAMLOG v1 is authoritative. Its header fixes the SpaceId; transaction frames carry a logical sequence and ordered assert/retract operations using the recursive Term codec. Replay rebuilds liveness and indexes.
 
 One active server owns writer authority for one database. Its FIFO commit
 sequencer prepares bounded transaction cohorts on private roots, appends one
@@ -188,6 +188,6 @@ The engine has no tenant authorization. Loopback/private FRAMRPC, process, Space
   generated-engine adapter.
 - `fram:src/fram/snapshot_codec.bgl`: the snapshot v1 image codec, whose boot
   decisions live beside commit planning.
-- [`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj), [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj), and [`../tests/triple_log_migration_test.clj`](../tests/triple_log_migration_test.clj): kernel, boundary, and migration gates.
+- [`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj) and [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj): kernel and boundary gates.
 
 Historical claims, Codegraph, pull, rationale, and positioning documents in [`archive/`](archive/README.md) add no current primitives or operations.

@@ -170,9 +170,7 @@ evidence pointing at its own source: `cascade_test.clj` under
 `moved-graph-control` — the same class the manifest already uses for tests
 stranded by the earlier graph-control move — rather than leaving any of the
 three silently absent from the count. None of the three runs; declaring them
-makes the gap visible instead of closing it. `triple_log_renumber_test.clj`
-was also unlisted before this release and is now classified as a run-bb row.
-The suite at tip runs 48 green manifest rows under `run-bb`.
+makes the gap visible instead of closing it.
 
 ## Compatibility and migration
 

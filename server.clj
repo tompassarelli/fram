@@ -2377,23 +2377,8 @@
                 (or third-arg (System/getenv "FRAM_SPACE_ID"))
                 (writer-authority/server-role-from-env)))
 
-      "migrate-triple-log"
-      (let [[options positional]
-            (loop [options {} remaining command-arguments]
-              (case (first remaining)
-                "--deflate" (recur (assoc options :deflate? true) (rest remaining))
-                "--renumber" (recur (assoc options :renumber? true) (rest remaining))
-                [options remaining]))]
-        (when-not (= 3 (count positional))
-          (server-fail! :migration-arguments-invalid
-                        "expected [--deflate] [--renumber] SOURCE SPACE_ID TARGET"
-                        {:arguments command-arguments}))
-        (println (pr-str
-                  (apply database/migrate-legacy-flat-log!
-                         (concat positional [options])))))
-
       (server-fail! :unknown-command
-                    "expected serve or migrate-triple-log"
+                    "expected serve"
                     {:command command}))))
 
 (when (seq *command-line-args*)

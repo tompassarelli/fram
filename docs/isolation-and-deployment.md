@@ -263,8 +263,7 @@ emitted only after the restored log has folded/replayed; the first
 `rpc/version` must equal `manifest.json`'s `servedVersion`. Only then admit
 writes. The recovery gate writes once, restarts again, and proves that the new
 write survived. Inspect history through scan, query, occurrences, and validate,
-never text scraping. Legacy flat logs enter only through the one-shot migration
-against explicit quiescent source and destination paths.
+never text scraping.
 
 Source head exposes no deployment-control operation. Runtime publication uses
 systemd socket activation and a generation symlink outside the data protocol.

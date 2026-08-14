@@ -10,7 +10,6 @@ run-bun	current-model	tests/cloudflare_capacity_receipt_test.mjs	-
 exclude-runner	needs-wasm-cgroup	tests/fram_cloudflare_capacity_gate.sh	clients/cloudflare-do/capacity/workerd-cgroup-wrapper.sh#memory\.max
 run-bb	current-model	tests/cloudflare_runtime_closure_test.clj	-
 run-bb	current-model	tests/codegraph_seam_test.clj	-
-run-bb	current-model	tests/database_migrate_flat_classification_test.clj	-
 run-bb	current-model	tests/database_test.clj	-
 run-bb	current-model	tests/writer_authority_test.clj	-
 run-bb	current-model	tests/core_code_blind_test.clj	-
@@ -45,8 +44,6 @@ run-bb	current-model	tests/store_invariant_test.clj	-
 run-bb	current-model	tests/store_ordkey_test.clj	-
 run-bb	current-model	tests/store_test.clj	-
 run-bb	current-model	tests/triple_kernel_test.clj	-
-run-bb	current-model	tests/triple_log_migration_test.clj	-
-run-bb	current-model	tests/triple_log_renumber_test.clj	-
 run-bb	current-model	tests/triple_query_test.clj	-
 run-clojure	current-model	tests/store_defcheck_untyped_test.clj	-
 

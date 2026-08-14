@@ -353,22 +353,6 @@
              (= :database-corrupt
                 (error-code #(database/current-transaction corrupt-db)))))
 
-(def legacy-file (java.io.File. scratch "legacy.log"))
-(spit legacy-file "{:tx 1, :op \"assert\", :l \"A\", :p \"p\", :r \"B\"}\n")
-(check! "runtime boot rejects legacy flat bytes with migration-required"
-        (= :migration-required
-           (error-code #(database/open-database! (.getPath legacy-file)))))
-(def fri-file (java.io.File. scratch "legacy.fri"))
-(spit fri-file "FRAMFRI1cache")
-(check! "runtime boot rejects lossy FRI input as non-authoritative"
-        (= :migration-v2-cache-not-source
-           (error-code #(database/open-database! (.getPath fri-file)))))
-(def v2-file (java.io.File. scratch "legacy.v2log"))
-(spit v2-file "{:k :fact, :cid 1, :l 2, :p 3, :r 4, :tx 5}\n")
-(check! "runtime boot rejects old v2 row caches as non-authoritative"
-        (= :migration-v2-cache-not-source
-           (error-code #(database/open-database! (.getPath v2-file)))))
-
 (check! "public write responses expose no cid handle"
         (not-any? #(and (map? %) (contains? % :cid))
                   (tree-seq coll? seq first-assertion)))

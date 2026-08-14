@@ -116,18 +116,16 @@
           nil))
 
 (let [launcher (file-source "bin/fram-server")
-      migration (file-source "bin/fram-migrate-triple-log")
       code-on (file-source "bin/fram-code-on")
       ingest (file-source "bin/fram-ingest-code")
       status (file-source "bin/fram-code-status")]
-  (check! "FRAMLOG serving, migration, and code ingest retain distinct boundaries"
+  (check! "FRAMLOG serving and code ingest retain distinct boundaries"
           (and (str/includes? launcher "FRAM_SERVER_RUNTIME:-native")
                (str/includes? launcher "artifact_dir/READY")
                (str/includes? launcher "FRAM_GRAAL_ARTIFACT")
                (str/includes? launcher "exec \"$graal_artifact\"")
                (str/includes? launcher "jvm-oracle|jvm-dev")
                (str/includes? launcher "exec \"$native_server\"")
-               (str/includes? migration "migrate-triple-log")
                (str/includes? code-on "bin/fram-server serve")
                (str/includes? code-on "--space-id \"$SPACE_ID\"")
                (absent? code-on ["edn/read" ":edit-protocol"])

@@ -70,15 +70,7 @@ image tag; compose consumes that tag and never builds the server itself.
 Deploying a different revision means re-running the script and exporting the new
 tag, so a running deployment is always traceable to one artifact hash.
 
-The Fram server persists database history at `/data/history.framlog`. If this deployment has an old
-flat `facts.log`, stop the old server and migrate it once before starting the new
-image:
-
-```sh
-bin/fram-migrate-triple-log /path/to/facts.log my-production-space /path/to/history.framlog
-```
-
-Do not retain a dual-serving fallback after migration.
+The Fram server persists database history at `/data/history.framlog`.
 
 ## How the server image is built
 

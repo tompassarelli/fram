@@ -453,7 +453,7 @@
        (failed-boot-stream stream "FRAMLOG header is truncated")]
       [(not (magic-at-start? bytes))
        (failed-boot-stream
-        stream "FRAMLOG magic does not match; migration is required")]
+        stream "FRAMLOG magic does not match")]
       [:else
        (let [version (u16-le-at bytes (count framlog-magic))
              flags (u16-le-at bytes (+ (count framlog-magic) 2))
@@ -577,7 +577,7 @@
           (error-or (bytesresult-error header)
                     "FRAMLOG header encode failed"))))]
     [(not (magic-at-start? bytes))
-     (failed-boot "FRAMLOG magic does not match; migration is required")]
+     (failed-boot "FRAMLOG magic does not match")]
     [:else
      (let [decoder (wire/->Decoder bytes (atom (count framlog-magic))
                                    (count bytes)
@@ -624,7 +624,7 @@
       [(< (count bytes) minimum-header-bytes)
        (failed-header "FRAMLOG header is truncated")]
       [(not (magic-at-start? bytes))
-       (failed-header "FRAMLOG magic does not match; migration is required")]
+       (failed-header "FRAMLOG magic does not match")]
       [:else
        (let [version (u16-le-at bytes (count framlog-magic))
              flags (u16-le-at bytes (+ (count framlog-magic) 2))

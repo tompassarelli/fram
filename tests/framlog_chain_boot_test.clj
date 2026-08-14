@@ -258,8 +258,7 @@
 (def headless (java.util.Arrays/copyOfRange sweep-bytes 0 4))
 (write-bytes! sweep-tail headless)
 (check! "a tail cut inside its header fails the boot closed"
-        (contains? #{:migration-required :corrupt-triple-log
-                     :unsupported-log-version}
+        (contains? #{:corrupt-triple-log :unsupported-log-version}
                    (error-code #(database/open-branch! sweep-log "lane" space))))
 (write-bytes! sweep-tail sweep-bytes)
 

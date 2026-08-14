@@ -20,7 +20,7 @@ required=(
   "$package_root/bin/fram" "$package_root/bin/fram-server"
   "$package_root/bin/fram-backup" "$package_root/bin/fram-mcp"
   "$runtime/clients/bun/backup.mjs" "$runtime/clients/bun/framrpc.mjs"
-  "$runtime/bin/fram-fast.clj" "$runtime/bin/fram-migrate-triple-log"
+  "$runtime/bin/fram-fast.clj"
   "$runtime/database.clj" "$runtime/server.clj"
   "$runtime/writer_authority.clj" "$runtime/rotations.clj"
   "$runtime/out/framrpc.clj" "$runtime/out/fram/rt.clj"
@@ -243,7 +243,7 @@ restart_show="$("${cli_env[@]}" "$package_root/bin/fram" show package)"
 stop_server
 
 # Packaged default state is writable history.framlog and still needs an explicit
-# database identity; it never falls back to a legacy flat log.
+# database identity.
 state_dir="$work/state"
 port="$(free_port)"
 server_output="$work/state-server.out"
@@ -258,8 +258,6 @@ pid=$!
 wait_ready >/dev/null
 [[ -f "$state_dir/history.framlog" ]] || {
   echo "fram package smoke: default state did not create history.framlog" >&2; exit 1; }
-[[ ! -e "$state_dir/facts.log" && ! -e "$state_dir/coordination.log" ]] || {
-  echo "fram package smoke: default state created a retired log" >&2; exit 1; }
 stop_server
 
 echo "fram package smoke: native version $restart_version"

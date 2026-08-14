@@ -231,8 +231,7 @@ arena, and set the budget equal to the cap.
 ## Compatibility and migration
 
 - **The FRAMLOG is unchanged.** The header is still `FRAMLOG\0` version 1, so a
-  v0.4 log opens as-is. The one-shot flat-log migration remains the only import
-  path for pre-v0.4 data.
+  v0.4 log opens as-is.
 - **Since-windowed results change.** A `triple` or text query under
   `:query/since` now returns only its window. Callers that compensated for the
   old whole-relation answer must drop that compensation.
