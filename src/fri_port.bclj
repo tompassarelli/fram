@@ -422,7 +422,7 @@
         (dump-version Int) (read-u16-le! buffer "TermStoreDump version")
         (payload-flags Int) (read-u16-le! buffer "payload flags")]
     (if (not (= dump-version store/term-store-dump-version))
-      (fail "fri: legacy TermStore payload requires rebuild" :cache-rebuild-required)
+      (fail "fri: invalid TermStore payload version" :invalid-fri-cache)
       (if (not (= payload-flags PAYLOAD-FLAGS))
         (fail "fri: unsupported payload flags" :invalid-fri-cache)
         (let [(next-sequence Int) (read-i64-le! buffer "next sequence")
@@ -443,11 +443,9 @@
 
 (defn- validate-dump! [(dump Any) (source CacheSource)] Any
   (if (not (t/term-store-dump? dump))
-    (fail "fri: legacy cache input requires rebuild from canonical FRAMLOG"
-          :cache-rebuild-required)
+    (fail "fri: invalid cache input" :invalid-fri-cache)
     (if (not (= store/term-store-dump-version (t/termstoredump-version dump)))
-      (fail "fri: legacy cache input requires rebuild from canonical FRAMLOG"
-            :cache-rebuild-required)
+      (fail "fri: invalid cache input" :invalid-fri-cache)
       (if (not (= (cachesource-space-id source)
                   (t/termstoredump-space-id dump)))
         (fail "fri: cache source and TermStore belong to different spaces"
@@ -495,57 +493,46 @@
                         (cachesource-valid-bytes source)
                         (sha256 bytes))))))
 
-(defn- bytes-prefix? [(bytes Any) (prefix Any)] Bool
-  (and (>= (alength bytes) (alength prefix))
-       (Arrays/equals prefix (Arrays/copyOfRange bytes 0 (alength prefix)))))
-
 (defn- read-envelope! [(path String)] Any
   (try
     (let [(bytes Any) (Files/readAllBytes (.toPath (File. path)))
-          (legacy Any) (strict-utf8 "FRAMFRI1" "legacy magic")]
-      (if (bytes-prefix? bytes legacy)
-        (fail "fri: legacy cache requires rebuild from canonical FRAMLOG"
-              :cache-rebuild-required)
-        (let [(buffer ByteBuffer)
-              (doto (ByteBuffer/wrap bytes) (.order ByteOrder/LITTLE_ENDIAN))
-              (magic String)
-              (strict-utf8-string (read-fixed! buffer (count MAGIC) "cache magic")
-                                  "cache magic")]
-          (if (not (= magic MAGIC))
-            (fail "fri: invalid cache magic" :invalid-fri-cache)
-            (let [(format Int) (read-u16-le! buffer "cache format")
-                  (flags Int) (read-u16-le! buffer "cache flags")]
-              (if (= format 1)
-                (fail "fri: legacy cache format requires rebuild from canonical FRAMLOG"
-                      :cache-rebuild-required)
-                (if (not (= format FMT))
-                  (fail "fri: unsupported cache format" :invalid-fri-cache)
-                  (if (not (= flags FLAGS))
-                    (fail "fri: unsupported cache flags" :invalid-fri-cache)
-                    (let [(space-id String) (read-sized-text! buffer "SpaceId")
-                          (fingerprint String)
-                          (hex (read-fixed! buffer FINGERPRINT-BYTES
-                                            "source fingerprint"))
-                          (source-position Int)
-                          (read-i64-le! buffer "source position")
-                          (payload-sha Any)
-                          (read-fixed! buffer FINGERPRINT-BYTES "payload checksum")
-                          (payload-length Int)
-                          (read-i64-le! buffer "payload length")]
-                      (if (or (< source-position 0)
-                              (or (< payload-length 0)
-                                  (> payload-length 2147483647)))
-                        (fail "fri: invalid source position or payload length"
-                              :invalid-fri-cache)
-                        (let [(payload Any)
-                              (read-fixed! buffer payload-length "cache payload")]
-                          (if (not (= 0 (.remaining buffer)))
-                            (fail "fri: cache has trailing bytes" :invalid-fri-cache)
-                            {:space-id space-id
-                             :fingerprint fingerprint
-                             :source-position source-position
-                             :payload-sha payload-sha
-                             :payload payload}))))))))))))
+          (buffer ByteBuffer)
+          (doto (ByteBuffer/wrap bytes) (.order ByteOrder/LITTLE_ENDIAN))
+          (magic String)
+          (strict-utf8-string (read-fixed! buffer (count MAGIC) "cache magic")
+                              "cache magic")]
+      (if (not (= magic MAGIC))
+        (fail "fri: invalid cache magic" :invalid-fri-cache)
+        (let [(format Int) (read-u16-le! buffer "cache format")
+              (flags Int) (read-u16-le! buffer "cache flags")]
+          (if (not (= format FMT))
+            (fail "fri: unsupported cache format" :invalid-fri-cache)
+            (if (not (= flags FLAGS))
+              (fail "fri: unsupported cache flags" :invalid-fri-cache)
+              (let [(space-id String) (read-sized-text! buffer "SpaceId")
+                    (fingerprint String)
+                    (hex (read-fixed! buffer FINGERPRINT-BYTES
+                                      "source fingerprint"))
+                    (source-position Int)
+                    (read-i64-le! buffer "source position")
+                    (payload-sha Any)
+                    (read-fixed! buffer FINGERPRINT-BYTES "payload checksum")
+                    (payload-length Int)
+                    (read-i64-le! buffer "payload length")]
+                (if (or (< source-position 0)
+                        (or (< payload-length 0)
+                            (> payload-length 2147483647)))
+                  (fail "fri: invalid source position or payload length"
+                        :invalid-fri-cache)
+                  (let [(payload Any)
+                        (read-fixed! buffer payload-length "cache payload")]
+                    (if (not (= 0 (.remaining buffer)))
+                      (fail "fri: cache has trailing bytes" :invalid-fri-cache)
+                      {:space-id space-id
+                       :fingerprint fingerprint
+                       :source-position source-position
+                       :payload-sha payload-sha
+                       :payload payload})))))))))
     (catch (error clojure.lang.ExceptionInfo)
       (throw error))
     (catch (error Throwable)

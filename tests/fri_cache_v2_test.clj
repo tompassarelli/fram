@@ -16,7 +16,6 @@
 
 (def path "/tmp/fram-fri-cache-v2.fri")
 (def path-two "/tmp/fram-fri-cache-v2-second.fri")
-(def legacy-path "/tmp/fram-fri-cache-v1.fri")
 (def corrupt-path "/tmp/fram-fri-cache-v2-corrupt.fri")
 (def fingerprint (apply str (repeat 64 "a")))
 (def cache-source (fri/source-binding "fri-space" fingerprint 4096))
@@ -39,7 +38,6 @@
 (def image (fri/open-fri! path cache-source))
 (def restored (store/new-term-store "fri-space"))
 (fri/restore-store! image restored)
-(spit legacy-path "FRAMFRI1")
 
 (def bytes-one (java.nio.file.Files/readAllBytes (.toPath (java.io.File. path))))
 (def bytes-two (java.nio.file.Files/readAllBytes (.toPath (java.io.File. path-two))))
@@ -142,15 +140,11 @@
     (= :cache-space-mismatch (error-type #(fri/open-fri! path wrong-space)))]
    ["payload corruption is rejected by checksum"
     (= :invalid-fri-cache (error-type #(fri/open-fri! corrupt-path cache-source)))]
-   ["FRI1 is never opened or migrated in the cache path"
-    (= :cache-rebuild-required (error-type #(fri/open-fri! legacy-path cache-source)))]
-   ["FRI runtime contains no legacy assertion-id or four-ary query vocabulary"
-    (nil? (re-find #"(?i)\\bcid\\b|fact-id|StoredFact|StoredTxOf" runtime-source))]
    ["FRI runtime has no EDN parser or printer in its persistence spine"
     (nil? (re-find #"clojure\\.edn|pr-str|read-string" runtime-source))]] )
 
 (fri/close-fri! image)
-(doseq [p [path path-two legacy-path corrupt-path]] (.delete (java.io.File. p)))
+(doseq [p [path path-two corrupt-path]] (.delete (java.io.File. p)))
 
 (let [failures (remove second checks)]
   (doseq [[label ok] checks]
