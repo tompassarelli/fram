@@ -3,7 +3,6 @@
 ;; vectors. Semantic values are recursive Terms; transaction history is kept
 ;; in private physical rows and exposed through non-Term system records.
 (ns fram.types)
-(define-mode strict)
 (require fram.slots :as slots)
 
 ;; Atom is the closed grounding vocabulary for the recursive term model.  An
@@ -27,7 +26,7 @@
 
 ;; Triple fields are Any only because the portable record ABI cannot spell a
 ;; recursive union in-place; term? enforces Term = Atom | Triple at the boundary.
-(defalias Atom (Dyn String Int Float Bool Keyword Instant))
+(defalias AtomValue (Dyn String Int Float Bool Keyword Instant))
 (defrecord Triple [(t1 Any) (t2 Any) (t3 Any)])
 (defalias Term (Dyn String Int Float Bool Keyword Instant Triple))
 

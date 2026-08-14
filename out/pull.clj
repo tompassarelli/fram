@@ -64,7 +64,7 @@
   (if (nil? event) nil (t/triple-t3 (event-proposition event)))))
           (agent-of [occurrence] (or (metadata-value occurrence :kernel/asserted-by) (metadata-value (t/triple-t1 occurrence) :kernel/asserted-by)))
           (recorded-at-of [occurrence] (or (metadata-value occurrence :kernel/recorded-at) (metadata-value (t/triple-t1 occurrence) :kernel/recorded-at)))
-          (pid-of [p] (s/resolve-predicate schema p))
+          (pid-of [^String p] (s/resolve-predicate schema p))
           (nm-of [term] (or (s/name-of schema term) term))
           (fwd-events [left predicate] (let [candidates (cond
   (some? asof) (snapshot-events)
@@ -84,11 +84,11 @@
    base (cond-> {:val value :cid occurrence :by (agent-of occurrence) :seq (event-sequence event) :withdrawn (boolean withdrawal)} (some? recorded-at) (assoc :ts recorded-at))]
   (if (nil? withdrawal) base (let [retraction (t/operationoccurrence-coordinate (t/withdrawal-retraction withdrawal))]
   (assoc base :withdrawn_by (agent-of retraction) :withdrawn_at retraction)))) value)))
-          (values [pname predicate left] (let [events (fwd-events left predicate)]
+          (values [^String pname predicate left] (let [events (fwd-events left predicate)]
   (if (seq events) (do
   (let [rendered (mapv (fn [event] (leaf predicate event)) events)]
   (if (= "single" (s/cardinality schema pname)) (last rendered) rendered))))))
-          (subpat->pattern [key subpattern] (cond
+          (subpat->pattern [^String key subpattern] (cond
   (vector? subpattern) subpattern
   (integer? subpattern) (if (> subpattern 1) [{key (dec subpattern)}] [])
   (= subpattern :...) [{key :...}]
@@ -104,7 +104,7 @@
   (string? element) (let [predicate (pid-of element)]
   (if (nil? predicate) acc (let [value (values element predicate left)]
   (if (nil? value) acc (assoc acc element value)))))
-  (map? element) (reduce (fn [result key] (let [subpattern (get element key)]
+  (map? element) (reduce (fn [result ^String key] (let [subpattern (get element key)]
   (if (str/starts-with? key "_") (let [predicate (pid-of (subs key 1))]
   (if (nil? predicate) result (let [subjects (mapv (fn [event] (t/triple-t1 (event-proposition event))) (rev-events predicate left))]
   (assoc result key (mapv (fn [subject] (recur-target subject (subpat->pattern key subpattern) depth visited)) subjects))))) (let [predicate (pid-of key)]

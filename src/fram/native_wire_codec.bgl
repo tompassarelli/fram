@@ -4,7 +4,6 @@
   (:require [fram.rpc-limits :as limits]
             [fram.types :as t]))
 
-(define-mode strict)
 
 (def rpc-v2-header-bytes Int 26)
 (def rpc-v2-max-body-bytes Int 1048576)

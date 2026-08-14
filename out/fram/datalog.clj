@@ -99,6 +99,7 @@
 
 (defn rotationcandidatesource-lower-exclusive [r] (:lower-exclusive r))
 
+;; CandidateSourceValue = CandidateSource | VirtualCandidateSource
 (defrecord CandidateSource [rows positions spo pos osp occurrence rotation])
 
 (defn candidatesource-rows [r] (:rows r))
@@ -114,7 +115,6 @@
 (defn candidatesource-occurrence [r] (:occurrence r))
 
 (defn candidatesource-rotation [r] (:rotation r))
-
 (defrecord VirtualCandidateSource [relation source])
 
 (defn virtualcandidatesource-relation [r] (:relation r))
@@ -324,7 +324,7 @@
   (unify-arguments-controlled! arguments tuple subst context))
 
 (defn- ground [arguments subst]
-  (mapv (fn [term] (let [value (term-value term subst)]
+  (mapv (fn [^QueryTerm term] (let [value (term-value term subst)]
   (if (some? value) value (throw (ex-info "fram: unbound query variable reached evaluation" {:type :unbound-query-variable}))))) arguments))
 
 (defn- integer-value [value]
@@ -477,7 +477,7 @@
   (if (query-evaluation-context-open? context) (reduce (fn [acc subst] (conj acc (ground (rule-head-arguments value) subst))) #{} substitutions) #{})))
 
 (defn- rule-head-relations [rules]
-  (vec (reduce (fn [acc value] (conj acc (rule-head-relation value))) #{} rules)))
+  (vec (reduce (fn [acc ^Rule value] (conj acc (rule-head-relation value))) #{} rules)))
 
 (defn- append-handle [index key handle]
   (update index key (fn [current] (if (nil? current) [handle] (conj current handle)))))
@@ -545,16 +545,16 @@
   (if (and (= relation triple-relation) (= 3 (count tuple))) (assoc with-row :spo (trie-add (candidatesource-spo source) tuple [0 1 2] handle) :pos (trie-add (candidatesource-pos source) tuple [1 2 0] handle) :osp (trie-add (candidatesource-osp source) tuple [2 0 1] handle)) (assoc with-row :positions (add-position-handles (candidatesource-positions source) tuple handle)))))
 
 (defn- ^CandidateSource candidate-source-add-rows [^String relation ^CandidateSource source tuples]
-  (reduce (fn [current tuple] (candidate-source-add relation current tuple)) source tuples))
+  (reduce (fn [^CandidateSource current tuple] (candidate-source-add relation current tuple)) source tuples))
 
 (defn ^CandidateSource withdrawal-candidate-source [root lower-exclusive upper-inclusive]
   (candidate-source-add-rows withdrawal-relation (empty-candidate-source) (set (store/withdrawal-tuples-between root lower-exclusive upper-inclusive))))
 
 (defn- build-candidate-sources [db relations seed]
-  (reduce (fn [sources relation] (if (contains? sources relation) sources (assoc sources relation (candidate-source-add-rows relation (empty-candidate-source) (get db relation #{}))))) seed relations))
+  (reduce (fn [sources ^String relation] (if (contains? sources relation) sources (assoc sources relation (candidate-source-add-rows relation (empty-candidate-source) (get db relation #{}))))) seed relations))
 
 (defn- add-delta-sources [sources delta relations]
-  (reduce (fn [current relation] (let [tuples (get delta relation #{})
+  (reduce (fn [current ^String relation] (let [tuples (get delta relation #{})
    existing (get current relation)
    base (if (instance? CandidateSource existing) existing (empty-candidate-source))]
   (if (empty? tuples) current (assoc current relation (candidate-source-add-rows relation base tuples))))) sources relations))
@@ -639,20 +639,22 @@
   (let [relation (literal-relation literal)
    arguments (literal-arguments literal)
    source (get sources relation)]
-  (if (literal-negated literal) (if (if (instance? CandidateSource source) (source-contains? source relation arguments subst) (contains? (get db relation #{}) (ground arguments subst))) [] [subst]) (cond
+  (if (literal-negated literal) (cond
+  (instance? CandidateSource source) (if (source-contains? source relation arguments subst) [] [subst])
+  :else (if (contains? (get db relation #{}) (ground arguments subst)) [] [subst])) (cond
   (instance? VirtualCandidateSource source) (unify-tuples-controlled! arguments (virtual-source-rows! source true arguments subst context) subst context)
-  (nil? source) (if (contains? text-relations relation) (do
-  (text-rows-or-record! (missing-candidate-source-result relation) context)
-  (let [missing []]
-  missing)) (unify-tuples-controlled! arguments (vec (get db relation #{})) subst context))
-  :else (let [rotation (candidatesource-rotation source)]
+  (instance? CandidateSource source) (let [rotation (candidatesource-rotation source)]
   (if (some? rotation) (rotation-results-indexed! rotation arguments subst context) (let [rows-value (candidatesource-rows source)
    handles (source-handles source relation arguments subst)]
   (if (nil? handles) (unify-tuples-controlled! arguments rows-value subst context) (loop [remaining handles
    results []]
   (if (or (empty? remaining) (not (query-evaluation-context-open? context))) results (let [tuple (source-row source (first remaining))
    matched (unify-arguments-controlled! arguments tuple subst context)]
-  (if (query-evaluation-context-open? context) (recur (rest remaining) (if (some? matched) (conj results matched) results)) results))))))))))))
+  (if (query-evaluation-context-open? context) (recur (rest remaining) (if (some? matched) (conj results matched) results)) results))))))))
+  :else (if (contains? text-relations relation) (do
+  (text-rows-or-record! (missing-candidate-source-result relation) context)
+  (let [missing []]
+  missing)) (unify-tuples-controlled! arguments (vec (get db relation #{})) subst context))))))
 
 (defn- literal-results-indexed! [db sources ^Literal literal subst ^QueryEvaluationContext context]
   (if (query-check! context) (cond
@@ -688,7 +690,7 @@
   (recur (inc position) (rest remaining) (if (and (= :relation (literal-kind literal)) (not (literal-negated literal)) (contains? delta-relations (literal-relation literal))) (conj positions position) positions))))))
 
 (defn- positive-relation-names [rules]
-  (vec (sort (reduce (fn [relations value] (reduce (fn [current literal] (if (and (= :relation (literal-kind literal)) (not (literal-negated literal))) (conj current (literal-relation literal)) current)) relations (rule-body value))) #{} rules))))
+  (vec (sort (reduce (fn [relations ^Rule value] (reduce (fn [current ^Literal literal] (if (and (= :relation (literal-kind literal)) (not (literal-negated literal))) (conj current (literal-relation literal)) current)) relations (rule-body value))) #{} rules))))
 
 (defn- body-results-pinned! [db sources delta delta-sources body pin ^QueryEvaluationContext context]
   (loop [position 0
@@ -710,11 +712,11 @@
   (if (query-evaluation-context-open? context) (recur (rest remaining) (reduce (fn [current subst] (conj current (ground head subst))) derived substitutions)) #{}))))))
 
 (defn- db-new-only [candidate db relations]
-  (reduce (fn [delta relation] (let [new-tuples (reduce (fn [rows-value tuple] (if (contains? (get db relation #{}) tuple) rows-value (conj rows-value tuple))) #{} (get candidate relation #{}))]
+  (reduce (fn [delta ^String relation] (let [new-tuples (reduce (fn [rows-value tuple] (if (contains? (get db relation #{}) tuple) rows-value (conj rows-value tuple))) #{} (get candidate relation #{}))]
   (if (empty? new-tuples) delta (assoc delta relation new-tuples)))) {} relations))
 
 (defn- db-merge-delta [db delta relations]
-  (reduce (fn [current relation] (let [new-tuples (get delta relation #{})]
+  (reduce (fn [current ^String relation] (let [new-tuples (get delta relation #{})]
   (if (empty? new-tuples) current (update current relation (fn [known] (reduce (fn [rows-value tuple] (conj rows-value tuple)) (or known #{}) new-tuples)))))) db relations))
 
 (defn- ^Boolean delta-empty? [delta relations]
@@ -736,7 +738,7 @@
   (let [relations (rule-head-relations rules)
    read-relations (positive-relation-names rules)
    head-set (set relations)
-   delta-relations (vec (filter (fn [relation] (contains? head-set relation)) read-relations))
+   delta-relations (vec (filter (fn [^String relation] (contains? head-set relation)) read-relations))
    initial-sources (build-candidate-sources db0 read-relations candidates)
    seeded (loop [remaining rules
    current db0]
@@ -797,19 +799,19 @@
   (run-strata-db! (edb propositions) strata))
 
 (defn- negated-relations [stratum]
-  (reduce (fn [acc value] (reduce (fn [relations literal] (if (and (= :relation (literal-kind literal)) (literal-negated literal)) (conj relations (literal-relation literal)) relations)) acc (rule-body value))) [] stratum))
+  (reduce (fn [acc ^Rule value] (reduce (fn [relations ^Literal literal] (if (and (= :relation (literal-kind literal)) (literal-negated literal)) (conj relations (literal-relation literal)) relations)) acc (rule-body value))) [] stratum))
 
 (defn strata-violations [strata]
   (loop [index 0
    lower base-relations
    problems []]
   (if (>= index (count strata)) problems (let [stratum (nth strata index)
-   heads (reduce (fn [acc value] (conj acc (rule-head-relation value))) #{} stratum)
-   problems2 (reduce (fn [acc relation] (cond
+   heads (reduce (fn [acc ^Rule value] (conj acc (rule-head-relation value))) #{} stratum)
+   problems2 (reduce (fn [acc ^String relation] (cond
   (contains? heads relation) (conj acc (str "stratum " index ": negated '" relation "' is also derived in the same stratum"))
   (not (contains? lower relation)) (conj acc (str "stratum " index ": negated '" relation "' is not a base or lower-stratum relation"))
   :else acc)) problems (negated-relations stratum))]
-  (recur (+ index 1) (reduce (fn [acc relation] (conj acc relation)) lower heads) problems2)))))
+  (recur (+ index 1) (reduce (fn [acc ^String relation] (conj acc relation)) lower heads) problems2)))))
 
 (defn facts [db ^String relation]
   (vec (get db relation #{})))

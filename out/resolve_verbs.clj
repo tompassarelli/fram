@@ -90,7 +90,7 @@
    warn (:warn v)
    reject (:reject v)
    dbind (:def-binding v)
-   target-srcs (vec (filter (fn [s] (str/includes? s target)) srcs))
+   target-srcs (vec (filter (fn [^String s] (str/includes? s target)) srcs))
    edits (atom 0)]
   (doseq [src target-srcs]
   (if (and (some? (dbind src old)) (some? (dbind src new))) (do
@@ -105,13 +105,13 @@
   (if (some? B) (do
   (let [crefs (:capture-refs v)
    fo (:forms-of v)
-   caps (vec (mapcat (fn [s] (vec (mapcat (fn [f] (vec (crefs f (list (get (:modframe v) s)) B new))) (vec (fo s))))) srcs))]
+   caps (vec (mapcat (fn [^String s] (vec (mapcat (fn [f] (vec (crefs f (list (get (:modframe v) s)) B new))) (vec (fo s))))) srcs))]
   (if (> (count caps) 0) (do
   (warn (str "REJECTED — renaming `" old "` -> `" new "` would be CAPTURED by a local `" new "` in scope at " (count caps) " reference(s) (no-capture; no facts mutated)."))
   (reject 4))))))))
   (let [mn (:module-name v)
-   target-mods (set (vec (keep (fn [s] (mn s)) target-srcs)))]
-  (doseq [src (vec (remove (fn [s] (some? (some (fn [t] (if (= t s) (do
+   target-mods (set (vec (keep (fn [^String s] (mn s)) target-srcs)))]
+  (doseq [src (vec (remove (fn [^String s] (some? (some (fn [^String t] (if (= t s) (do
   t))) target-srcs))) srcs))]
   (let [preq (:parse-require v)
    pr (preq src)
@@ -292,11 +292,11 @@
    ffv (:form-for-victim v)
    desc (:descendants v)
    ult (:ultimate v)
-   target-srcs (vec (filter (fn [s] (str/includes? s scope)) srcs))
-   victims (vec (keep (fn [s] (dbind s name)) target-srcs))
-   all-forms (set (vec (mapcat (fn [s] (vec (keep (fn [b] (ffv s b)) victims))) srcs)))
+   target-srcs (vec (filter (fn [^String s] (str/includes? s scope)) srcs))
+   victims (vec (keep (fn [^String s] (dbind s name)) target-srcs))
+   all-forms (set (vec (mapcat (fn [^String s] (vec (keep (fn [b] (ffv s b)) victims))) srcs)))
    subtree (reduce (fn [acc f] (into acc (desc f))) #{} (vec all-forms))
-   orphans (vec (mapcat (fn [s] (vec (filter (fn [e] (let [tgt (rr/refers-target ctx view (:BOUND v) (:REFERS v) e)]
+   orphans (vec (mapcat (fn [^String s] (vec (filter (fn [e] (let [tgt (rr/refers-target ctx view (:BOUND v) (:REFERS v) e)]
   (and (= "symbol" (rr/kind-of ctx view e)) (some? tgt) (not (contains? subtree e)) (contains? subtree (ult tgt))))) (vec (get (:ents v) s []))))) srcs))]
   (if (= 0 (count victims)) (do
   (warn (str "REJECTED — no binding named `" name "` found in \"" scope "\" (nothing to delete; no facts mutated)."))
@@ -333,7 +333,7 @@
    dbind (:def-binding v)
    ffv (:form-for-victim v)
    wof (:wrapper-of v)
-   target-srcs (vec (filter (fn [s] (str/includes? s scope)) (:srcs v)))]
+   target-srcs (vec (filter (fn [^String s] (str/includes? s scope)) (:srcs v)))]
   (if (not= 1 (count target-srcs)) (do
   (warn (str "REJECTED — reorder scope \"" scope "\" matches " (count target-srcs) " files (need 1); no facts mutated."))
   (reject 3)))
@@ -428,7 +428,7 @@
   (let [ctx (:ctx v)
    warn (:warn v)
    reject (:reject v)
-   target-srcs (vec (filter (fn [s] (str/includes? s scope)) (:srcs v)))]
+   target-srcs (vec (filter (fn [^String s] (str/includes? s scope)) (:srcs v)))]
   (if (not= 1 (count target-srcs)) (do
   (warn (str "REJECTED — insert-form scope \"" scope "\" matches " (count target-srcs) " files (need 1)."))
   (reject 3)))
@@ -474,7 +474,7 @@
   (let [ctx (:ctx v)
    warn (:warn v)
    reject (:reject v)
-   target-srcs (vec (filter (fn [s] (str/includes? s scope)) (:srcs v)))]
+   target-srcs (vec (filter (fn [^String s] (str/includes? s scope)) (:srcs v)))]
   (if (not= 1 (count target-srcs)) (do
   (warn (str "REJECTED — insert-comment scope \"" scope "\" matches " (count target-srcs) " files (need 1)."))
   (reject 3)))
@@ -641,11 +641,11 @@
    extract-file (:extract-file env)
    out-path (:out-path env)]
   (->Verb (:ctx env) (:view env) (:KIND env) (:Vp env) (vec (:srcs env)) (:capture-only? env) (vec (:emit-srcs env)) (fn [code] (reject! code)) (fn [code detail] (reject! code detail)) (fn [line] (binding [*out* *err*]
-  (println line))) (:author-emit env) (fn [src] (extract-file src (out-path src))) out-path (:def-binding env) (:typeframe env) (:modframe env) (:forms-of env) (:module-name env) (:parse-require env) (:capture-refs env) (:ultimate env) (:BOUND env) (:REFERS env) (:wrapper-of env) (:form-for-victim env) (:descendants env) (:retire env) (:reresolve env) (:ents env) (:mint env) (:register env) (:scope-srcs env) (:fn-facts env) (:FIXED env) (fn [code] (System/exit code)))))
+  (println line))) (:author-emit env) (fn [^String src] (extract-file src (out-path src))) out-path (:def-binding env) (:typeframe env) (:modframe env) (:forms-of env) (:module-name env) (:parse-require env) (:capture-refs env) (:ultimate env) (:BOUND env) (:REFERS env) (:wrapper-of env) (:form-for-victim env) (:descendants env) (:retire env) (:reresolve env) (:ents env) (:mint env) (:register env) (:scope-srcs env) (:fn-facts env) (:FIXED env) (fn [code] (System/exit code)))))
 
 (defn run-cli! [env args]
   (let [mode (first args)
-   fi (first (vec (keep-indexed (fn [i arg] (if (= arg "--within-file") i nil)) args)))
+   fi (first (vec (keep-indexed (fn [i ^String arg] (if (= arg "--within-file") i nil)) args)))
    stripped (if (nil? fi) args (vec (concat (take fi args) (drop (+ fi 2) args))))
    skip (cond
   (= mode "resolve") 1
@@ -665,7 +665,7 @@
    counter (:counter env)
    extract (:extract env)
    out-path (:out-path env)
-   basename (fn [src] (last (str/split src (re-pattern "/"))))
+   basename (fn [^String src] (last (str/split src (re-pattern "/"))))
    file-ents (:file-ents env)
    kind-of (:kind-of env)
    refers-target (:refers-target env)
@@ -675,7 +675,7 @@
    upsert! (:upsert! env)
    set-body! (:set-body! env)
    replace-in-body! (:replace-in-body! env)
-   read-edn (fn [path] (edn/read-string (slurp path)))
+   read-edn (fn [^String path] (edn/read-string (slurp path)))
    call-edges (:call-edges env)
    blast-closure (:blast-closure env)
    binding-privacy (:binding-privacy env)
@@ -702,7 +702,7 @@
   (= mode "set-body") (let [[name scope body-file] (vec (drop 1 args))]
   (set-body! name scope (read-edn body-file)))
   (= mode "replace-in-body") (let [[name scope old-file new-file] (vec (drop 1 args))
-   within-path (second (drop-while (fn [arg] (not= "--within-file" arg)) args))
+   within-path (second (drop-while (fn [^String arg] (not= "--within-file" arg)) args))
    within-datum (if (some? within-path) (do
   (read-edn within-path)))]
   (replace-in-body! name scope (read-edn old-file) (read-edn new-file) within-datum))

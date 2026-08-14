@@ -107,7 +107,7 @@
    r (ri/value-at ctx cid)]
   (if (and (string? p) (some? (re-matches FN-RE (str p)))) (let [n (parse-long (subs (str p) 1))]
   (if (nil? n) acc (conj acc (->FnEdge n cid r)))) acc))) [] (ri/by-subject ctx parent))]
-  (mapv (fn [e] [(:idx e) (:cid e) (:child e)]) (sort-by (fn [e] (:idx e)) rows))))
+  (mapv (fn [^FnEdge e] [(:idx e) (:cid e) (:child e)]) (sort-by (fn [^FnEdge e] (:idx e)) rows))))
 
 (defn retire-fact! [^Mint m oldc]
   (ri/retire! (:ctx m) oldc))
@@ -140,7 +140,7 @@
    or-vals (if (nil? params) [] (reduce (fn [acc binding] (into acc (rb/collect-or-vals ctx view binding))) [] (vec (rest (rr/ordered-children ctx params)))))
    body (vec (:body signature))]
   (into (into (capture-all constraints arity-scope) (capture-all or-vals arity-scope)) (capture-all body (push frame arity-scope)))))
-   cap-arity (fn [forms macro? arity-scope] (cap-signature (rb/signature-parts ctx view forms macro? false) arity-scope))
+   cap-arity (fn [forms ^Boolean macro? arity-scope] (cap-signature (rb/signature-parts ctx view forms macro? false) arity-scope))
    cap-field-constraints (fn [fields field-scope] (if (or (nil? fields) (not (brk? fields))) [] (capture-all (rb/param-constraint-nodes ctx view fields) field-scope)))
    cap-method-constraints (fn [raw-method method-scope] (let [method (rr/unwrap-meta ctx view raw-method)]
   (if (= "list" (rr/kind-of ctx view method)) (let [signature (rb/signature-parts ctx view (vec (rest (rr/ordered-children ctx method))) false false)
@@ -292,13 +292,13 @@
 
 (defn author-emit-lines [op detail srcs outp]
   (let [f outp]
-  (into [(str "================ authoring: " op " ================") detail] (mapv (fn [s] (str "projected -> " (f s) "   <- " s)) srcs))))
+  (into [(str "================ authoring: " op " ================") detail] (mapv (fn [^String s] (str "projected -> " (f s) "   <- " s)) srcs))))
 
 (defn re-resolve-frames [srcs mdefs mtypes maccs]
   (let [fd mdefs
    ft mtypes
    fa maccs]
-  {:modframe (reduce (fn [acc s] (assoc acc s (fd s))) {} srcs) :typeframe (reduce (fn [acc s] (assoc acc s (ft s))) {} srcs) :accessors (reduce (fn [acc s] (assoc acc s (fa s))) {} srcs)}))
+  {:modframe (reduce (fn [acc ^String s] (assoc acc s (fd s))) {} srcs) :typeframe (reduce (fn [acc ^String s] (assoc acc s (ft s))) {} srcs) :accessors (reduce (fn [acc ^String s] (assoc acc s (fa s))) {} srcs)}))
 
 (def STRUCTURAL-SEG-RE (re-pattern "seg\\d+"))
 
@@ -333,7 +333,7 @@
   f)))) (rest (rr/ordered-children ctx (wrapper-of ctx view ents src)))))
 
 (defn ^Emit emit-env [ctx view BOUND REFERS FIXED ents unwrap-def]
-  (->Emit ctx view BOUND REFERS FIXED ents (fn [src] (wrapper-of ctx view ents src)) (fn [root] (structural-descendants ctx root)) #{} #{}))
+  (->Emit ctx view BOUND REFERS FIXED ents (fn [^String src] (wrapper-of ctx view ents src)) (fn [root] (structural-descendants ctx root)) #{} #{}))
 
 (def DEFAULT-RESOLVE-OUT nil)
 
@@ -350,7 +350,7 @@
   (or (seg? src) (seg? (module-name src)))))
 
 (defn scope->srcs [module-name srcs ^String scope]
-  (vec (filter (fn [src] (scope-match? module-name src scope)) srcs)))
+  (vec (filter (fn [^String src] (scope-match? module-name src scope)) srcs)))
 
 (defn ^String out-path-for [resolve-out ^String src]
   (str (or resolve-out DEFAULT-RESOLVE-OUT (System/getenv "RESOLVE_OUT") "/tmp") "/resolved-" (last (str/split src PATH-SPLIT-RE)) ".edn"))

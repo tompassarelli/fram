@@ -191,7 +191,7 @@
   :else value)))
 
 (defn- stems [tokens]
-  (set (mapv (fn [token] (english-stem token)) tokens)))
+  (set (mapv (fn [^String token] (english-stem token)) tokens)))
 
 (defn- trigrams [^String value]
   (loop [index 0
@@ -199,16 +199,16 @@
   (if (> (+ index 3) (count value)) grams (recur (inc index) (conj grams (subs value index (+ index 3)))))))
 
 (defn- postings-add [postings keys handle]
-  (reduce (fn [current key] (assoc current key (conj (get current key []) handle))) postings keys))
+  (reduce (fn [current ^String key] (assoc current key (conj (get current key []) handle))) postings keys))
 
 (defn- postings-weight [postings]
-  (reduce-kv (fn [total key handles] (+ total 84 (* 4 (count key)) (* 42 (count handles)))) 0 postings))
+  (reduce-kv (fn [total ^String key handles] (+ total 84 (* 4 (count key)) (* 42 (count handles)))) 0 postings))
 
 (defn- token-rows-weight [rows]
-  (reduce (fn [total tokens] (+ total 42 (reduce (fn [subtotal token] (+ subtotal 42 (* 4 (count token)))) 0 tokens))) 0 rows))
+  (reduce (fn [total tokens] (+ total 42 (reduce (fn [subtotal ^String token] (+ subtotal 42 (* 4 (count token)))) 0 tokens))) 0 rows))
 
 (defn- strings-weight [values]
-  (reduce (fn [total value] (+ total 70 (* 4 (count value)))) 0 values))
+  (reduce (fn [total ^String value] (+ total 70 (* 4 (count value)))) 0 values))
 
 (defn- index-limit-error [weight maximum]
   (if (> weight maximum) (text-index/text-index-limit-error "text search index exceeds the snapshot cache budget" weight maximum) nil))
@@ -313,7 +313,7 @@
 
 (defn- postings-handles [postings keys]
   (let [wanted (vec (sort (vec (set keys))))]
-  (if (empty? wanted) [] (let [vectors (mapv (fn [key] (get postings key [])) wanted)
+  (if (empty? wanted) [] (let [vectors (mapv (fn [^String key] (get postings key [])) wanted)
    seed (shortest-posting vectors)]
   (if (or (empty? seed) (= 1 (count vectors))) seed (let [sets (mapv (fn [handles] (set handles)) vectors)]
   (filterv (fn [handle] (every? (fn [handles] (contains? handles handle)) sets)) seed)))))))
@@ -406,14 +406,14 @@
   (if (not (searchanalyzersresult-ok analyzers-result)) (handles-error (searchanalyzersresult-error analyzers-result)) (let [keys (vec (stems (wordneedleresult-tokens needle-result)))
    rows (searchanalyzers-token-rows (searchanalyzersresult-analyzers analyzers-result))]
   (handles-ok (filterv (fn [handle] (let [row-stems (stems (nth rows handle))]
-  (every? (fn [key] (contains? row-stems key)) keys))) (all-handles source)))))))))
+  (every? (fn [^String key] (contains? row-stems key)) keys))) (all-handles source)))))))))
 
 (defn stem-scan-handles! [^TextSearchSource source needle]
   (let [result (stem-scan-handles-result! source needle)]
   (if (handles-result-ok? result) (handles-result-handles result) (text-index/raise-text-error (handles-result-error result)))))
 
 (defn- count-token [tokens ^String wanted]
-  (reduce (fn [total token] (if (= token wanted) (inc total) total)) 0 tokens))
+  (reduce (fn [total ^String token] (if (= token wanted) (inc total) total)) 0 tokens))
 
 (defn- ^TextSearchScoreResult score-at-result! [^TextSearchSource source handle needle]
   (let [needle-result (substring-needle-result "text-search" needle)]
@@ -427,9 +427,9 @@
    document-stems (stems document-tokens)
    normalized (nth (searchanalyzers-normalized-rows analyzers) handle)
    substring-match (str/includes? normalized value)
-   stem-covered (and (not (empty? query-stems)) (every? (fn [key] (contains? document-stems key)) query-stems))
+   stem-covered (and (not (empty? query-stems)) (every? (fn [^String key] (contains? document-stems key)) query-stems))
    phrase-match (and (not (empty? query-tokens)) (sequence-contains? document-tokens query-tokens))
-   score (if (not (or substring-match stem-covered)) 0 (let [token-score (reduce (fn [total token] (+ total (cond
+   score (if (not (or substring-match stem-covered)) 0 (let [token-score (reduce (fn [total ^String token] (+ total (cond
   (contains? document-token-set token) 100
   (contains? document-stems (english-stem token)) 60
   :else 0) (* 5 (min 3 (count-token document-tokens token))))) 0 query-tokens)

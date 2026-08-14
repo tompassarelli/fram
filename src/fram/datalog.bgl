@@ -2,7 +2,6 @@
 ;; Typed Datalog over homogeneous rows of recursive Fram Terms. Relation names
 ;; are query-local; the kernel assigns no role to t1, t2, or t3.
 (ns fram.datalog)
-(define-mode strict)
 (require fram.rotation :as rot)
 (require fram.store :as store)
 (require fram.types :as t)
@@ -66,17 +65,17 @@
   [(rotation rot/Rotation) (lower-exclusive Int)])
 
 ;; Candidate handles are private positions in one immutable relation vector.
-(defrecord CandidateSource
-  [(rows (Vec Tuple))
-   (positions PositionIndex)
-   (spo HandleTrie)
-   (pos HandleTrie)
-   (osp HandleTrie)
-   (occurrence OccurrenceCandidateSource?)
-   (rotation RotationCandidateSource?)])
-(defrecord VirtualCandidateSource
-  [(relation String) (source text-search/TextSearchSource)])
-(defalias CandidateSourceValue (U CandidateSource VirtualCandidateSource))
+(defunion CandidateSourceValue
+  (CandidateSource
+   [(rows (Vec Tuple))
+    (positions PositionIndex)
+    (spo HandleTrie)
+    (pos HandleTrie)
+    (osp HandleTrie)
+    (occurrence OccurrenceCandidateSource?)
+    (rotation RotationCandidateSource?)])
+  (VirtualCandidateSource
+   [(relation String) (source text-search/TextSearchSource)]))
 (defalias CandidateSources (Map String CandidateSourceValue))
 
 (defrecord CandidateSourcesResult
@@ -1113,28 +1112,22 @@
   (Vec Substitution)
   (let [(relation String) (literal-relation literal)
         (arguments (Vec QueryTerm)) (literal-arguments literal)
-        (source (U CandidateSource VirtualCandidateSource Nil))
+        (source (U CandidateSourceValue Nil))
         (get sources relation)]
     (if (literal-negated literal)
-      (if (if (instance? CandidateSource source)
-            (source-contains? source relation arguments subst)
-            (contains? (get db relation #{}) (ground arguments subst)))
-        [] [subst])
+      (cond
+        [(instance? CandidateSource source)
+         (if (source-contains? source relation arguments subst) [] [subst])]
+        [:else
+         (if (contains? (get db relation #{}) (ground arguments subst))
+           [] [subst])])
       (cond
         [(instance? VirtualCandidateSource source)
          (unify-tuples-controlled!
           arguments
           (virtual-source-rows! source true arguments subst context)
           subst context)]
-        [(nil? source)
-         (if (contains? text-relations relation)
-           (do
-             (text-rows-or-record!
-              (missing-candidate-source-result relation) context)
-             (let [(missing (Vec Substitution)) []] missing))
-           (unify-tuples-controlled!
-            arguments (vec (get db relation #{})) subst context))]
-        [:else
+        [(instance? CandidateSource source)
          (let [rotation (candidatesource-rotation source)]
            (if (some? rotation)
              (rotation-results-indexed! rotation arguments subst context)
@@ -1154,7 +1147,15 @@
                          (recur
                           (rest remaining)
                           (if (some? matched) (conj results matched) results))
-                         results))))))))]))))
+                         results))))))))]
+        [:else
+         (if (contains? text-relations relation)
+           (do
+             (text-rows-or-record!
+              (missing-candidate-source-result relation) context)
+             (let [(missing (Vec Substitution)) []] missing))
+           (unify-tuples-controlled!
+            arguments (vec (get db relation #{})) subst context))]))))
 
 (defn- literal-results-indexed!
   [(db Db)

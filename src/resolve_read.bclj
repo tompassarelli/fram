@@ -37,7 +37,6 @@
   (:require [fram.types :as t] [resolve-ident :as ri] [resolve-core :as rc]
             [fram.rotation :as rot] [fram.txn :as txn]))
 
-(define-mode strict)
 
 (def SEG-RE Any (re-pattern "seg\\d+"))
 

@@ -101,7 +101,7 @@
   (str "segment " (segmentrecord-sha256 segment) " " (segmentrecord-start-sequence segment) " " (segmentrecord-end-sequence segment) " " (segmentrecord-byte-count segment) "\n"))
 
 (defn ^String print-ref [^RefDocument document]
-  (let [body (str ref-format "\n" "space " (refdocument-space-id document) "\n" (apply str (mapv (fn [segment] (segment-line segment)) (refdocument-segments document))))]
+  (let [body (str ref-format "\n" "space " (refdocument-space-id document) "\n" (apply str (mapv (fn [^SegmentRecord segment] (segment-line segment)) (refdocument-segments document))))]
   (str body "crc " (format "%08x" (crc32-of body)) "\n")))
 
 (defn- parse-count [^String value ^String label]
@@ -125,7 +125,7 @@
   (not (str/starts-with? (nth lines 1) "space ")) (fail "branch ref does not name its SpaceId" :invalid-branch-ref)
   (not (str/starts-with? (nth lines (dec (count lines))) "crc ")) (fail "branch ref does not end with its CRC line" :invalid-branch-ref)
   :else (let [space-id (subs (nth lines 1) 6)
-   body (apply str (mapv (fn [line] (str line "\n")) (subvec lines 0 (dec (count lines)))))
+   body (apply str (mapv (fn [^String line] (str line "\n")) (subvec lines 0 (dec (count lines)))))
    stored (subs (nth lines (dec (count lines))) 4)]
   (cond
   (zero? (count space-id)) (fail "branch ref SpaceId must be nonempty" :invalid-branch-ref)
@@ -155,7 +155,7 @@
   (not= 5 (count lines)) (fail "fork marker does not carry its three fields and CRC" :invalid-fork-marker)
   (not= fork-marker-format (nth lines 0)) (fail (str "fork marker format is unsupported: " (nth lines 0)) :unsupported-fork-marker-version)
   (not (and (str/starts-with? (nth lines 1) "parent ") (str/starts-with? (nth lines 2) "child ") (str/starts-with? (nth lines 3) "segment "))) (fail "fork marker does not name its parent, child, and segment" :invalid-fork-marker)
-  :else (let [body (apply str (mapv (fn [line] (str line "\n")) (subvec lines 0 4)))
+  :else (let [body (apply str (mapv (fn [^String line] (str line "\n")) (subvec lines 0 4)))
    parent (subs (nth lines 1) 7)
    child (subs (nth lines 2) 6)
    segment (subs (nth lines 3) 8)]
@@ -169,7 +169,7 @@
   (let [segments (refdocument-segments parent)]
   (cond
   (not (valid-segment-name? (segmentrecord-sha256 sealed))) (fail "sealed segment name is not a SHA-256 hex digest" :invalid-segment-name)
-  (some (fn [segment] (= (segmentrecord-sha256 segment) (segmentrecord-sha256 sealed))) segments) (fail "sealed segment is already named by the parent chain" :segment-already-sealed)
+  (some (fn [^SegmentRecord segment] (= (segmentrecord-sha256 segment) (segmentrecord-sha256 sealed))) segments) (fail "sealed segment is already named by the parent chain" :segment-already-sealed)
   (>= (count segments) max-chain-length) (fail "branch chain exceeds the supported segment count" :chain-too-long)
   (neg? fork-sequence) (fail "fork sequence must not be negative" :invalid-fork-sequence)
   :else (->ForkPlan (->RefDocument (refdocument-space-id parent) (conj segments sealed)) sealed fork-sequence))))

@@ -2,7 +2,6 @@
 
 (ns fram.authority)
 
-(define-mode strict)
 
 (require clojure.string :as str)
 

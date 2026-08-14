@@ -18,7 +18,7 @@
   (if (contains? (:seen state) node) state (assoc state :seen (conj (:seen state) node) :nodes (conj (vec (:nodes state)) node))))
 
 (defn load-lines [offset lines]
-  (reduce (fn [state line] (if (str/starts-with? line "[") (let [trip (edn/read-string line)
+  (reduce (fn [state ^String line] (if (str/starts-with? line "[") (let [trip (edn/read-string line)
    l (+ offset (int (nth trip 0)))
    p (nth trip 1)
    o (nth trip 2)
@@ -30,7 +30,7 @@
 
 (defn ^String load-edn! [ctx file->nodes next-offset ^String path]
   (let [lines (str/split-lines (slurp path))
-   heads (filterv (fn [l] (str/starts-with? l "@file")) lines)
+   heads (filterv (fn [^String l] (str/starts-with? l "@file")) lines)
    src (subs (nth heads 0) 6)
    loaded (load-lines (deref next-offset) lines)]
   (swap! file->nodes assoc src (vec (:nodes loaded)))
@@ -94,9 +94,9 @@
    next-offset (atom 0)
    srcs (mapv (fn [p] (load-edn! ctx file->nodes next-offset (str p))) edn-files)
    index (live-index ctx)
-   target-modules (filterv (fn [s] (str/includes? s target-substr)) srcs)
-   target-nodes (set (vec (mapcat (fn [s] (vec (get (deref file->nodes) s []))) target-modules)))
-   collisions (filterv (fn [m] (contains? (module-bindings index file->nodes m) new-name)) target-modules)]
+   target-modules (filterv (fn [^String s] (str/includes? s target-substr)) srcs)
+   target-nodes (set (vec (mapcat (fn [^String s] (vec (get (deref file->nodes) s []))) target-modules)))
+   collisions (filterv (fn [^String m] (contains? (module-bindings index file->nodes m) new-name)) target-modules)]
   (if (pos? (count collisions)) (do
   (let [m (nth collisions 0)]
   (binding [*out* *err*]
@@ -110,7 +110,7 @@
    _edit (if (pos? (count operations)) (do
   (c/commit-transaction! ctx operations)))
    projected (live-index ctx)
-   outs (mapv (fn [s] (out-path s)) srcs)]
+   outs (mapv (fn [^String s] (out-path s)) srcs)]
   (doseq [i (range (count srcs))]
   (project-file! projected file->nodes (nth srcs i) (nth outs i)))
   (binding [*out* *err*]

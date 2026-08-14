@@ -3,7 +3,6 @@
   "Render occurrence-history live propositions back to thread Markdown. The
   projection groups string-valued Triples by subject, emits canonical predicate
   order, and quotes literals so importing the result reproduces the Triple set.")
-(define-mode strict)
 
 (require fram.types :as t)
 (require clojure.string :as str)

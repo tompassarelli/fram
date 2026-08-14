@@ -9,7 +9,6 @@
             [fram.store :as term-store]
             [fram.types :as t]))
 
-(define-mode strict)
 
 (def server-abi Int 4)
 (def status-ok Int 0)

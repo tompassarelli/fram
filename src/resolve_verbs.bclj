@@ -95,7 +95,6 @@
     [resolve-render :as rv]
     [clojure.edn :as edn]))
 
-(define-mode strict)
 
 ;; The verb environment: the dynamic state of resolve.clj, handed over explicitly.
 ;; Everything typed `Any` here is a HOST CLOSURE (a resolve.clj function that reads

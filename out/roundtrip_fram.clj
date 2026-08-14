@@ -21,7 +21,7 @@
   (let [edn-path (str (nth (vec args) 0))
    ctx (c/new-term-store space-id)
    lines (str/split-lines (slurp edn-path))
-   operations (mapv (fn [line] (line->operation line)) (filterv (fn [line] (str/starts-with? line "[")) lines))]
+   operations (mapv (fn [^String line] (line->operation line)) (filterv (fn [^String line] (str/starts-with? line "[")) lines))]
   (if (pos? (count operations)) (do
   (c/commit-transaction! ctx operations)))
   (binding [*out* *err*]

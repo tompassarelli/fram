@@ -58,7 +58,7 @@
   :else acc))) {} (forms-of ctx view ents)))
 
 (defn merge-import-opts [ctx view acc modn kids]
-  (let [idx (fn [kw] (loop [i 0]
+  (let [idx (fn [^String kw] (loop [i 0]
   (if (>= i (count kids)) nil (if (= kw (str (sv ctx view (nth kids i)))) i (recur (inc i))))))
    ri (idx ":refer")
    ai (idx ":as")

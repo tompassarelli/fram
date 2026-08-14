@@ -72,7 +72,6 @@
  beagle
  (str "#lang beagle/clj\n"
       "(ns gate.fixture)\n"
-      "(define-mode strict)\n"
       "(defn alpha [] Int 0)\n"
       "(defn beta [] Int 1)\n")
  source-path)

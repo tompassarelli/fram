@@ -9,7 +9,6 @@
            [java.nio.charset CharacterCodingException CodingErrorAction
             StandardCharsets]))
 
-(define-mode strict)
 (def term-codec-v1-depth-limit Int limits/term-codec-v1-max-depth)
 
 (defn- codec-fail! [(code Keyword) (message String)] Any

@@ -1,7 +1,6 @@
 #lang beagle
 ;; Portable recursive Term storage and occurrence-ordered transaction history.
 (ns fram.store)
-(define-mode strict)
 (require fram.types :as t)
 (require fram.slots :as slots)
 

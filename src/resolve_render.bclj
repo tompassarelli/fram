@@ -41,7 +41,6 @@
     [resolve-read :as rr]
     [resolve-binds :as rb]))
 
-(define-mode strict)
 
 (defn ultimate
   [(ctx (U ri/Graph Nil)) (view Any) (BOUND Any) (REFERS Any) (B Any)] Any

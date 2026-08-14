@@ -20,13 +20,13 @@
   (if (some? mn) mn (str/replace (str (last (str/split src SLASH-RE))) EXT-RE ""))))
 
 (defn- defn-meta-of [ctx view srcs file-modframe ents-of]
-  (reduce (fn [acc src] (let [frame (get file-modframe src {})
+  (reduce (fn [acc ^String src] (let [frame (get file-modframe src {})
    label (src-label ctx view src (get ents-of src []))]
   (reduce (fn [a nm] (let [leaf (get frame nm)]
   (assoc a leaf {:key (str src "#" (str leaf)) :file src :module label :name nm}))) acc (set (keys frame))))) {} srcs))
 
 (defn- callers-of [ctx view BOUND REFERS srcs ents-of defn-meta]
-  (reduce (fn [acc src] (reduce (fn [a form] (let [d (rm/unwrap-def ctx view form)
+  (reduce (fn [acc ^String src] (reduce (fn [a form] (let [d (rm/unwrap-def ctx view form)
    h (str (rr/head-sym ctx view d))]
   (cond
   (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [cl (rm/logical-name-leaf ctx view (nth (rr/ordered-children ctx d) 1 nil))]
@@ -48,7 +48,7 @@
   {:defn-meta defn-meta :edges (vec (distinct edges)) :defn-set defn-set}))
 
 (defn binding-privacy [ctx view srcs ents-of]
-  (reduce (fn [acc src] (reduce (fn [a f] (let [d (rm/unwrap-def ctx view f)
+  (reduce (fn [acc ^String src] (reduce (fn [a f] (let [d (rm/unwrap-def ctx view f)
    h (str (rr/head-sym ctx view d))]
   (if (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [nl (rm/logical-name-leaf ctx view (nth (rr/ordered-children ctx d) 1 nil))]
   (if (some? (rr/sym-val ctx view nl)) (assoc a nl (if (contains? #{"def-" "defn-"} h) :private :public)) a)) a))) acc (rm/forms-of ctx view (get ents-of src [])))) {} srcs))

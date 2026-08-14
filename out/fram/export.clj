@@ -30,7 +30,7 @@
   (if (empty? remaining) false (if (= (first remaining) wanted) true (recur (rest remaining))))))
 
 (defn- distinct-strings [values]
-  (reduce (fn [distinct value] (if (vec-contains? distinct value) distinct (conj distinct value))) [] values))
+  (reduce (fn [distinct ^String value] (if (vec-contains? distinct value) distinct (conj distinct value))) [] values))
 
 (defn- ^Boolean identity-predicate? [^String predicate]
   (or (= predicate "predicate_name") (= predicate "predicate_alias")))
@@ -84,12 +84,12 @@
   (let [registry (predicate-registry triples)
    selected (subject-triples triples subject)
    present (distinct-strings (mapv (fn [value] (predicate-name registry (triple-predicate value))) selected))
-   ordered (filterv (fn [predicate] (vec-contains? present predicate)) order)
-   extra (vec (sort (filterv (fn [predicate] (and (not (vec-contains? order predicate)) (not (= predicate "body")))) present)))
+   ordered (filterv (fn [^String predicate] (vec-contains? present predicate)) order)
+   extra (vec (sort (filterv (fn [^String predicate] (and (not (vec-contains? order predicate)) (not (= predicate "body")))) present)))
    predicates (vec (concat ordered extra))
-   lines (reduce (fn [acc predicate] (let [identity (predicate-id registry predicate)
+   lines (reduce (fn [acc ^String predicate] (let [identity (predicate-id registry predicate)
    values (mapv (fn [value] (triple-right value)) (filterv (fn [value] (= identity (predicate-id registry (triple-predicate value)))) selected))]
-  (vec (concat acc (mapv (fn [value] (str predicate "  " (render-object registry triples predicate value))) values))))) [] predicates)
+  (vec (concat acc (mapv (fn [^String value] (str predicate "  " (render-object registry triples predicate value))) values))))) [] predicates)
    body-id (predicate-id registry "body")
    bodies (filterv (fn [value] (= body-id (predicate-id registry (triple-predicate value)))) selected)
    maybe-body (if (empty? bodies) nil (triple-right (first bodies)))

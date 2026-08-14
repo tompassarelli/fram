@@ -104,7 +104,7 @@
   (textcandidatesource-bytes source))
 
 (defn- token-set! [^String value]
-  (persistent! (reduce (fn [folded token] (conj! folded (str/lower-case token))) (transient #{}) (re-seq #"[\p{L}\p{Nd}]+" value))))
+  (persistent! (reduce (fn [folded ^String token] (conj! folded (str/lower-case token))) (transient #{}) (re-seq #"[\p{L}\p{Nd}]+" value))))
 
 (defn tokenize! [^String value]
   (vec (sort (vec (token-set! value)))))
@@ -113,7 +113,7 @@
   (and (string? needle) (not (empty? (tokenize! needle)))))
 
 (defn- postings-weight [postings]
-  (reduce-kv (fn [total token handles] (+ total 84 (* 4 (count token)) (* 42 (count handles)))) 0 postings))
+  (reduce-kv (fn [total ^String token handles] (+ total 84 (* 4 (count token)) (* 42 (count handles)))) 0 postings))
 
 (defn- index-limit-error [weight maximum]
   (if (> weight maximum) (text-index-limit-error "text index exceeds the snapshot cache budget" weight maximum) nil))
@@ -125,7 +125,7 @@
    postings (persistent! (loop [handle 0
    current (transient empty-postings)]
   (if (>= handle row-count) current (let [value (t/triple-t3 (nth rows handle))]
-  (recur (inc handle) (if (string? value) (reduce (fn [index token] (assoc! index token (conj (get index token []) handle))) current (token-set! value)) current))))))
+  (recur (inc handle) (if (string? value) (reduce (fn [index ^String token] (assoc! index token (conj (get index token []) handle))) current (token-set! value)) current))))))
    weight (+ 112 (* 14 row-count) (postings-weight postings))
    error (index-limit-error weight maximum)]
   (if error (->TextCandidateSourceResult false nil error) (->TextCandidateSourceResult true (->TextCandidateSource rows postings weight) (no-text-error)))))
@@ -150,7 +150,7 @@
   (let [needle-result (needle-tokens-result! needle)]
   (if (not (textneedleresult-ok needle-result)) (->TextHandlesResult false [] (textneedleresult-error needle-result)) (let [tokens (textneedleresult-tokens needle-result)
    postings (textcandidatesource-postings source)
-   posting-vectors (mapv (fn [token] (get postings token [])) tokens)
+   posting-vectors (mapv (fn [^String token] (get postings token [])) tokens)
    seed (shortest-posting posting-vectors)
    handles (if (or (empty? seed) (= 1 (count posting-vectors))) seed (let [posting-sets (mapv (fn [values] (set values)) posting-vectors)]
   (filterv (fn [handle] (every? (fn [values] (contains? values handle)) posting-sets)) seed)))]
@@ -168,7 +168,7 @@
    matches []]
   (if (>= handle (count rows)) matches (let [value (t/triple-t3 (nth rows handle))
    matched (if (string? value) (let [haystack (token-set! value)]
-  (every? (fn [token] (contains? haystack token)) tokens)) false)]
+  (every? (fn [^String token] (contains? haystack token)) tokens)) false)]
   (recur (inc handle) (if matched (conj matches handle) matches)))))]
   (->TextHandlesResult true handles (no-text-error))))))
 

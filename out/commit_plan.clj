@@ -176,10 +176,10 @@
   {:flat-max-tx flat-max-tx :asserts asserts}))
 
 (defn migrate-schema-plan [predicates card-only by-pred schema-preds]
-  {:domain (filterv (fn [pred] (not (contains? schema-preds pred))) predicates) :card-only (filterv (fn [pred] (and (not (contains? schema-preds pred)) (not (contains? by-pred pred)))) card-only)})
+  {:domain (filterv (fn [^String pred] (not (contains? schema-preds pred))) predicates) :card-only (filterv (fn [^String pred] (and (not (contains? schema-preds pred)) (not (contains? by-pred pred)))) card-only)})
 
 (defn migrate-kernel-seed-plan [single-valued schema-preds cmap current-single]
-  (filterv (fn [pred] (and (not (contains? schema-preds pred)) (not (contains? cmap pred)) (not (contains? current-single pred)))) single-valued))
+  (filterv (fn [^String pred] (and (not (contains? schema-preds pred)) (not (contains? cmap pred)) (not (contains? current-single pred)))) single-valued))
 
 (defn tail-input-plan [lines schema-preds]
   (let [valid (filterv (fn [line] (boolean (and (:l line) (:p line) (:r line) (int? (:tx line)) (not (contains? schema-preds (:p line)))))) lines)
@@ -205,13 +205,13 @@
 (defn tailpredicateplan-value-kind [r] (:value-kind r))
 
 (defn tail-predicate-plan [domain card-only single-preds declared-preds current-cardinality link-preds]
-  (into [] (concat (map (fn [pred] (let [want (if (contains? single-preds pred) "single" "multi")
+  (into [] (concat (map (fn [^String pred] (let [want (if (contains? single-preds pred) "single" "multi")
    action (cond
   (not (contains? declared-preds pred)) :define
   (not= want (get current-cardinality pred)) :update
   :else :keep)
    value-kind (if (contains? link-preds pred) "ref" "literal")]
-  (->TailPredicatePlan pred action want value-kind))) domain) (map (fn [pred] (let [want (if (contains? single-preds pred) "single" "multi")
+  (->TailPredicatePlan pred action want value-kind))) domain) (map (fn [^String pred] (let [want (if (contains? single-preds pred) "single" "multi")
    action (if (not= want (get current-cardinality pred)) :define :keep)]
   (->TailPredicatePlan pred action want "literal"))) card-only))))
 

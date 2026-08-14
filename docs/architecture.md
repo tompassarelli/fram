@@ -177,7 +177,7 @@ The engine has no tenant authorization. Loopback/private FRAMRPC, process, Space
 ## Executable contracts
 
 - [`../database.clj`](../database.clj), [`../server.clj`](../server.clj), and [`../writer_authority.clj`](../writer_authority.clj): database lifetime, server entry, and writer authority.
-- `fram:src/fram/types.bgl`, `fram:src/fram/store.bgl`, `fram:src/commit_plan.bgl`, and `fram:src/snapshot_read.bgl`: recursive values, transactions, liveness, commit planning, and snapshot reads.
+- `fram:src/fram/types.bgl`, `fram:src/fram/store.bgl`, and `fram:src/commit_plan.bgl`: recursive values, transactions, liveness, and commit planning.
 - [`../src/framrpc.bclj`](../src/framrpc.bclj): FRAMRPC records and codec.
 - [`../native/fram.h`](../native/fram.h),
   [`../native/fram_embed.c`](../native/fram_embed.c),

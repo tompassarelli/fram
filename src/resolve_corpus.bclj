@@ -26,7 +26,6 @@
     [resolve-modules :as rm]
     [resolve-walk :as rw]))
 
-(define-mode strict)
 
 (def MODULE-NAME-RE Any (re-pattern "@([^#]+)#\\d+"))
 

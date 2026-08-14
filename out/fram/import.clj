@@ -134,5 +134,5 @@
 
 (defn load-corpus [^String threads-dir]
   (let [files (fram.rt/list-md threads-dir)
-   triples (reduce (fn [acc path] (vec (concat acc (safe-file->triples path)))) [] files)]
+   triples (reduce (fn [acc ^String path] (vec (concat acc (safe-file->triples path)))) [] files)]
   (number-frames (normalize-predicate-triples triples))))

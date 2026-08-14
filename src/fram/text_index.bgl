@@ -2,7 +2,6 @@
 
 (ns fram.text-index)
 
-(define-mode strict)
 
 (require clojure.string :as str)
 (require fram.types :as t)

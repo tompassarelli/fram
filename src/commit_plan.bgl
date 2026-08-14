@@ -9,7 +9,6 @@
 ;; ============================================================================
 (ns commit-plan (:require [clojure.string :as str] [fram.types :as t]))
 
-(define-mode strict)
 
 (defn version-conflict?
   [(single Bool) (base-version Int) (expected-version Int?)] Bool

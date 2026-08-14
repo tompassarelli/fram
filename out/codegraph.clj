@@ -83,10 +83,10 @@
   (if (empty? hits) "" (str (:name (nth hits 0))))))
 
 (defn collision-names [by-name]
-  (vec (filterv (fn [nm] (> (count (distinct (mapv (fn [dd] (nth (:key dd) 0)) (get by-name nm)))) 1)) (vec (sort (set (keys by-name)))))))
+  (vec (filterv (fn [^String nm] (> (count (distinct (mapv (fn [dd] (nth (:key dd) 0)) (get by-name nm)))) 1)) (vec (sort (set (keys by-name)))))))
 
 (defn scored-rows [by-name collisions radj]
-  (filterv (fn [r] (pos? (:gn r))) (vec (mapcat (fn [nm] (let [ds (get by-name nm)
+  (filterv (fn [^Row r] (pos? (:gn r))) (vec (mapcat (fn [^String nm] (let [ds (get by-name nm)
    incumbent (reduce (fn [acc dd] (into acc (get radj (:key dd) #{}))) #{} ds)]
   (if (pos? (count incumbent)) (mapv (fn [dd] (let [g (get radj (:key dd) #{})]
   (Row. nm (short-file (:key dd)) 1.0 (/ (count g) (double (count incumbent))) (count g) (count incumbent)))) ds) []))) collisions))))
@@ -112,14 +112,14 @@
   (println "(oracle = module-local scope: a call binds the defn in its own file)")
   (let [collisions (collision-names by-name)
    rows (scored-rows by-name collisions radj)
-   mean-delta (if (empty? rows) 0.0 (/ (reduce + (mapv (fn [r] (- (:graph-p r) (:incumbent-p r))) rows)) (count rows)))
-   tot-g (reduce + (mapv (fn [r] (:gn r)) rows))
-   tot-in (reduce + (mapv (fn [r] (:in r)) rows))
+   mean-delta (if (empty? rows) 0.0 (/ (reduce + (mapv (fn [^Row r] (- (:graph-p r) (:incumbent-p r))) rows)) (count rows)))
+   tot-g (reduce + (mapv (fn [^Row r] (:gn r)) rows))
+   tot-in (reduce + (mapv (fn [^Row r] (:in r)) rows))
    micro-incumbent-p (if (pos? tot-in) (/ tot-g (double tot-in)) 1.0)
    micro-delta (- 1.0 micro-incumbent-p)
-   wrong (count (filterv (fn [r] (< (:incumbent-p r) 1.0)) rows))]
+   wrong (count (filterv (fn [^Row r] (< (:incumbent-p r) 1.0)) rows))]
   (println "collision names:" (count collisions) " scored targets:" (count rows))
-  (doseq [r (vec (take 12 (sort-by (fn [r] (:incumbent-p r)) rows)))]
+  (doseq [r (vec (take 12 (sort-by (fn [^Row r] (:incumbent-p r)) rows)))]
   (println (format "  %-18s %-22s graph P=%.2f  incumbent P=%.2f  (%d of %d callers are in-scope)" (:name r) (:file r) (:graph-p r) (:incumbent-p r) (:gn r) (:in r))))
   (println (format "graph is PERFECT on %d/%d targets; the bare-symbol incumbent is WRONG (P<1) on %d (%.0f%%)" (count rows) (count rows) wrong (* 100.0 (/ wrong (max 1 (count rows))))))
   (println "MACRO mean precision delta (graph - incumbent):" (fmt3 mean-delta))

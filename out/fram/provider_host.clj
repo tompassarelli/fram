@@ -83,10 +83,10 @@
   (->ProviderDescriptor identity capability-value contract imports boot-result))
 
 (defn providers-for [descriptors capability-value]
-  (filterv (fn [value] (= capability-value (providerdescriptor-capability value))) descriptors))
+  (filterv (fn [^ProviderDescriptor value] (= capability-value (providerdescriptor-capability value))) descriptors))
 
 (defn identity-count [descriptors identity]
-  (count (filterv (fn [value] (= identity (providerdescriptor-identity value))) descriptors)))
+  (count (filterv (fn [^ProviderDescriptor value] (= identity (providerdescriptor-identity value))) descriptors)))
 
 (defn ^Boolean capability-enabled? [enabled capability-value]
   (boolean (some (fn [value] (= capability-value value)) enabled)))
@@ -119,7 +119,7 @@
 (defn ^ProviderBoot boot-providers [descriptors enabled]
   (let [selected (selected-providers descriptors enabled)
    initial (selection-violations descriptors enabled)
-   violations (reduce (fn [current descriptor-value] (into current (descriptor-violations descriptor-value selected))) initial selected)
+   violations (reduce (fn [current ^ProviderDescriptor descriptor-value] (into current (descriptor-violations descriptor-value selected))) initial selected)
    stages (mapv (fn [capability-value] (->ProviderStage capability-value :provider/boot (if (empty? violations) :provider/ready :provider/rejected))) enabled)]
   (->ProviderBoot (if (empty? violations) selected []) violations stages)))
 
@@ -155,7 +155,7 @@
   (rpc-record-term :rpc/action [(provideraction-operation action) (provideraction-proposition action) (provideraction-policy action)]))
 
 (defn batch-payload [^ProviderBatch batch]
-  (let [actions (mapv (fn [action] (action-term action)) (providerbatch-actions batch))]
+  (let [actions (mapv (fn [^ProviderAction action] (action-term action)) (providerbatch-actions batch))]
   (rpc-record-term :rpc/batch [(rpc-list-term actions) :rpc/none])))
 
 (defn batch-request [^ProviderBatch batch]
@@ -178,7 +178,7 @@
 
 (defn ^Boolean plan-capability? [^ProviderPlan plan capability-value]
   (let [stages (providerplan-stages plan)]
-  (and (pos? (count stages)) (every? (fn [stage] (= capability-value (providerstage-capability stage))) stages))))
+  (and (pos? (count stages)) (every? (fn [^ProviderStage stage] (= capability-value (providerstage-capability stage))) stages))))
 
 (defn ^Boolean response-matches-request? [request response]
   (and (= (t/rpcrequest-space request) (t/rpcresponse-space response)) (= (t/rpcrequest-op request) (t/rpcresponse-op response))))

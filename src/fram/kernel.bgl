@@ -2,7 +2,6 @@
 ;; Structural Triple operations. Domain roles and view policy live above this
 ;; neutral position-addressed boundary.
 (ns fram.kernel)
-(define-mode strict)
 (require fram.types :as t)
 (require clojure.string :as str)
 

@@ -2,7 +2,6 @@
 ;; Pure projection of ordered transaction frames through the authoritative
 ;; recursive TermStore history.
 (ns fram.fold)
-(define-mode strict)
 (require fram.store :as store)
 (require fram.types :as t)
 

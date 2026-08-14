@@ -18,7 +18,7 @@
 
 (defn parse-rep-blocks [^String path]
   (let [lines (str/split-lines (slurp path))
-   acc (reduce (fn [st l] (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (:cur st)) (:out st) (conj (vec (:out st)) (:cur st)))} (if (str/starts-with? l "[") (assoc st :cur (assoc (:cur st) :triples (conj (vec (:triples (:cur st))) (edn/read-string l)))) st))) {:cur {} :out []} lines)]
+   acc (reduce (fn [st ^String l] (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (:cur st)) (:out st) (conj (vec (:out st)) (:cur st)))} (if (str/starts-with? l "[") (assoc st :cur (assoc (:cur st) :triples (conj (vec (:triples (:cur st))) (edn/read-string l)))) st))) {:cur {} :out []} lines)]
   (if (empty? (:cur acc)) (vec (:out acc)) (conj (vec (:out acc)) (:cur acc)))))
 
 (defn block->defs [block]

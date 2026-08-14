@@ -77,8 +77,8 @@
   (if (map? value) (let [m value
    keys0 (vec (sort (set (keys m))))
    allowed (vec (concat required optional))
-   missing (filterv (fn [key] (not (contains? m key))) required)
-   unknown (filterv (fn [key] (or (not (string? key)) (not (some (fn [allowed-key] (= allowed-key key)) allowed)))) keys0)]
+   missing (filterv (fn [^String key] (not (contains? m key))) required)
+   unknown (filterv (fn [key] (or (not (string? key)) (not (some (fn [^String allowed-key] (= allowed-key key)) allowed)))) keys0)]
   (do
   (ensure-authority! (empty? missing) "missing-key" path (str "missing required keys: " (str/join "," missing)))
   (ensure-authority! (empty? unknown) "unknown-key" path (str "unknown keys: " (str/join "," (mapv str unknown))))
@@ -218,7 +218,7 @@
    path-aliases (mapv ascii-case-alias source-paths)
    ast-module-ids (clean-string-vector! ast-module-ids-value "manifest.astModuleIds")
    known (set module-ids)
-   orphans (filterv (fn [module-id] (not (contains? known module-id))) ast-module-ids)
+   orphans (filterv (fn [^String module-id] (not (contains? known module-id))) ast-module-ids)
    ordered (vec (sort-by (fn [entry] entry) module-entry-compare entries))
    mapping-core {"manifestVersion" "fram.module-manifest/v1" "sourceRootRelativeToCheckout" source-root "entries" ordered}
    snapshot-core (assoc mapping-core "graphVersion" version)]

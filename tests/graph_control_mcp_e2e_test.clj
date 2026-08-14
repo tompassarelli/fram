@@ -110,7 +110,6 @@
  beagle
  (str "#lang beagle/clj\n"
       "(ns fixture)\n"
-      "(define-mode strict)\n"
       "(defn alpha [] Int 0)\n"
       ;; beta calls alpha so the program reads have one real resolved edge;
       ;; a third definition would push fram-code-status past its preflight cap.

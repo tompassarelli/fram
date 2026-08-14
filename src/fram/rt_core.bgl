@@ -6,7 +6,6 @@
 ;; transformations; fram.rt keeps the public API and delegates here.
 (ns fram.rt-core (:require [clojure.string :as str]))
 
-(define-mode strict)
 
 (def COMMA-RE Regex (re-pattern ","))
 

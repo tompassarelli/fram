@@ -11,7 +11,6 @@
             [fram.store :as store]
             [fram.types :as t]))
 
-(define-mode strict)
 
 (def effective-page-limit Int 200)
 (def max-list-values Int 65536)

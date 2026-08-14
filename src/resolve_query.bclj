@@ -47,7 +47,6 @@
     [resolve-modules :as rm]
     [resolve-render :as rv]))
 
-(define-mode strict)
 
 (def SLASH-RE Regex (re-pattern "/"))
 

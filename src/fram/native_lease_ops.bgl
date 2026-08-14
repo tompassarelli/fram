@@ -8,7 +8,6 @@
             [fram.store :as store]
             [fram.types :as t]))
 
-(define-mode strict)
 
 (def max-time-ms Int 9223372036854775807)
 (def max-list-values Int 65536)

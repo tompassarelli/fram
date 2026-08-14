@@ -54,14 +54,14 @@
   (if (or (nil? ctx) (nil? e)) [] (let [pairs (reduce (fn [acc cid] (let [k (rc/ord-parse (ri/predicate-at ctx cid))
    r (fact-r ctx cid)]
   (if (or (nil? k) (nil? r)) acc (conj acc (->OrdPair k r))))) [] (ri/by-subject ctx e))]
-  (mapv (fn [pr] (:child pr)) (sort-by (fn [pr] (:key pr)) rc/ord-cmp pairs)))))
+  (mapv (fn [^OrdPair pr] (:child pr)) (sort-by (fn [^OrdPair pr] (:key pr)) rc/ord-cmp pairs)))))
 
 (defn ordered-segs [ctx e]
   (if (or (nil? ctx) (nil? e)) [] (let [pairs (reduce (fn [acc cid] (let [p (ri/predicate-at ctx cid)
    r (fact-r ctx cid)]
   (if (and (string? p) (some? (re-matches SEG-RE (str p))) (some? r)) (let [n (parse-long (subs (str p) 3))]
   (if (nil? n) acc (conj acc (->SegPair n r)))) acc))) [] (ri/by-subject ctx e))]
-  (mapv (fn [pr] (:child pr)) (sort-by (fn [pr] (:idx pr)) pairs)))))
+  (mapv (fn [^SegPair pr] (:child pr)) (sort-by (fn [^SegPair pr] (:idx pr)) pairs)))))
 
 (defn head-sym [ctx view e]
   (if (= "list" (kind-of ctx view e)) (sym-val ctx view (first (ordered-children ctx e))) nil))

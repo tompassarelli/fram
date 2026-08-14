@@ -477,7 +477,7 @@
   (loop [position 0
    active {}
    live []]
-  (if (or (>= position (count operations)) (> (t/operationrow-tx-sequence (nth operations position)) sequence)) (vec (keep-indexed (fn [index present?] (if present? (do
+  (if (or (>= position (count operations)) (> (t/operationrow-tx-sequence (nth operations position)) sequence)) (vec (keep-indexed (fn [index ^Boolean present?] (if present? (do
   index))) live)) (let [row (nth operations position)
    handle (t/operationrow-triple-handle row)
    positions (get active handle [])]

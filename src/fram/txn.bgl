@@ -7,7 +7,6 @@
 ;; pinned sequence, so a coordinate minted here can never name another frame.
 (ns fram.txn)
 
-(define-mode strict)
 
 (require fram.types :as t)
 

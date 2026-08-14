@@ -2,7 +2,6 @@
 ;; Additive analyzers over the exact word index. The released text-match
 ;; relation delegates to its original source and keeps its semantics unchanged.
 (ns fram.text-search)
-(define-mode strict)
 (require clojure.string :as str)
 (require fram.text-index :as text-index)
 (require fram.types :as t)

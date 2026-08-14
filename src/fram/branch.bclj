@@ -6,7 +6,6 @@
   (:import [java.nio.charset StandardCharsets]
            [java.util.zip CRC32]))
 
-(define-mode strict)
 
 (def ref-format String "framref/v1")
 (def fork-marker-format String "framfork/v1")

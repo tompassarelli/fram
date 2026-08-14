@@ -278,7 +278,7 @@
   (projection-or-raise (project-with-history-result! propositions occurrences withdrawals)))
 
 (defn- set-union [left right]
-  (reduce (fn [acc value] (conj acc value)) left right))
+  (reduce (fn [acc ^String value] (conj acc value)) left right))
 
 (defn- empty-string-set []
   #{})
@@ -297,7 +297,7 @@
   (reduce (fn [acc term] (if (d/query-term? term) acc (conj acc (query-error :query-invalid-term (str context " contains an invalid QueryTerm"))))) [] terms))
 
 (defn- unbound-errors [terms bound ^String context]
-  (reduce (fn [acc name] (if (contains? bound name) acc (conj acc (query-error :query-unbound-variable (str context " variable '" name "' is not bound"))))) [] (term-vars terms)))
+  (reduce (fn [acc ^String name] (if (contains? bound name) acc (conj acc (query-error :query-unbound-variable (str context " variable '" name "' is not bound"))))) [] (term-vars terms)))
 
 (defn- head-arities [rules]
   (reduce (fn [acc rule] (let [relation (d/rule-head-relation rule)]
@@ -410,7 +410,7 @@
   (if (>= position (count strata)) errors (let [stratum (nth strata position)
    current (derived-relations stratum)
    available (set-union lower current)
-   errors2 (reduce (fn [acc rule] (reduce (fn [inner relation] (if (and (contains? all-derived relation) (not (contains? available relation))) (conj inner (query-error :query-forward-reference (str "relation '" relation "' is defined only in a later stratum"))) inner)) acc (positive-relations rule))) errors stratum)]
+   errors2 (reduce (fn [acc rule] (reduce (fn [inner ^String relation] (if (and (contains? all-derived relation) (not (contains? available relation))) (conj inner (query-error :query-forward-reference (str "relation '" relation "' is defined only in a later stratum"))) inner)) acc (positive-relations rule))) errors stratum)]
   (recur (inc position) (set-union lower current) errors2)))))
 
 (defn- find-errors [^FindSpec find derived arities]
@@ -421,14 +421,14 @@
   (not (contains? derived relation)) [(query-error :query-invalid-find (str "find relation '" relation "' is not derived"))]
   :else (empty-query-errors))
    aggregate-errors (if (aggregate-find? find) (let [group-errors (reduce (fn [acc position] (if (and (>= position 0) (and (some? arity) (< position arity))) acc (conj acc (query-error :query-invalid-aggregate "aggregate group position is out of range")))) (empty-query-errors) (findspec-grouping find))
-   spec-errors (reduce (fn [acc spec] (let [operator (aggregatespec-operator spec)
+   spec-errors (reduce (fn [acc ^AggregateSpec spec] (let [operator (aggregatespec-operator spec)
    argument (aggregatespec-argument spec)]
   (cond
   (not (contains? aggregate-operators operator)) (conj acc (query-error :query-invalid-aggregate "aggregate operator is not supported"))
   (and (contains? aggregate-argument-operators operator) (nil? argument)) (conj acc (query-error :query-invalid-aggregate "aggregate operator requires an argument position"))
   (and (some? argument) (not (and (>= argument 0) (and (some? arity) (< argument arity))))) (conj acc (query-error :query-invalid-aggregate "aggregate argument position is out of range"))
   :else acc))) (empty-query-errors) (findspec-aggregates find))
-   having-errors (reduce (fn [acc clause] (cond
+   having-errors (reduce (fn [acc ^HavingClause clause] (cond
   (not (contains? d/comparison-operators (havingclause-operator clause))) (conj acc (query-error :query-invalid-having "having operator is not supported"))
   (not (and (>= (havingclause-aggregate-index clause) 0) (< (havingclause-aggregate-index clause) (count (findspec-aggregates find))))) (conj acc (query-error :query-invalid-having "having aggregate index is out of range"))
   (not (number? (havingclause-value clause))) (conj acc (query-error :query-invalid-having "having comparison value must be numeric"))
@@ -465,7 +465,7 @@
    arities (head-arities rules)
    empty-errors (if (empty? rules) [(query-error :query-invalid-plan "query plan must contain at least one rule")] (empty-query-errors))
    rules-errors (reduce (fn [acc rule] (vec (concat acc (rule-errors! rule known arities)))) (empty-query-errors) rules)
-   strata-errors (reduce (fn [acc message] (conj acc (query-error :query-stratification message))) (empty-query-errors) (d/strata-violations strata))]
+   strata-errors (reduce (fn [acc ^String message] (conj acc (query-error :query-stratification message))) (empty-query-errors) (d/strata-violations strata))]
   (vec (concat empty-errors (concat rules-errors (concat (arity-errors rules) (concat (recursive-builtin-errors rules) (concat (forward-errors strata derived) (concat strata-errors (concat (find-errors (queryplan-find plan) derived arities) (order-errors plan arities)))))))))))
 
 (defn- ^Boolean variable-form? [value]
@@ -575,13 +575,13 @@
   :else "x0:"))
 
 (defn ^String row-key [row]
-  (reduce (fn [acc value] (let [key (term-key value)]
+  (reduce (fn [^String acc value] (let [key (term-key value)]
   (str acc (count key) ":" key))) "r" row))
 
 (defn- order-row-vector [rows]
   (let [by-key (reduce (fn [acc row] (assoc acc (row-key row) row)) {} rows)
    keys (reduce (fn [acc row] (conj acc (row-key row))) [] rows)]
-  (mapv (fn [key] (let [row (get by-key key)]
+  (mapv (fn [^String key] (let [row (get by-key key)]
   (if (some? row) (let [present row]
   present) []))) (vec (sort keys)))))
 
@@ -726,7 +726,7 @@
   (if bad (query-error :query-nonnumeric-aggregate (str "aggregate position " position " contains a non-numeric Term")) (recur (inc index)))) (recur (inc index))))))))
 
 (defn- ^AggregateGroups group-rows [rows grouping]
-  (reduce (fn [acc row] (let [key (mapv (fn [position] (nth row position)) grouping)
+  (reduce (fn [^AggregateGroups acc row] (let [key (mapv (fn [position] (nth row position)) grouping)
    key-text (row-key key)
    groups (aggregategroups-by-key acc)
    current (get groups key-text)]
@@ -773,7 +773,7 @@
   :else false)))
 
 (defn- aggregate-values [rows specs]
-  (mapv (fn [spec] (aggregate-value rows spec)) specs))
+  (mapv (fn [^AggregateSpec spec] (aggregate-value rows spec)) specs))
 
 (defn- append-aggregate-values [row values]
   (reduce (fn [current value] (if (integer? value) (let [integer-value value
@@ -783,14 +783,14 @@
   (conj current element)))) row values))
 
 (defn- ^Boolean having-passes? [row grouping-count clauses]
-  (every? (fn [clause] (comparison-number (havingclause-operator clause) (required-number (nth row (+ grouping-count (havingclause-aggregate-index clause)))) (required-number (havingclause-value clause)))) clauses))
+  (every? (fn [^HavingClause clause] (comparison-number (havingclause-operator clause) (required-number (nth row (+ grouping-count (havingclause-aggregate-index clause)))) (required-number (havingclause-value clause)))) clauses))
 
 (defn- ^QueryResult aggregate-result [db ^QueryPlan plan]
   (let [find (queryplan-find plan)
    rows (vec (get db (findspec-relation find) #{}))]
   (if (empty? rows) (success-result []) (let [numeric-error (numeric-column-error rows find)]
   (if (some? numeric-error) (failure-result [numeric-error]) (let [groups (group-rows rows (findspec-grouping find))
-   aggregated (reduce (fn [acc group-key] (let [group-value (get (aggregategroups-by-key groups) group-key)
+   aggregated (reduce (fn [acc ^String group-key] (let [group-value (get (aggregategroups-by-key groups) group-key)
    group (if (some? group-value) (let [present group-value]
   present) (->AggregateGroup [] []))
    key (aggregategroup-key group)

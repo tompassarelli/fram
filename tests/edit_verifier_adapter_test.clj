@@ -134,21 +134,18 @@
              provider-path
              (str "#lang beagle/clj\n"
                   "(ns adapter.provider)\n"
-                  "(define-mode strict)\n"
                   "(defn answer [] Int 42)\n"))
           _ (spit
              consumer-path
              (str "#lang beagle/clj\n"
                   "(ns adapter.consumer "
                   "(:require [adapter.provider :as provider]))\n"
-                  "(define-mode strict)\n"
                   "(defn consume [] Int (provider/answer))\n"))
           _ (spit
              bad-consumer-path
              (str "#lang beagle/clj\n"
                   "(ns adapter.bad-consumer "
                   "(:require [adapter.provider :as provider]))\n"
-                  "(define-mode strict)\n"
                   "(defn consume [] Int \"not-an-int\")\n"))
           provider (overlay-row "adapter.provider" (facts-edn provider-path))
           consumer (overlay-row "adapter.consumer" (facts-edn consumer-path))

@@ -51,7 +51,6 @@
     [resolve-modules :as rm]
     [resolve-render :as rv]))
 
-(define-mode strict)
 
 (def FN-RE Regex (re-pattern "f\\d+"))
 

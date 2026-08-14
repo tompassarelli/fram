@@ -4,7 +4,6 @@
 ;; because fram.types spells `Atom` as the grounding vocabulary, not a cell.
 (ns fram.slots)
 
-(define-mode strict)
 
 (defalias TermSlots (Vec (Atom (Vec Int))))
 

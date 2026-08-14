@@ -3,7 +3,6 @@
 (ns fri
   (:require [fri-port :as fp]))
 
-(define-mode strict)
 
 (def MAGIC String fp/MAGIC)
 (def FMT Int fp/FMT)

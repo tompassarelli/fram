@@ -32,7 +32,6 @@
 ;; ============================================================================
 (ns fram.schema)
 
-(define-mode strict)
 
 (require fram.types :as t)
 

@@ -7,7 +7,7 @@
 (defn parse-corpus! [^String path]
   (let [skips (atom 0)
    lines (str/split-lines (slurp path))
-   acc (reduce (fn [st l] (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (:cur st)) (:out st) (conj (vec (:out st)) (:cur st)))} (if (str/starts-with? l "[") (let [t (try
+   acc (reduce (fn [st ^String l] (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (:cur st)) (:out st) (conj (vec (:out st)) (:cur st)))} (if (str/starts-with? l "[") (let [t (try
   (edn/read-string l)
   (catch Exception e
     nil))]

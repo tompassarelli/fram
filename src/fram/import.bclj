@@ -4,7 +4,6 @@
   is a block of `@subject predicate object` lines, then `---`, then a prose
   body. Every line is a projected Triple; host IO lives behind fram.rt
   externs.")
-(define-mode strict)
 
 (require fram.types :as t)
 (require fram.store :as store)

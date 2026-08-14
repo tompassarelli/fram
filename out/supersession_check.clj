@@ -42,7 +42,7 @@
   (let [args (vec $beagle$rest$host)]
   (let [ctx (c/new-term-store space-id)
    lines (str/split-lines (slurp "/tmp/trap.edn"))
-   operations (mapv (fn [line] (line->operation line)) (filterv (fn [line] (str/starts-with? line "[")) lines))
+   operations (mapv (fn [^String line] (line->operation line)) (filterv (fn [^String line] (str/starts-with? line "[")) lines))
    _load (if (pos? (count operations)) (do
   (c/commit-transaction! ctx operations)))
    old-proposition (first-sym-value-proposition ctx "red")

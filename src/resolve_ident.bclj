@@ -19,7 +19,6 @@
 ;; coordinate in it is durable on that frame's own assertions.
 (ns resolve-ident)
 
-(define-mode strict)
 
 (require fram.types :as t)
 

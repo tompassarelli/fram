@@ -2,7 +2,6 @@
 
 (ns fram.rpc-limits)
 
-(define-mode strict)
 
 ;; Recursive RPC lists consume one Term depth per value. These margins name
 ;; the fixed envelopes around each list so every runtime derives the same

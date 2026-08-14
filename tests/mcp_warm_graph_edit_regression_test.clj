@@ -44,7 +44,6 @@
 (spit source-file
       (str "#lang beagle/clj\n"
            "(ns src.plangrep.model)\n"
-           "(define-mode strict)\n"
            "(defn base [] Int 1)\n"
            "(defn semantic-index-accepted? [(schema-version String)] Bool\n"
            "  (= schema-version \"firn-index/v1\"))\n"))

@@ -4,7 +4,6 @@
 ;; This module does not add a pull operation to the live FRAMRPC surface.
 (ns pull)
 
-(define-mode strict)
 
 (require fram.store :as c)
 

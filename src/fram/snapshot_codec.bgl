@@ -9,7 +9,6 @@
             [fram.store :as term-store]
             [fram.types :as t]))
 
-(define-mode strict)
 
 (def status-ok Int 0)
 (def status-fatal Int 2)

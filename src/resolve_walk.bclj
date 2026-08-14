@@ -109,7 +109,6 @@
     [resolve-binds :as rb]
     [resolve-modules :as rm]))
 
-(define-mode strict)
 
 (defrecord Walk
   [(ctx ri/Graph)

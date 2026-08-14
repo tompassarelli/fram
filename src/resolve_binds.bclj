@@ -22,7 +22,6 @@
 (ns resolve-binds
   (:require [resolve-ident :as ri] [resolve-read :as rr]))
 
-(define-mode strict)
 
 (defn- sv [(ctx (U ri/Graph Nil)) (view Any) (e Any)] Any
   (rr/sym-val ctx view e))

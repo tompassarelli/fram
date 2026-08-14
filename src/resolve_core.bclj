@@ -21,7 +21,6 @@
 ;; ============================================================================
 (ns resolve-core (:require [clojure.string :as str]))
 
-(define-mode strict)
 
 (def ORD-STEP Int 65536)
 

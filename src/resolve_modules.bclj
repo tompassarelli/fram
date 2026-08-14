@@ -26,7 +26,6 @@
     [resolve-read :as rr]
     [resolve-binds :as rb]))
 
-(define-mode strict)
 
 (defn- sv [(ctx (U ri/Graph Nil)) (view Any) (e Any)] Any
   (rr/sym-val ctx view e))

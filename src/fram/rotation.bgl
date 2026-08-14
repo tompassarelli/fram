@@ -18,7 +18,6 @@
 ;; only at a projection point (boot, compaction, or the tail cap).
 (ns fram.rotation)
 
-(define-mode strict)
 
 (require fram.types :as t)
 

@@ -37,7 +37,7 @@
 
 (defn ^Boolean declared-relational-profile? [triples ^String space-id]
   (not (empty? (filterv (fn [value] (let [header (t/triple-t3 value)]
-  (and (= space-id (t/triple-t1 value)) (and (profile-anchor? value) (and (t/triple? header) (and (= relational-profile-kind (t/triple-t2 header)) (and (= observe-profile-mode (t/triple-t3 header)) (every? (fn [rule] (profile-has-rule? triples (t/triple-t1 header) rule)) relational-profile-rules)))))))) triples))))
+  (and (= space-id (t/triple-t1 value)) (and (profile-anchor? value) (and (t/triple? header) (and (= relational-profile-kind (t/triple-t2 header)) (and (= observe-profile-mode (t/triple-t3 header)) (every? (fn [^String rule] (profile-has-rule? triples (t/triple-t1 header) rule)) relational-profile-rules)))))))) triples))))
 
 (defn- space-profile-ids [triples ^String space-id]
   (mapv (fn [value] (t/triple-t1 (t/triple-t3 value))) (filterv (fn [value] (and (= space-id (t/triple-t1 value)) (and (profile-anchor? value) (t/triple? (t/triple-t3 value))))) triples)))
@@ -84,7 +84,7 @@
   (if (not (declared-relational-profile? triples space-id)) [] (let [vocabulary? (declared-vocabulary-rule? triples space-id)]
   (reduce (fn [violations proposition] (if (profile-anchor? proposition) violations (let [relational (relational-lint-errors proposition)
    rules (if vocabulary? (into relational (vocabulary-lint-errors triples proposition)) relational)]
-  (reduce (fn [rows rule] (conj rows (t/triple proposition profile-violation rule))) violations rules)))) [] triples))))
+  (reduce (fn [rows ^String rule] (conj rows (t/triple proposition profile-violation rule))) violations rules)))) [] triples))))
 
 (defn ^Boolean triple-eq? [left right]
   (= left right))

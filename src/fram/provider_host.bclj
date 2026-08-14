@@ -4,7 +4,6 @@
 ;; The provider host is application-side; the substrate keeps its closed wire.
 (ns fram.provider-host (:require [fram.types :as t]))
 
-(define-mode strict)
 
 (require fram.rt :as rt)
 
