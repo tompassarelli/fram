@@ -4,8 +4,7 @@
 The editor works on bytes so unrelated TOML remains byte-identical. New blocks
 carry begin/end markers and record the exact newline separator inserted before
 the begin marker; ``unset`` removes that owned raw span instead of guessing
-whether a neighboring blank line belongs to the user. Unmarked Fram blocks from
-older versions remain removable and are upgraded to the marked form on ``set``.
+whether a neighboring blank line belongs to the user.
 """
 
 import json
@@ -18,9 +17,9 @@ BEGIN_RE = re.compile(
     rb"(?m)^# >>> fram-code-wire managed mcp_servers\.fram separator=([0-2])\n"
 )
 END_MARKER = b"# <<< fram-code-wire managed mcp_servers.fram\n"
-FRAM_HEADER_RE = re.compile(rb"^\[mcp_servers\.fram\][ \t]*$")
-FRAM_NESTED_RE = re.compile(rb"^\[mcp_servers\.fram\.[^\]]+\][ \t]*$")
-ANY_TABLE_RE = re.compile(rb"^\[[^\]]+\][ \t]*$")
+UNMANAGED_FRAM_TABLE_RE = re.compile(
+    rb"(?m)^\[mcp_servers\.fram\][ \t]*\r?$"
+)
 
 
 def toml_str(value: str) -> str:
@@ -72,35 +71,6 @@ def owned_span(data: bytes):
     return start, end_start + len(END_MARKER), separator_length
 
 
-def legacy_span(data: bytes):
-    """Find an unmarked Fram table emitted by an older helper version."""
-    lines = data.splitlines(keepends=True)
-    offsets = []
-    offset = 0
-    for line in lines:
-        offsets.append(offset)
-        offset += len(line)
-
-    for index, line in enumerate(lines):
-        bare = line.rstrip(b"\r\n")
-        if not FRAM_HEADER_RE.match(bare):
-            continue
-        end_index = index + 1
-        while end_index < len(lines):
-            candidate = lines[end_index].rstrip(b"\r\n")
-            if ANY_TABLE_RE.match(candidate) and not FRAM_NESTED_RE.match(candidate):
-                break
-            end_index += 1
-
-        # Blank lines immediately before the next unrelated table are not
-        # provably legacy-owned, so leave them outside the removal span.
-        while end_index > index + 1 and not lines[end_index - 1].strip():
-            end_index -= 1
-        end = offsets[end_index] if end_index < len(lines) else len(data)
-        return offsets[index], end
-    return None
-
-
 def append_separator(data: bytes) -> int:
     if not data or data.endswith(b"\n\n"):
         return 0
@@ -140,25 +110,21 @@ def main() -> None:
                 + render_owned(server, separator_length)
                 + data[end:]
             )
+        elif UNMANAGED_FRAM_TABLE_RE.search(data):
+            sys.exit(
+                "fram-code-wire-toml.py: refusing unmarked "
+                "[mcp_servers.fram] table"
+            )
         else:
-            legacy = legacy_span(data)
-            if legacy:
-                start, end = legacy
-                updated = data[:start] + render_owned(server, 0) + data[end:]
-            else:
-                separator_length = append_separator(data)
-                updated = data + render_owned(server, separator_length)
+            separator_length = append_separator(data)
+            updated = data + render_owned(server, separator_length)
         write_bytes(path, updated)
     elif mode == "unset":
         if managed:
             start, end, _ = managed
             updated = data[:start] + data[end:]
         else:
-            legacy = legacy_span(data)
-            if not legacy:
-                return
-            start, end = legacy
-            updated = data[:start] + data[end:]
+            return
 
         if updated == b"":
             try:

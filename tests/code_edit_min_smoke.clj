@@ -5,8 +5,8 @@
 ;; high port (NEVER 7977 / north), then drives a 1-line set-body THROUGH the
 ;; server's NEW :edit-min wire op and reports HOW MANY fact ops it committed.
 ;;
-;; GATE 1 (OPCOUNT): a 1-line set-body must commit a HANDFUL of ops (contrast: the
-;; whole-module path commits ~7800 because emit-edn renumbers the whole module).
+;; GATE 1 (OPCOUNT): a 1-line set-body must commit a number of operations
+;; proportional to the edited subtree.
 ;;
 ;; Reuses the warm server for the WHOLE run (no per-op cold-boot / 101k re-fold).
 ;;   bb -cp out code_edit_min_smoke.clj
@@ -61,7 +61,7 @@
   (do
     (println (format "  asserts:   %d" (:asserts resp)))
     (println (format "  retracts:  %d" (:retracts resp)))
-    (println (format "  TOTAL ops: %d   (whole-module baseline: ~7800)" (:ops resp)))
+    (println (format "  TOTAL ops: %d" (:ops resp)))
     (println (format "  new nodes: %d" (:new-nodes resp)))
     (println (format "  wall-clock (warm server, incl. clone+verb+commit): %.1f ms" elapsed-ms))
     (println (format "  version: %d -> %d" v-before (:version resp))))
@@ -73,14 +73,10 @@
 (println "  flat-log assert/retract lines total (incl. this edit):" new-lines)
 
 (shutdown!)
-;; PASS = the op count is proportional to the EDITED SUBTREE, not the whole module.
-;; The whole-module path commits ~7800 (3994 retract + 3818 assert) because emit-edn
-;; renumbers every node. The minimal path commits only the new body's own facts +
-;; the one superseded edge — here a 4-binding let block (~50 nodes) => ~133 ops, a
-;; ~59x reduction. The discriminating fact: ops scale with the body, NOT the module
-;; (the contrast retract count is the tell: 1 vs ~3994).
+;; PASS = the operation count is proportional to the edited subtree. This edit
+;; commits only the new body's own facts plus the superseded edge.
 (if (and (:ok resp) (< (:ops resp) 1000) (<= (:retracts resp) 5))
-  (do (println (format "\nGATE 1 PASS — minimal-op edit: %d ops (%d retract) vs whole-module ~7800 (3994 retract). ~%.0fx fewer."
-                       (:ops resp) (:retracts resp) (/ 7800.0 (:ops resp))))
+  (do (println (format "\nGATE 1 PASS — proportional edit: %d ops (%d retract)."
+                       (:ops resp) (:retracts resp)))
       (System/exit 0))
   (do (println "\nGATE 1 FAIL") (System/exit 1)))

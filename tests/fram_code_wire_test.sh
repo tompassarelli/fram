@@ -43,6 +43,24 @@ cp "$DIR/.codex/config.toml" "$TMP/config.toml.orig"
 
 SERVER_JSON='{"command":"/fake/fram-mcp","args":[],"env":{"FRAM_SPACE_ID":"wire-test-space","FRAM_SERVER_PORT":"31337","FRAM_LOG":"/canonical/fram/.fram/code.log"}}'
 
+# Markerless tables are not owned by Fram. Refuse to overwrite one on set and
+# leave it byte-identical on unset.
+UNMANAGED_TOML="$TMP/unmanaged.toml"
+printf '[mcp_servers.fram]\ncommand = "/manual/server"\n' > "$UNMANAGED_TOML"
+cp "$UNMANAGED_TOML" "$UNMANAGED_TOML.orig"
+if python3 "$HERE/bin/fram-code-wire-toml.py" set "$UNMANAGED_TOML" "$SERVER_JSON" \
+    >"$TMP/unmanaged-set.out" 2>&1; then
+  echo "FAIL - set refuses an unmarked Fram table"
+  FAIL=1
+else
+  echo "ok - set refuses an unmarked Fram table"
+fi
+assert "refused set leaves the unmarked Fram table byte-identical" \
+  'cmp -s "$UNMANAGED_TOML" "$UNMANAGED_TOML.orig"'
+python3 "$HERE/bin/fram-code-wire-toml.py" unset "$UNMANAGED_TOML"
+assert "unset ignores an unmarked Fram table byte-identically" \
+  'cmp -s "$UNMANAGED_TOML" "$UNMANAGED_TOML.orig"'
+
 # fram-code-on binds one stable SpaceId to ingest, server, and MCP configuration.
 assert_code_on_line "fram-code-on requires an explicit stable SpaceId" \
   'fram-code-on: --space-id is required and must be nonempty'

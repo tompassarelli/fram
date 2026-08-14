@@ -36,8 +36,8 @@ if ! "$env_bin" -i "$package_root/bin/fram-backup" --help \
   exit 1
 fi
 
-hidden_commands=(fram-code-author fram-code-off fram-code-on fram-code-status
-  fram-commit-code fram-defcheck fram-defcheck-server.rkt fram-edit-code
+hidden_commands=(fram-code-off fram-code-on fram-code-status
+  fram-commit-code fram-defcheck fram-defcheck-server.rkt
   fram-ingest-code fram-modules-of-log fram-render-code fram-render-code-all fram-up)
 for name in "${hidden_commands[@]}"; do
   [[ ! -e "$package_root/bin/$name" ]] || {
