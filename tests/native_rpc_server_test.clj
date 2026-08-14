@@ -1,8 +1,9 @@
-;; FRAMRPC v1 JVM listener: closed operation set, typed payloads, history,
+;; FRAMRPC v2 JVM listener: closed operation set, typed payloads, history,
 ;; query snapshots, leases, cancellation, malformed input, and restart replay.
 (require '[clojure.java.io :as io]
          '[clojure.string :as str]
          '[framrpc :as wire]
+         '[fram.datalog :as datalog]
          '[fram.kernel :as kernel]
          '[fram.query :as query]
          '[fram.types :as t])
@@ -51,6 +52,10 @@
 (defn triples-result [response tag]
   (let [[values] (fields (payload response) tag 1)]
     (values-list values)))
+
+(defn occurrence-results [response]
+  (mapv #(fields % :rpc/occurrence 3)
+        (triples-result response :rpc/occurrences)))
 
 (defn query-rows [response]
   (mapv (fn [row]
@@ -132,10 +137,10 @@
 (def server (future (server/serve! port log-path space :active)))
 
 (try
-  (check! "listener starts on FRAMRPC v1"
+  (check! "listener starts on FRAMRPC v2"
           (some? (eventually #(request! port space :rpc/version wire/rpc-unit))))
 
-  (check! "operation disposition is exhaustive for the thirteen v1 operations"
+    (check! "operation disposition is exhaustive for the thirteen v2 operations"
           (and (= 13 (count server/native-rpc-operations))
                (every? #(= :supported (server/native-op-disposition %))
                        server/native-rpc-operations)
@@ -173,7 +178,7 @@
       (check! "EDN is not accepted on the native listener"
               (= -1 (.read (.getInputStream socket))))))
 
-  (let [cancel-bytes (wire/encode-rpc-frame-v1! (wire/rpc-cancel-frame 44))]
+  (let [cancel-bytes (wire/encode-rpc-frame-v2! (wire/rpc-cancel-frame 44))]
     (aset-byte cancel-bytes 14 (unchecked-byte 255))
     (aset-byte cancel-bytes 15 (unchecked-byte 255))
     (aset-byte cancel-bytes 16 (unchecked-byte 255))
@@ -191,11 +196,9 @@
         proposition (t/triple nested-subject :title "Door Schedule")
         response (request! port space :rpc/assert
                            (wire/rpc-write! proposition wire/rpc-subject-any nil))
-        [[input-index changed occurrences]] (action-results response)
-        coordinates (values-list occurrences)
-        coordinate (first coordinates)]
+        [[input-index changed coordinate]] (action-results response)]
     (check! "recursive Triple assertion returns its occurrence coordinate"
-            (and (= 0 input-index) changed (= 1 (count coordinates))
+            (and (= 0 input-index) changed
                  (t/occurrence-coordinate? coordinate)
                  (= 0 (t/triple-t3 coordinate))
                  (= 1 (t/triple-t3 (t/triple-t1 coordinate)))
@@ -216,10 +219,7 @@
                   nil))
           results (action-results batch)
           coordinates
-          (mapv (fn [[_ _ occurrences]]
-                  (let [values (values-list occurrences)]
-                    (when (= 1 (count values)) (first values))))
-                results)]
+          (mapv #(nth % 2) results)]
       (check! "batch applies ordered assert/retract actions in one transaction"
               (and (= [0 1 2] (mapv first results))
                    (= [true true true] (mapv second results))
@@ -231,14 +231,15 @@
 
       (let [no-op (request! port space :rpc/retract
                             (wire/rpc-write! proposition wire/rpc-subject-any nil))
-            [[_ changed occurrences]] (action-results no-op)]
-        (check! "missing retract is an explicit no-op with no version movement"
-                (and (false? changed) (empty? (values-list occurrences))
-                     (= 2 (t/rpcresponse-served-version no-op)))))
+            [[_ changed occurrence]] (action-results no-op)]
+        (check! "missing retract records an occurrence without changing live state"
+                (and (false? changed)
+                     (t/occurrence-coordinate? occurrence)
+                     (= 3 (t/rpcresponse-served-version no-op)))))
 
       (let [before (request! port space :rpc/version wire/rpc-unit)
             predicate :oversized-batch-fixture
-            action-count (inc wire/rpc-v1-max-batch-actions)
+            action-count (inc wire/rpc-v2-max-batch-actions)
             rejected
             (request!
              port space :rpc/batch
@@ -255,7 +256,7 @@
             scan (request! port space :rpc/scan
                            (wire/rpc-triple-pattern! nil predicate nil))]
         (check! "248-action batch is rejected before version or state changes"
-                (and (= 247 wire/rpc-v1-max-batch-actions)
+                (and (= 247 wire/rpc-v2-max-batch-actions)
                      (= 248 action-count)
                      (= :term-depth-exceeded (error-code rejected))
                      (= (t/rpcresponse-served-version before)
@@ -265,9 +266,12 @@
                      (empty? (triples-result scan :rpc/triples)))))
 
       (let [history (request! port space :rpc/occurrences wire/rpc-unit)
-            events (triples-result history :rpc/occurrences)]
-        (check! "occurrences are direct assertion/retraction Triples"
-                (and (seq events) (every? kernel/operation-occurrence? events))))
+            events (occurrence-results history)]
+        (check! "occurrences are typed protocol records with physical actions"
+                (and (seq events)
+                     (every? t/occurrence-coordinate? (map first events))
+                     (every? #{:assert :retract} (map second events))
+                     (every? t/triple? (map #(nth % 2) events)))))
 
       (let [plan (all-triples-plan)
             query-payload (wire/rpc-query-request! plan wire/query-current)
@@ -288,9 +292,9 @@
             (request! port space :rpc/scan
                       (wire/rpc-triple-pattern! "later" :value 3))]
         (check! "query cursor pins snapshot version across later commits"
-                (and (= 2 (t/rpcresponse-served-version first-page))
-                     (= 3 (t/rpcresponse-served-version asserted-later))
-                     (= 2 (t/rpcresponse-served-version second-page))
+                (and (= 3 (t/rpcresponse-served-version first-page))
+                     (= 4 (t/rpcresponse-served-version asserted-later))
+                     (= 3 (t/rpcresponse-served-version second-page))
                      (not-any? #(= ["later" :value 3] %) pinned-rows)))
         (check! "query as-of rebuilds the requested logical snapshot"
                 (and (= 1 (t/rpcresponse-served-version historical))
@@ -326,7 +330,8 @@
                                 (query-rows since-one)))
                        (every? #(= 2 (row-sequence %))
                                (query-rows since-one))
-                       (every? #(< 1 (row-sequence %) 4)
+                       (every? #(<= 2 (row-sequence %)
+                                      (t/rpcresponse-served-version current-since))
                                (query-rows current-since))))
           (let [first-page
                 (request!
@@ -425,7 +430,7 @@
             head (request! port space :rpc/version wire/rpc-unit)]
         (check! "stale expected-version fails OCC without version movement"
                 (and (= :rpc/conflict (error-code stale))
-                     (= 3 (t/rpcresponse-served-version head)))))
+                     (= 4 (t/rpcresponse-served-version head)))))
 
       (let [same (t/triple "same" :same "same")
             asserted-same (request! port space :rpc/assert
@@ -461,7 +466,7 @@
                  "not-self" [value]
                  [value (wire/rpc-query-constant! :value) value]))]]]
         (check! "one-triple fixture assertion advances one version"
-                (= 4 (t/rpcresponse-served-version asserted-same)))
+                (= 5 (t/rpcresponse-served-version asserted-same)))
         (doseq [[label plan] patterns]
           (let [query-payload (wire/rpc-query-request! plan wire/query-current)
                 reference (request! port space :rpc/query query-payload)
@@ -525,7 +530,7 @@
           released (request! port space :rpc/lease-release next-fence)
           projection-used (atom false)
           direct-reads
-          (with-redefs [query/project-with-occurrences
+          (with-redefs [datalog/edb
                         (fn [& _]
                           (reset! projection-used true)
                           (throw (ex-info "whole-corpus projection used" {})))]
@@ -660,9 +665,13 @@
                                     (database/live-propositions
                                      @server/database)))
           occurrence-reference (fn []
-                                 (filterv kernel/operation-occurrence?
-                                          (database/history
-                                           @server/database)))]
+                                 (mapv
+                                  (fn [occurrence]
+                                    (wire/rpc-occurrence!
+                                     (t/operationoccurrence-coordinate occurrence)
+                                     (t/operationoccurrence-action occurrence)
+                                     (t/operationoccurrence-proposition occurrence)))
+                                  (database/occurrences @server/database)))]
       (doseq [batch (partition-all 100 (range fixture-count))]
         (request! port space :rpc/batch
                   (wire/rpc-batch!
@@ -852,15 +861,13 @@
            (wire/rpc-batch!
             (vec
              (repeat
-              wire/rpc-v1-max-batch-actions
+              wire/rpc-v2-max-batch-actions
               (wire/rpc-action! :rpc/assert proposition
                                 wire/rpc-subject-any)))
             nil))
           results (action-results accepted)
           coordinates
-          (vec
-           (mapcat (fn [[_ _ occurrences]] (values-list occurrences))
-                   results))
+          (mapv #(nth % 2) results)
           after
           (request! receipt-port receipt-space :rpc/version wire/rpc-unit)
           scan
@@ -868,7 +875,7 @@
                       100 :rpc/triples)]
       (check! "247-action batch commits one ordered coordinate receipt"
               (and (nil? (error-code accepted))
-                   (= 247 wire/rpc-v1-max-batch-actions
+                   (= 247 wire/rpc-v2-max-batch-actions
                       (count results)
                       (count coordinates)
                       (count (:rows scan)))
@@ -948,7 +955,7 @@
       (server/shutdown!)
       (deref lease-server 3000 nil))))
 
-(let [long-space (apply str (repeat wire/rpc-v1-max-space-bytes "s"))
+(let [long-space (apply str (repeat wire/rpc-v2-max-space-bytes "s"))
       long-log-path (str (io/file scratch "long-space-history.framlog"))
       long-port (free-port)
       long-server
@@ -969,7 +976,7 @@
            (wire/rpc-batch!
             (vec
              (repeat
-              241
+              243
               (wire/rpc-action! :rpc/assert proposition
                                 wire/rpc-subject-any)))
             nil))
@@ -978,13 +985,11 @@
            accepted-request
            {:cancelled (atom false) :query-control (atom nil)})
           encoded-accepted
-          (wire/encode-rpc-frame-v1!
+          (wire/encode-rpc-frame-v2!
            (wire/rpc-response-frame 8001 accepted))
           results (action-results accepted)
           coordinates
-          (vec
-           (mapcat (fn [[_ _ occurrences]] (values-list occurrences))
-                   results))
+          (mapv #(nth % 2) results)
           after-success-version
           (request! long-port long-space :rpc/version wire/rpc-unit)
           after-success-scan
@@ -995,7 +1000,7 @@
            (wire/rpc-batch!
             (vec
              (repeat
-              242
+              244
               (wire/rpc-action! :rpc/assert proposition
                                 wire/rpc-subject-any)))
             nil))
@@ -1007,18 +1012,18 @@
           (request! long-port long-space :rpc/version wire/rpc-unit)
           after-rejection-scan
           (request! long-port long-space :rpc/scan pattern)]
-      (check! "241-action long-SpaceId receipt commits at the byte boundary"
+      (check! "243-action long-SpaceId receipt commits at the byte boundary"
               (and (nil? (error-code accepted))
-                   (= 1044878 (alength encoded-accepted))
-                   (= 241 (count results)
+                   (= 1045981 (alength encoded-accepted))
+                   (= 243 (count results)
                       (count coordinates)
                       (count (triples-result after-success-scan :rpc/triples)))
-                   (= (vec (range 241)) (mapv first results))
+                   (= (vec (range 243)) (mapv first results))
                    (every? true? (map second results))
                    (every? t/occurrence-coordinate? coordinates)
-                   (= (vec (repeat 241 1))
+                   (= (vec (repeat 243 1))
                       (mapv #(t/triple-t3 (t/triple-t1 %)) coordinates))
-                   (= (vec (range 241)) (mapv t/triple-t3 coordinates))
+                   (= (vec (range 243)) (mapv t/triple-t3 coordinates))
                    (= (inc (t/rpcresponse-served-version before-version))
                       (t/rpcresponse-served-version accepted)
                       (t/rpcresponse-served-version after-success-version)
@@ -1026,7 +1031,7 @@
                    (empty? (triples-result before-scan :rpc/triples))
                    (every? #{proposition}
                            (triples-result after-success-scan :rpc/triples))))
-      (check! "unencodable 242-action receipt preserves the 241-action commit"
+      (check! "unencodable 244-action receipt preserves the 243-action commit"
               (and (= :rpc-frame-too-large (error-code rejected))
                    (= (t/rpcresponse-served-version accepted)
                       (t/rpcresponse-served-version rejected)
@@ -1041,27 +1046,24 @@
            long-space :rpc/assert nil nil nil
            (wire/rpc-write! proposition wire/rpc-subject-any nil))
           encoded-request
-          (wire/encode-rpc-frame-v1! (wire/rpc-request-frame 9001 request))
+          (wire/encode-rpc-frame-v2! (wire/rpc-request-frame 9001 request))
           response
           (server/handle-rpc-request!
            request {:cancelled (atom false) :query-control (atom nil)})
           encoded-response
-          (wire/encode-rpc-frame-v1!
+          (wire/encode-rpc-frame-v2!
            (wire/rpc-response-frame 9001 response))
-          [[input-index changed occurrences]] (action-results response)
-          coordinates (values-list occurrences)
-          coordinate (first coordinates)
+          [[input-index changed coordinate]] (action-results response)
           version
           (request! long-port long-space :rpc/version wire/rpc-unit)]
       (check! "near-max legal proposition commits with an encodable receipt"
               (and (nil? (error-code response))
                    (>= (alength encoded-request)
-                       (- wire/rpc-v1-max-frame-bytes 8192))
-                   (<= (alength encoded-request) wire/rpc-v1-max-frame-bytes)
-                   (<= (alength encoded-response) wire/rpc-v1-max-frame-bytes)
+                       (- wire/rpc-v2-max-frame-bytes 8192))
+                   (<= (alength encoded-request) wire/rpc-v2-max-frame-bytes)
+                   (<= (alength encoded-response) wire/rpc-v2-max-frame-bytes)
                    (= 0 input-index)
                    changed
-                   (= 1 (count coordinates))
                    (t/occurrence-coordinate? coordinate)
                    (= 0 (t/triple-t3 coordinate))
                    (= 2 (t/rpcresponse-served-version response)
@@ -1079,4 +1081,4 @@
   (do
     (println (str "\n" (count @failures) " native RPC server checks failed"))
     (System/exit 1))
-  (println "\nFRAMRPC v1 JVM server: all checks passed"))
+  (println "\nFRAMRPC v2 JVM server: all checks passed"))

@@ -159,15 +159,15 @@
    selp (pid co select-pred)
    slots (if (nil? from) [] (changed-slots co from to))
    vids (verdict-view-ids co views)]
-  (if (or (nil? evp) (or (nil? srp) (or (nil? wlp) (or (nil? selp) (or (nil? from) (or (empty? slots) (empty? vids))))))) [[] []] [(vec (concat (mapv (fn [sid] (d/rule changed-slot-relation [(d/constant sid)] [])) slots) (mapv (fn [v] (d/rule verdict-view-relation [(d/constant v)] [])) vids))) [(d/rule reverification-relation [(d/variable "x")] [(d/relation-literal d/triple-relation [(d/variable "e") (d/constant wlp) (d/constant from)]) (d/relation-literal d/triple-relation [(d/variable "e") (d/constant srp) (d/variable "s")]) (d/relation-literal changed-slot-relation [(d/variable "s")]) (d/relation-literal d/triple-relation [(d/variable "x") (d/constant evp) (d/variable "e")]) (d/relation-literal d/occurrence-relation [(d/variable "x") (d/constant t/asserts) (d/variable "p")]) (d/relation-literal d/triple-relation [(d/variable "view") (d/constant selp) (d/variable "x")]) (d/relation-literal verdict-view-relation [(d/variable "view")])])]]))))
+  (if (or (nil? evp) (or (nil? srp) (or (nil? wlp) (or (nil? selp) (or (nil? from) (or (empty? slots) (empty? vids))))))) [[] []] [(vec (concat (mapv (fn [sid] (d/rule changed-slot-relation [(d/constant sid)] [])) slots) (mapv (fn [v] (d/rule verdict-view-relation [(d/constant v)] [])) vids))) [(d/rule reverification-relation [(d/variable "x")] [(d/relation-literal d/triple-relation [(d/variable "e") (d/constant wlp) (d/constant from)]) (d/relation-literal d/triple-relation [(d/variable "e") (d/constant srp) (d/variable "s")]) (d/relation-literal changed-slot-relation [(d/variable "s")]) (d/relation-literal d/triple-relation [(d/variable "x") (d/constant evp) (d/variable "e")]) (d/relation-literal d/occurrence-relation [(d/variable "x") (d/constant :assert) (d/variable "p")]) (d/relation-literal d/triple-relation [(d/variable "view") (d/constant selp) (d/variable "x")]) (d/relation-literal verdict-view-relation [(d/variable "view")])])]]))))
 
 (defn- live-db [co]
   (let [events (rot/all-occurrences (vw co))]
-  (d/edb-with-occurrences (rot/propositions events) events)))
+  (d/edb-with-history (rot/propositions events) events [])))
 
-(defn needs-reverification
+(defn needs-reverification!
   ([co from to]
-    (needs-reverification co default-views from to))
+    (needs-reverification! co default-views from to))
   ([co views from to]
     (let [db (d/run-strata-db! (live-db co) (reverification-rules co views from to))]
   (set (mapv (fn [t] (get t 0)) (d/facts db reverification-relation))))))

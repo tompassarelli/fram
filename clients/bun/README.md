@@ -1,6 +1,6 @@
 # `@tompassarelli/framrpc`
 
-The official client for Fram's binary FRAMRPC v1 data plane. It is an ES
+The official client for Fram's binary FRAMRPC v2 data plane. It is an ES
 module with no runtime dependencies. The root entry point binds Bun TCP; the
 portable `./core` entry point accepts an exact-frame transport. Both expose
 the same thirteen frozen data operations.
@@ -19,7 +19,7 @@ source commit. Once the tarball is downloaded, installation needs no registry
 or network access:
 
 ```console
-$ bun add --offline /path/to/tompassarelli-framrpc-0.4.0.tgz
+$ bun add --offline /path/to/tompassarelli-framrpc-0.5.0.tgz
 ```
 
 The client package version is independent of the containing Fram release tag;
@@ -143,7 +143,7 @@ let cursor;
 do {
   const page = await fram.scan(
     { t2: keywordTerm('title') },
-    { page: { limit: 256, ...(cursor ? { cursor } : {}) } },
+    { page: { limit: 200, ...(cursor ? { cursor } : {}) } },
   );
   consume(page.result);
   cursor = page.page.done ? null : page.page.nextCursor;
@@ -176,7 +176,7 @@ automatically. Integers decode as canonical decimal strings inside Terms and as
 ## Operations
 
 The client has no raw operation escape hatch. Its methods are the frozen
-FRAMRPC v1 set:
+FRAMRPC v2 set:
 
 - `version`, `status`, `validate`
 - `assert`, `retract`, `batch`
@@ -189,10 +189,21 @@ use `FramTransportError` and `FramProtocolError`.
 
 `FRAMRPC_MAX_BATCH_ACTIONS` is the canonical 247-action mutation-response depth
 ceiling. The client rejects a larger batch before transport. Mutation receipts
-carry action indexes and occurrence coordinates, not the submitted action
-Terms, so large action Terms do not enlarge the response. FRAM still
+decode each accepted action as
+`{ inputIndex, stateChanged, occurrence }`. `occurrence` is the one exact
+occurrence-coordinate Term assigned to that action. This includes an unmatched
+retraction: it reports `stateChanged: false` while still advancing the version
+and receiving a coordinate. Receipts do not repeat submitted proposition Terms,
+so large action Terms do not enlarge the response. FRAM still
 exact-preflights the response frame before commit because SpaceId size and the
 receipt-envelope width determine its encoded bytes.
+
+`occurrences()` returns `{ coordinate, action, proposition }` objects. The
+coordinate is validated as
+`((space, :kernel/tx-sequence, sequence), :kernel/op-ordinal, ordinal)`, action
+is exactly `assert` or `retract`, and proposition is a Triple Term. Retraction
+targets are not embedded in this stream; query `withdrawal(retraction,
+assertion)` when the exact cancelled assertion matters.
 
 `preflightBatch(actions, options)` is a synchronous, no-send helper over the
 exact request encoder. It returns a frozen
@@ -387,7 +398,7 @@ retryable `FramRpcError` whose code is `rpc/conflict`; the default is four
 retries after the initial attempt and the configurable hard ceiling is 32.
 Duplicate identity owners are never selected arbitrarily.
 
-Schema batches are capped at 247 actions, the FRAMRPC v1 mutation-response depth
+Schema batches are capped at 247 actions, the FRAMRPC v2 mutation-response depth
 ceiling exported by the base client. Before sending, the schema client calls
 `preflightBatch` with the exact actions and expected version and attaches the
 result to `batch`, so a changed request is rejected locally. FRAM also
@@ -430,7 +441,7 @@ version. `updateUniqueMany` instead returns
 the subject arrays align with the input create and update arrays, and
 `preflight` is null only when an update-only plan needs no batch.
 
-FRAMRPC v1 serves one request per TCP connection. The client follows that
+FRAMRPC v2 serves one request per TCP connection. The client follows that
 contract directly without HTTP, JSON, MCP, or a Clojure shim. The server socket
 is plaintext and unauthenticated; keep it on loopback or a private network, or
 put an authenticated TLS boundary in front of it.

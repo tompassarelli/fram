@@ -116,8 +116,8 @@ FRAM_API fram_status fram_open(const fram_open_options_v1 *options,
                                fram_error *error);
 
 /*
- * Each call consumes exactly one canonical FRAMRPC v1 request frame and
- * returns exactly one canonical FRAMRPC v1 response frame. The three entry
+ * Each call consumes exactly one canonical FRAMRPC v2 request frame and
+ * returns exactly one canonical FRAMRPC v2 response frame. The three entry
  * points name host intent; the typed Fram dispatcher remains the sole
  * authority for operation validity and returns protocol errors in RESPONSE.
  */

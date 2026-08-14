@@ -100,8 +100,8 @@
                (= (alength pre-fork-bytes)
                   (branch/segmentrecord-byte-count record)))))
 
-(def parent-tail (branch/branch-tail-path log branch/default-branch))
-(def child-tail (branch/branch-tail-path log "lane"))
+(def parent-tail (branch/branch-tail-path! log branch/default-branch))
+(def child-tail (branch/branch-tail-path! log "lane"))
 
 (check! "both branches get a fresh tail carrying the continuation flag"
         (every? (fn [path]
@@ -187,7 +187,7 @@
 (check! "a branch of an empty store begins at sequence one"
         (= 1 (:tx-seq (first (:frames
                               (database/read-triple-log!
-                               (branch/branch-tail-path empty-log "lane")
+                               (branch/branch-tail-path! empty-log "lane")
                                true))))))
 (check! "a branch of an empty store cold-replays its first write"
         (live? (database/open-branch! empty-log "lane" space)
@@ -272,9 +272,9 @@
 ;; marker and its last rename: every file it installs is at its pending name.
 (defn- derail-fork! [log child segment]
   (doseq [path [log
-                (branch/ref-path log branch/default-branch)
-                (branch/ref-path log child)
-                (branch/branch-tail-path log child)]]
+                (branch/ref-path! log branch/default-branch)
+                (branch/ref-path! log child)
+                (branch/branch-tail-path! log child)]]
     (java.nio.file.Files/move
      (.toPath (java.io.File. (str path)))
      (.toPath (java.io.File. (str path ".fork-new")))

@@ -13,7 +13,7 @@
 ;; to a one-time bootstrap SEED of cardinality FACTS, so commit! consults ONLY the fact.
 ;;   bb -cp out tests/commit_coexist_elect_test.clj
 (require '[fram.store :as c] '[fram.schema :as s] '[fram.kernel :as ck])
-(load-file "database.clj")   ; new-database/commit!/elect/live-cids-lp/register-pred!/store
+(load-file "database.clj")   ; new-database/commit!/elect!/live-cids-lp/register-pred!/store
 
 (let [log "/tmp/store-coexist-elect-test.log"
       db (new-database log)
@@ -36,7 +36,7 @@
   (let [r1 (commit! db "agentB" "T1" "zzz_coexist" :assert "alice" 0)   ; cid-earlier (written first)
         r2 (commit! db "agentA" "T1" "zzz_coexist" :assert "bob"   0)   ; cid-later
         live   (live-of "T1" "zzz_coexist")
-        winner (elect db live)]
+        winner (elect! db live)]
     (chk "coexist: both rival writes COMMITTED — no writer blocked or rejected"
          (and (:ok r1) (:ok r2)))
     (chk "coexist: BOTH facts live as multi (no supersede, no idempotent no-op)"
@@ -44,9 +44,9 @@
     (chk "elect: winner is the EARLIEST-cid fact"
          (= winner (apply min live)))
     (chk "elect: deterministic — input-order-INDEPENDENT (reversed input, same winner)"
-         (= winner (elect db (vec (reverse live)))))
+         (= winner (elect! db (vec (reverse live)))))
     (chk "elect: stable across repeated reads"
-         (= winner (elect db live) (elect db live)))
+         (= winner (elect! db live) (elect! db live)))
     ;; the elected value renders to the earliest writer's value (agentB wrote first -> earlier cid)
     (chk "elect: the elected member's VALUE is the earliest writer's"
          (= "alice" (c/literal (store db) (:r (c/fact-of (store db) winner))))))

@@ -75,7 +75,7 @@
 (defn encode-request [operation payload]
   (let [id (swap! request-id inc)]
     [id
-     (wire/encode-rpc-frame-v1!
+     (wire/encode-rpc-frame-v2!
       (wire/rpc-request-frame
        id
        (wire/rpc-request! space operation nil nil nil payload)))]))
@@ -91,7 +91,7 @@
 
 (defn expect-response! [filename request-id operation served-version payload]
   (let [response
-        (wire/encode-rpc-frame-v1!
+        (wire/encode-rpc-frame-v2!
          (wire/rpc-response-frame
           request-id
           (wire/rpc-response!
@@ -117,7 +117,7 @@
           (emit! verify-manifest "verify-title" "q" :rpc/scan
                  (wire/rpc-triple-pattern! title-subject :wiki/title nil))
           expected-title-response
-          (wire/encode-rpc-frame-v1!
+          (wire/encode-rpc-frame-v2!
            (wire/rpc-response-frame
             title-request-id
             (wire/rpc-response!

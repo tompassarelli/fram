@@ -27,7 +27,7 @@
       (load-file "pull.clj"))
   (require 'pull))
 (def V (resolve 'pull/validate))
-(def R (resolve 'pull/run))
+(def R (resolve 'pull/run!))
 
 (defn norm [x]
   (walk/postwalk

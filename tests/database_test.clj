@@ -1,7 +1,6 @@
 ;; Authoritative database gate: occurrence identity, OCC, durable FRAMLOG,
 ;; recursive terms, views, supersession, withdrawal, and lease fencing.
-(require '[fram.kernel :as kernel]
-         '[fram.store :as store]
+(require '[fram.store :as store]
          '[fram.types :as t])
 
 (load-file "database.clj")
@@ -38,7 +37,7 @@
   (database/assert! db email {:actor "Tom" :recorded-at recorded
                            :source-frame "database-test"}))
 (def first-event (first (:occurrences first-assertion)))
-(def first-coordinate (kernel/occurrence-of first-event))
+(def first-coordinate (t/operationoccurrence-coordinate first-event))
 (def first-tx (:ok first-assertion))
 
 (check! "first commit returns a transaction-coordinate Triple"
@@ -56,7 +55,7 @@
 
 (def duplicate (database/assert! db email {}))
 (def duplicate-coordinate
-  (kernel/occurrence-of (first (:occurrences duplicate))))
+  (t/operationoccurrence-coordinate (first (:occurrences duplicate))))
 (check! "equal propositions remain separately occurrence-addressable"
         (and (not= first-coordinate duplicate-coordinate)
              (= 2 (count (filter #{email} (database/live-propositions db))))))
@@ -66,21 +65,23 @@
 (check! "exact withdrawal removes only the named equal occurrence"
         (and (:ok withdrawn)
              (= [first-coordinate]
-                (mapv kernel/occurrence-of
-                      (filter #(= email (kernel/proposition-of %))
+                (mapv t/operationoccurrence-coordinate
+                      (filter #(= email (t/operationoccurrence-proposition %))
                               (database/live-occurrences db))))))
 (check! "withdrawal history points to the exact occurrence coordinate"
-        (some #(= duplicate-coordinate (t/triple-t3 %))
+        (some #(= duplicate-coordinate
+                  (t/operationoccurrence-coordinate
+                   (t/withdrawal-assertion %)))
               (:withdrawals withdrawn)))
 
 (def draft (t/triple "Task" :status "draft"))
 (def final (t/triple "Task" :status "final"))
 (def draft-result (database/assert! db draft {}))
 (def draft-coordinate
-  (kernel/occurrence-of (first (:occurrences draft-result))))
+  (t/operationoccurrence-coordinate (first (:occurrences draft-result))))
 (def superseded (database/supersede! db draft-coordinate final {:actor "reviewer"}))
 (def final-coordinate
-  (kernel/occurrence-of (first (:occurrences superseded))))
+  (t/operationoccurrence-coordinate (first (:occurrences superseded))))
 (check! "supersession is an ordinary occurrence-to-occurrence Triple"
         (some #{(t/triple final-coordinate :kernel/supersedes draft-coordinate)}
               (database/supersession-triples db)))
@@ -115,13 +116,14 @@
 (check! "view selection names an occurrence using an ordinary Triple"
         (and (:ok view-result)
              (= [first-coordinate]
-                (mapv kernel/occurrence-of
+                (mapv t/operationoccurrence-coordinate
                       (database/view-occurrences db "review-view")))))
 (database/view-deselect! db "review-view" first-coordinate {})
 (check! "withdrawing the selection empties the view without touching its target"
         (and (empty? (database/view-occurrences db "review-view"))
              (some #{first-coordinate}
-                   (map kernel/occurrence-of (database/live-occurrences db)))))
+                   (map t/operationoccurrence-coordinate
+                        (database/live-occurrences db)))))
 
 (def lease-1 (database/acquire-lease! db "resource-A" "worker-A" 1000 10000))
 (def lease-epoch-1 (:ok lease-1))
@@ -156,7 +158,7 @@
 (check! "commit canonicalizes Float atoms before memory and FRAMLOG diverge"
         (instance? Double
                    (t/triple-t3
-                    (kernel/proposition-of
+                    (t/operationoccurrence-proposition
                      (first (:occurrences numeric-result))))))
 
 (def before-restart (store/dump-term-store (database/database-store db)))
@@ -164,8 +166,9 @@
 (check! "cold FRAMLOG replay reconstructs the exact TermStore v2 dump"
         (= before-restart
            (store/dump-term-store (database/database-store restarted))))
-(check! "cold replay preserves semantic history and effective projections"
-        (and (= (database/history db) (database/history restarted))
+(check! "cold replay preserves system history and effective projections"
+        (and (= (database/occurrences db) (database/occurrences restarted))
+             (= (database/withdrawals db) (database/withdrawals restarted))
              (= (database/live-occurrences db)
                 (database/live-occurrences restarted))))
 

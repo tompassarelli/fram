@@ -12,8 +12,8 @@
     (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))
 
 (def instant (t/instant 1785560000 123456789))
-(def proposition-a (t/triple "Alice" :email "alice@example.com"))
-(def proposition-b (t/triple "Alice" :email "alice@example.com"))
+(def proposition-a (t/triple "Alice" :contactable_at "alice@example.com"))
+(def proposition-b (t/triple "Alice" :contactable_at "alice@example.com"))
 
 ;; A Triple may occupy every slot. `/` inside a keyword is spelling only: it
 ;; asserts no grouping and gets no kernel behavior, which is what the probe atom
@@ -28,18 +28,23 @@
 (def other-space-tx (t/transaction-coordinate "north-telemetry" 1842))
 (def occurrence-0 (t/occurrence-coordinate tx-1842 0))
 (def occurrence-1 (t/occurrence-coordinate tx-1842 1))
+(def occurrence-2 (t/occurrence-coordinate tx-1842 2))
 (def occurrence-next-tx (t/occurrence-coordinate tx-1843 0))
 (def other-space-occurrence (t/occurrence-coordinate other-space-tx 0))
 
-(def assertion-0 (t/assertion-occurrence occurrence-0 proposition-a))
-(def assertion-1 (t/assertion-occurrence occurrence-1 proposition-b))
-(def retraction-1 (t/retraction-occurrence occurrence-1 proposition-b))
-(def withdrawal-1 (t/withdrawal occurrence-1 occurrence-0))
+(def assertion-0
+  (t/operation-occurrence occurrence-0 t/assert-action proposition-a))
+(def assertion-1
+  (t/operation-occurrence occurrence-1 t/assert-action proposition-b))
+(def retraction-2
+  (t/operation-occurrence occurrence-2 t/retract-action proposition-b))
+(def withdrawal-1 (t/withdrawal retraction-2 assertion-1))
+(def mismatched-retraction
+  (t/operation-occurrence occurrence-2 t/retract-action nested-all))
 (def recorded (t/recorded-at occurrence-0 instant))
 
 (def terms
-  [nested-all assertion-0 assertion-1 retraction-1 withdrawal-1 recorded
-   (t/triple 1.5 :float "roundtrip")])
+  [nested-all recorded (t/triple 1.5 :float "roundtrip")])
 
 (def term-store (store/new-term-store "triple-kernel-test"))
 (store/replay-terms! term-store terms)
@@ -86,10 +91,12 @@
     (= tx-1842 (t/triple "msa-space" :kernel/tx-sequence 1842))]
    ["occurrence coordinate is an ordinary nested Triple"
     (= occurrence-1 (t/triple tx-1842 :kernel/op-ordinal 1))]
-   ["same proposition has distinct occurrence coordinates" (not= assertion-0 assertion-1)]
+   ["same proposition has distinct occurrence coordinates"
+    (not= (t/operationoccurrence-coordinate assertion-0)
+          (t/operationoccurrence-coordinate assertion-1))]
    ["assertion occurrence carries proposition unchanged"
-    (and (= proposition-a (t/triple-t3 assertion-0))
-         (= :kernel/asserts (t/triple-t2 assertion-0)))]
+    (and (= proposition-a (t/operationoccurrence-proposition assertion-0))
+         (= :assert (t/operationoccurrence-action assertion-0)))]
    ["ordinal orders occurrences within a transaction" (t/occurrence-before? occurrence-0 occurrence-1)]
    ["transaction sequence orders occurrences within a space" (t/occurrence-before? occurrence-1 occurrence-next-tx)]
    ["different spaces have no shared order"
@@ -99,9 +106,24 @@
     (and (= occurrence-0 (t/triple-t1 recorded))
          (= :kernel/recorded-at (t/triple-t2 recorded))
          (= instant (t/triple-t3 recorded)))]
-   ["retraction and withdrawal use ordinary Triples"
-    (and (= :kernel/retracts (t/triple-t2 retraction-1))
-         (= :kernel/withdraws (t/triple-t2 withdrawal-1)))]
+   ["history records are not semantic Terms"
+    (and (t/operation-occurrence? assertion-0)
+         (t/retraction-occurrence? retraction-2)
+         (t/withdrawal? withdrawal-1)
+         (not (t/term? assertion-0))
+         (not (t/term? withdrawal-1)))]
+   ["withdrawal binds a later retraction to the same assertion"
+    (and (= retraction-2 (t/withdrawal-retraction withdrawal-1))
+         (= assertion-1 (t/withdrawal-assertion withdrawal-1)))]
+   ["withdrawal rejects different proposition content"
+    (= :invalid-withdrawal
+       (error-type #(t/withdrawal mismatched-retraction assertion-1)))]
+   ["withdrawal rejects a retraction that does not follow its assertion"
+    (= :invalid-withdrawal
+       (error-type
+        #(t/withdrawal
+          (t/operation-occurrence occurrence-0 t/retract-action proposition-a)
+          assertion-1)))]
    ["slot-addressed query assigns no positional roles"
     (and (= [nested-t1] (kernel/by-t1 [nested-t1 nested-t2 nested-t3]
                                            proposition-a))

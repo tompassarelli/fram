@@ -4,7 +4,6 @@
 ;; FRAM_MODEL_SEEDS / FRAM_MODEL_OPS override the run; FRAM_MODEL_NEGATIVE=1
 ;; arms the oracle's negative control, which must make this gate FAIL.
 (require '[clojure.string :as str]
-         '[fram.kernel :as kernel]
          '[fram.store :as store]
          '[fram.types :as t])
 
@@ -97,15 +96,16 @@
 ;; ----------------------------------------------------------- op generation
 
 (defn- live-coordinates [m]
-  (mapv t/triple-t1 (model/live-occurrences m)))
+  (mapv t/operationoccurrence-coordinate (model/live-occurrences m)))
 
 (defn- all-coordinates [m]
-  (mapv t/triple-t1 (model/all-events m)))
+  (mapv t/operationoccurrence-coordinate (model/occurrences m)))
 
 (defn- retraction-coordinates [m]
-  (into [] (comp (filter #(= :kernel/retracts (t/triple-t2 %)))
-                 (map t/triple-t1))
-        (model/all-events m)))
+  (into []
+        (comp (filter #(= :retract (t/operationoccurrence-action %)))
+              (map t/operationoccurrence-coordinate))
+        (model/occurrences m)))
 
 (defn- unknown-coordinate [m]
   (model/occ-coordinate
@@ -173,14 +173,13 @@
       {:kind :assert :proposition proposition
        :options (assoc (gen-options rand-int) :base (gen-base rand-int m))}
 
-      ;; Forged relation-shaped propositions: an ordinary assertion whose
-      ;; content matches (occurrence :kernel/supersedes|:kernel/withdraws
-      ;; occurrence) suppresses its target exactly like an engine-minted one.
+      ;; Supersession remains an ordinary asserted domain proposition. A
+      ;; proposition with this shape suppresses its target in the effective
+      ;; live projection; physical withdrawal is represented separately.
       (< roll 94)
       {:kind :assert
        :proposition (t/triple (gen-target rand-int m)
-                              (if (< (rand-int 100) 50)
-                                :kernel/supersedes :kernel/withdraws)
+                              :kernel/supersedes
                               (gen-target rand-int m))
        :options {}}
 
@@ -245,6 +244,17 @@
 
 (defn render [value]
   (cond
+    (t/operation-occurrence? value)
+    (str "#occurrence[" (render-term (t/operationoccurrence-coordinate value))
+         " " (pr-str (t/operationoccurrence-action value))
+         " " (render-term (t/operationoccurrence-proposition value)) "]")
+    (t/withdrawal? value)
+    (str "#withdrawal["
+         (render-term (t/operationoccurrence-coordinate
+                       (t/withdrawal-retraction value)))
+         " "
+         (render-term (t/operationoccurrence-coordinate
+                       (t/withdrawal-assertion value))) "]")
     (t/triple? value) (render-term value)
     (t/instant? value) (render-term value)
     (map? value) (str "{" (str/join ", " (map (fn [[k v]] (str (render k) " " (render v)))
@@ -272,23 +282,27 @@
    derived from one already checked here."
   ([m db] (compare-projections m db false))
   ([m db exhaustive?]
-   (let [engine-history (database/history db)
+   (let [engine-occurrences (database/occurrences db)
+         engine-withdrawals (database/withdrawals db)
          engine-live (database/live-occurrences db)
-         model-history (model/history m)
+         model-occurrences (model/occurrences m)
+         model-withdrawals (model/withdrawals m)
          model-live (model/live-occurrences m)
          model-live-propositions (model/live-propositions m)]
      (some identity
            [(diff :current-transaction
                   (model/current-transaction m) (database/current-transaction db))
-            (diff :history-length (count model-history) (count engine-history))
+            (diff :occurrence-count
+                  (count model-occurrences) (count engine-occurrences))
+            (diff :withdrawal-count
+                  (count model-withdrawals) (count engine-withdrawals))
             (diff :live-proposition-count (count model-live-propositions)
                   (count engine-live))
             (diff :live-propositions model-live-propositions
-                  (mapv kernel/proposition-of engine-live))
+                  (mapv t/operationoccurrence-proposition engine-live))
             (diff :live-occurrences model-live engine-live)
-            (diff :history model-history engine-history)
-            (diff :withdrawal-triples
-                  (model/withdrawal-triples m) (database/withdrawal-triples db))
+            (diff :occurrences model-occurrences engine-occurrences)
+            (diff :withdrawals model-withdrawals engine-withdrawals)
             (diff :supersession-triples
                   (model/supersession-triples m) (database/supersession-triples db))
             (diff :store-live-propositions
@@ -299,9 +313,10 @@
                     model-live-propositions (database/live-propositions db)))]))))
 
 (defn compare-occurrence-resolution [db receipt]
-  (some (fn [event]
-          (let [coordinate (t/triple-t1 event)]
-            (diff :occurrence-resolution event (database/occurrence db coordinate))))
+  (some (fn [occurrence]
+          (let [coordinate (t/operationoccurrence-coordinate occurrence)]
+            (diff :occurrence-resolution occurrence
+                  (database/occurrence db coordinate))))
         (:occurrences receipt)))
 
 (defn compare-temporal-projections [m db]
@@ -315,18 +330,18 @@
         postings (store/operation-postings root)
         positions (store/operation-candidate-positions
                    root lower upper nil nil postings)
-        actual-events
+        actual-occurrences
         (mapv (fn [position]
                 (let [[coordinate action proposition]
                       (store/occurrence-tuple-at root position)]
-                  (t/triple coordinate action proposition)))
+                  (t/operation-occurrence coordinate action proposition)))
               positions)]
     (or (diff :as-of-live-propositions
               (model/store-live-propositions-as-of m upper)
               (store/live-propositions context))
-        (diff :since-occurrence-events
-              (model/operation-events-between m lower upper)
-              actual-events))))
+        (diff :since-occurrences
+              (model/occurrences-between m lower upper)
+              actual-occurrences))))
 
 (defn- guarded [f]
   (try
@@ -378,7 +393,8 @@
             {:mismatch (assoc mismatch :index :cold-restart)}
             {:stats {:ops (count ops)
                      :committed committed
-                     :history (count (database/history db))
+                     :occurrences (count (database/occurrences db))
+                     :withdrawals (count (database/withdrawals db))
                      :live (count (database/live-propositions db))
                      :log-bytes (.length file)}}))
         (let [op (nth ops index)
@@ -442,9 +458,11 @@
         opened-model (reduce (fn [acc op] (:model (model-apply acc op)))
                              (model/new-model space-id) opened)
         latest (fn [m projection]
-                 (some-> (filterv #(= deep (t/triple-t3 %)) (projection m))
+                 (some-> (filterv #(= deep
+                                      (t/operationoccurrence-proposition %))
+                                   (projection m))
                          peek
-                         t/triple-t1))
+                         t/operationoccurrence-coordinate))
         withdrawn (conj opened {:kind :withdraw
                                 :target (latest opened-model
                                                 model/store-live-occurrences)
@@ -472,9 +490,10 @@
       (do (swap! failures inc)
           (println (format "  [FAIL] seed 0x%X — %d ops" (long seed) (count ops)))
           (report-failure! seed ops mismatch))
-      (println (format "  [PASS] seed 0x%X — %d ops, %d commits, %d history, %d live, %d log bytes"
+      (println (format "  [PASS] seed 0x%X — %d ops, %d commits, %d occurrences, %d withdrawals, %d live, %d log bytes"
                        (long seed) (:ops stats) (:committed stats)
-                       (:history stats) (:live stats) (:log-bytes stats))))))
+                       (:occurrences stats) (:withdrawals stats)
+                       (:live stats) (:log-bytes stats))))))
 
 (let [ops (deep-arm-ops)
       {:keys [mismatch stats]} (run-sequence ops)]
@@ -482,8 +501,9 @@
     (do (swap! failures inc)
         (println (format "  [FAIL] deep arm — %d ops" (count ops)))
         (report-failure! 0xDEE9 ops mismatch))
-    (println (format "  [PASS] deep arm — %d ops at Term depth 240/248, %d history, %d log bytes"
-                     (:ops stats) (:history stats) (:log-bytes stats)))))
+    (println (format "  [PASS] deep arm — %d ops at Term depth 240/248, %d occurrences, %d withdrawals, %d log bytes"
+                     (:ops stats) (:occurrences stats) (:withdrawals stats)
+                     (:log-bytes stats)))))
 
 (def elapsed-ms (quot (- (System/nanoTime) started) 1000000))
 

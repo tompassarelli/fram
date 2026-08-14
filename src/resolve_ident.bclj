@@ -13,7 +13,7 @@
 ;; complement at the write boundary, so no stored value is ever node-shaped.
 ;;
 ;; Integers in the `[subject predicate object]` EDN projection are VIEW
-;; coordinates handed out by `ordinal`, never identity; `load-edn!` lifts them
+;; coordinates handed out by `ordinal!`, never identity; `load-edn!` lifts them
 ;; back into fresh coordinates.
 ;;
 ;; A Graph carries the store root with the rotation built from it (fram.schema's
@@ -63,11 +63,11 @@
    (writers Any)
    (ordinals (Atom (Map Any Int)))])
 
-(defn graph [(store (Atom t/TermStore)) (writers Any)] Graph
+(defn graph! [(store (Atom t/TermStore)) (writers Any)] Graph
   (->Graph store (atom (rot/project! store)) writers (atom no-ordinals)))
 
-(defn new-graph [(space-id String)] Graph
-  (graph (c/new-term-store space-id) {}))
+(defn new-graph! [(space-id String)] Graph
+  (graph! (c/new-term-store space-id) {}))
 
 (defn store-of [(g Graph)] (Atom t/TermStore) (graph-store g))
 
@@ -87,7 +87,7 @@
 
 ;; The projection's dense integer for a node, assigned on first sight in mint
 ;; order: a coordinate inside one emitted EDN file, never read back as identity.
-(defn ordinal [(g Graph) (node Any)] Int
+(defn ordinal! [(g Graph) (node Any)] Int
   (let [(book (Map Any Int)) (deref (graph-ordinals g)) (hit Int?) (get book node)]
     (if (some? hit)
       hit
@@ -109,8 +109,10 @@
   (rot/occurrences (rot/by-t23 (view g) predicate value)))
 
 (defn proposition-at [(g Graph) (occurrence Any)] Any
-  (let [(event t/Triple?) (rot/event-at (view g) occurrence)]
-    (if (nil? event) nil (rot/proposition-of event))))
+  (let [(event t/OperationOccurrence?) (rot/event-at (view g) occurrence)]
+    (if (nil? event)
+      nil
+      (t/operationoccurrence-proposition event))))
 
 (defn subject-at [(g Graph) (occurrence Any)] Any
   (let [(p Any) (proposition-at g occurrence)]
@@ -159,14 +161,14 @@
 ;; Withdrawals are the successor of the old superseded list: one per retired
 ;; assertion, so an edit's supersede count is still directly observable.
 (defn withdrawal-count [(g Graph)] Int
-  (count (c/withdrawal-triples (graph-store g))))
+  (count (c/withdrawals (graph-store g))))
 
 (defn open [(g Graph)] (Atom txn/Builder) (txn/open (graph-store g)))
 
 ;; Emits no operation: an ordinal against the builder's pinned transaction
 ;; coordinate, durable as soon as that transaction commits anything else.
 (defn mint! [(g Graph) (b (Atom txn/Builder))] Any
-  (let [(node t/Triple) (txn/mint! b)] (do (ordinal g node) node)))
+  (let [(node t/Triple) (txn/mint! b)] (do (ordinal! g node) node)))
 
 (defn assert-on!
   [(b (Atom txn/Builder)) (subject Any) (predicate Any) (value Any)] Any

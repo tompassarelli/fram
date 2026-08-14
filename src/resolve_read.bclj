@@ -249,8 +249,8 @@
 
 ;; A fresh builder stages nothing, so the graph's own committed projection is
 ;; already the effective view.
-(defn context [(store (Atom t/TermStore))] ri/Graph
-  (ri/graph store {builder-key (txn/open store)}))
+(defn context! [(store (Atom t/TermStore))] ri/Graph
+  (ri/graph! store {builder-key (txn/open store)}))
 
 (defn mint! [(context ri/Graph)] t/Triple
   (txn/mint! (builder context)))
@@ -278,15 +278,16 @@
         (resync! context)
         coordinate)))
 
-(defn events-by-subject [(context ri/Graph) (subject Any)] (Vec t/Triple)
+(defn events-by-subject
+  [(context ri/Graph) (subject Any)] (Vec t/OperationOccurrence)
   (rot/by-t1 (ri/view context) subject))
 
 (defn events-by-subject-predicate
-  [(context ri/Graph) (subject Any) (predicate Any)] (Vec t/Triple)
+  [(context ri/Graph) (subject Any) (predicate Any)] (Vec t/OperationOccurrence)
   (rot/by-t12 (ri/view context) subject predicate))
 
-(defn event-predicate [(event t/Triple)] Any
+(defn event-predicate [(event t/OperationOccurrence)] Any
   (t/triple-t2 (rot/proposition-of event)))
 
-(defn event-value [(event t/Triple)] Any
+(defn event-value [(event t/OperationOccurrence)] Any
   (t/triple-t3 (rot/proposition-of event)))

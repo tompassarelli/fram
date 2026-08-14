@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import {
   FRAMRPC_MAX_BATCH_ACTIONS,
+  FRAMRPC_VERSION,
   FramRpcError,
   float64Term,
   float64Value,
@@ -32,6 +33,15 @@ async function check(label, body) {
   await body();
   checks.push(label);
   console.log(`  [PASS] ${label}`);
+}
+
+function assertOccurrenceCoordinate(value, sequence, ordinal) {
+  assert.equal(value[0], 'triple');
+  assert.equal(value[1][0], 'triple');
+  assert.deepEqual(value[1][2], keywordTerm('kernel/tx-sequence'));
+  assert.deepEqual(value[1][3], integerTerm(sequence));
+  assert.deepEqual(value[2], keywordTerm('kernel/op-ordinal'));
+  assert.deepEqual(value[3], integerTerm(ordinal));
 }
 
 async function freePort() {
@@ -152,6 +162,7 @@ async function exerciseClient(fram) {
   });
 
   await check('Term constructors preserve i64, float, recursive Triple, and Instant identity', async () => {
+    assert.deepEqual(FRAMRPC_VERSION, { major: 2, minor: 0 });
     assert.equal(FRAMRPC_MAX_BATCH_ACTIONS, 247);
     assert.equal(SCHEMA_MAX_BATCH_ACTIONS, FRAMRPC_MAX_BATCH_ACTIONS);
     assert.deepEqual(integerTerm(I64_MIN), ['integer', '-9223372036854775808']);
@@ -192,7 +203,8 @@ async function exerciseClient(fram) {
     });
     assert.equal(response.servedVersion, 1n);
     assert.equal(response.result.length, 1);
-    assert.equal(response.result[0].changed, true);
+    assert.equal(response.result[0].stateChanged, true);
+    assertOccurrenceCoordinate(response.result[0].occurrence, 1n, 0n);
     firstVersion = response.servedVersion;
 
     const nested = await fram.assert(
@@ -210,7 +222,9 @@ async function exerciseClient(fram) {
       { op: 'assert', t1: '@doc-c', t2: keywordTerm('title'), t3: 'Other Notes' },
     ], { expectedVersion: 2n });
     assert.equal(batch.servedVersion, 3n);
-    assert.deepEqual(batch.result.map(result => result.changed), [true, true]);
+    assert.deepEqual(batch.result.map(result => result.stateChanged), [true, true]);
+    assertOccurrenceCoordinate(batch.result[0].occurrence, 3n, 0n);
+    assertOccurrenceCoordinate(batch.result[1].occurrence, 3n, 1n);
 
     await assert.rejects(
       fram.assert('@stale', keywordTerm('title'), 'must not land', { expectedVersion: 0n }),
@@ -297,6 +311,16 @@ async function exerciseClient(fram) {
     const occurrences = await fram.occurrences({ page: { limit: 16 } });
     const validation = await fram.validate();
     assert(occurrences.result.length >= 4);
+    for (const occurrence of occurrences.result) {
+      assert.deepEqual(Object.keys(occurrence).sort(), ['action', 'coordinate', 'proposition']);
+      assert(['assert', 'retract'].includes(occurrence.action));
+      assert.equal(occurrence.proposition[0], 'triple');
+      assertOccurrenceCoordinate(
+        occurrence.coordinate,
+        BigInt(occurrence.coordinate[1][3][1]),
+        BigInt(occurrence.coordinate[3][1]),
+      );
+    }
     assert.equal(validation.result.valid, true);
     assert(Array.isArray(validation.result.violations));
   });
@@ -316,9 +340,16 @@ async function exerciseClient(fram) {
 
   await check('retract completes the closed thirteen-operation client surface', async () => {
     const response = await fram.retract('@doc-c', keywordTerm('title'), 'Other Notes');
-    assert.equal(response.result[0].changed, true);
+    assert.equal(response.result[0].stateChanged, true);
+    assertOccurrenceCoordinate(response.result[0].occurrence, response.servedVersion, 0n);
     const scan = await fram.scan({ t1: '@doc-c' });
     assert.equal(scan.result.length, 0);
+
+    const beforeNoMatch = (await fram.version()).servedVersion;
+    const noMatch = await fram.retract('@missing', keywordTerm('title'), 'Missing');
+    assert.equal(noMatch.servedVersion, beforeNoMatch + 1n);
+    assert.equal(noMatch.result[0].stateChanged, false);
+    assertOccurrenceCoordinate(noMatch.result[0].occurrence, noMatch.servedVersion, 0n);
   });
 
   await check('schema writes compose identity guards and occurrence-correct replacement on the live server', async () => {

@@ -83,10 +83,10 @@
 (defn ^String segment-path [^String store-path ^String sha256]
   (if (valid-segment-name? sha256) (str (segments-directory store-path) "/" sha256) (fail (str "segment name is not a SHA-256 hex digest: " sha256) :invalid-segment-name)))
 
-(defn ^String ref-path [^String store-path ^String branch]
+(defn ^String ref-path! [^String store-path ^String branch]
   (str (refs-directory store-path) "/" (require-branch-name! branch)))
 
-(defn ^String branch-tail-path [^String store-path ^String branch]
+(defn ^String branch-tail-path! [^String store-path ^String branch]
   (if (= (require-branch-name! branch) default-branch) store-path (str (branches-directory store-path) "/" branch)))
 
 (defn ^String snapshot-path [^String tail-path]

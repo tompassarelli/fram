@@ -63,7 +63,7 @@ jobs:
         with:
           repository: Autonymy/beagle
           # Pin matches flake.nix's beagle.url rev; keep them in sync.
-          ref: 073f23a67b7fc93d86fbf60dcc1a821343dbb137
+          ref: d7e60c00c1006018e6394cab8a5e3ce449ee972a
           path: .beagle
 
       - name: Verify the checked-out Beagle compiler pin
@@ -221,7 +221,7 @@ jobs:
         with:
           repository: Autonymy/beagle
           # Pin matches flake.nix's beagle.url rev; keep them in sync.
-          ref: 073f23a67b7fc93d86fbf60dcc1a821343dbb137
+          ref: d7e60c00c1006018e6394cab8a5e3ce449ee972a
           path: .beagle
 
       - name: Verify the checked-out Beagle compiler pin
@@ -641,8 +641,8 @@ jobs:
           [[ "$(adapter_value release-tag)" == "$RELEASE_TAG" ]]
           [[ "$(adapter_value release-tag-object)" == "$RELEASE_TAG_OBJECT" ]]
           [[ "$(adapter_value package-name)" == @tompassarelli/fram-cloudflare-do ]]
-          [[ "$(adapter_value package-version)" == 0.2.0 ]]
-          adapter_name="tompassarelli-fram-cloudflare-do-0.2.0.tgz"
+          [[ "$(adapter_value package-version)" == 0.3.0 ]]
+          adapter_name="tompassarelli-fram-cloudflare-do-0.3.0.tgz"
           [[ "$(adapter_value archive-name)" == "$adapter_name" ]]
           [[ "$(basename "$ADAPTER_ARCHIVE")" == "$adapter_name" ]]
           [[ "$(sha256sum "$ADAPTER_ARCHIVE" | awk '{print $1}')" == \

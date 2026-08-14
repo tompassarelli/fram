@@ -171,14 +171,18 @@
                 (database/current-transaction runtime-a))
              (not (some #{(t/triple "Alice" "email" "alice@example.com")}
                         (database/live-propositions runtime-a)))
-             (every? t/triple? (database/history runtime-a))))
+             (every? t/operation-occurrence?
+                     (database/occurrences runtime-a))
+             (every? t/withdrawal? (database/withdrawals runtime-a))))
 (check! "Deflate migration boots with identical database state and history"
         (and (= (database/current-transaction runtime-a)
                 (database/current-transaction deflate-runtime-a))
              (= (database/live-propositions runtime-a)
                 (database/live-propositions deflate-runtime-a))
-             (= (database/history runtime-a)
-                (database/history deflate-runtime-a))))
+             (= (database/occurrences runtime-a)
+                (database/occurrences deflate-runtime-a))
+             (= (database/withdrawals runtime-a)
+                (database/withdrawals deflate-runtime-a))))
 (check! "Deflate migration result reports its sealed encoding"
         (= {:encoding :deflate :framlog-flags 1 :framlog-version 1}
            (select-keys (:output deflate-result-a)
@@ -242,14 +246,18 @@
                     :kernel/op-ordinal 0]]
                   (:triple %))
               tx5-ops))
+(check! "retraction row physically matches the active assertion proposition"
+        (= (:triple (nth tx5-ops 1)) (:triple (nth tx5-ops 2))))
 (check! "retraction occurrence withdraws the active assertion occurrence"
-        (some #(= [[["msa-space" :kernel/tx-sequence 5]
-                    :kernel/op-ordinal 2]
-                   :kernel/withdraws
-                   [["msa-space" :kernel/tx-sequence 5]
-                    :kernel/op-ordinal 1]]
-                  (:triple %))
-              tx5-ops))
+        (some #(and (= (t/occurrence-coordinate
+                        (t/transaction-coordinate "msa-space" 5) 2)
+                       (t/operationoccurrence-coordinate
+                        (t/withdrawal-retraction %)))
+                    (= (t/occurrence-coordinate
+                        (t/transaction-coordinate "msa-space" 5) 1)
+                       (t/operationoccurrence-coordinate
+                        (t/withdrawal-assertion %))))
+              (database/withdrawals runtime-a)))
 (check! "parseable recorded-at is a typed Instant"
         (some #(= (java.time.Instant/parse "2026-08-01T10:31:22.123456789Z")
                   (nth (:triple %) 2 nil))
@@ -260,7 +268,7 @@
 (def summary (:summary (edn/read-string manifest-a)))
 (check! "manifest records source/synthetic/retraction counts and zero flat-log cids"
         (= {:assertions 2 :diagnostic-count 1 :legacy-cid-count 0 :noop-retractions 1
-            :retractions 2 :source-operations 4 :synthetic-operations 8
+            :retractions 2 :source-operations 4 :synthetic-operations 7
             :targeted-retractions 1 :transactions 2
             :unparseable-recorded-at 1}
            summary))

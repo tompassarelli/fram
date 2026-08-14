@@ -7,7 +7,7 @@
 ;; coexistence, "merge" demoted to a per-view read-time choice (VIEWS_AND_BRANCHES §8).
 ;;   bb -cp out tests/snapshot_views_test.clj
 (require '[fram.store :as c] '[fram.schema :as s])
-(load-file "database.clj")   ; new-database/commit!/commit-on-view!/select!/view-selects/elect/live-cids-lp/store
+(load-file "database.clj")   ; new-database/commit!/commit-on-view!/select!/view-selects!/elect!/live-cids-lp/store
 
 (let [log "/tmp/store-views-test.log"
       db (new-database log)
@@ -30,46 +30,46 @@
 
     ;; ---- (2) per-branch isolation: each view elects its OWN rival ----
     (chk "main (default view) elects the EARLIEST-cid bare base fact"
-         (= "base" (val-of (elect db live))))
+         (= "base" (val-of (elect! db live))))
     (chk "main: 2-arity == 3-arity nil view (byte-identical default election)"
-         (= (elect db live) (elect db nil live)))
-    (chk "branch b1 elects b1's OWN selected rival" (= "b1val" (val-of (elect db "@view:b1" live))))
-    (chk "branch b2 elects b2's OWN selected rival" (= "b2val" (val-of (elect db "@view:b2" live))))
+         (= (elect! db live) (elect! db nil live)))
+    (chk "branch b1 elects b1's OWN selected rival" (= "b1val" (val-of (elect! db "@view:b1" live))))
+    (chk "branch b2 elects b2's OWN selected rival" (= "b2val" (val-of (elect! db "@view:b2" live))))
     (chk "isolation: b1, b2, main each elect a DISTINCT fact"
-         (apply distinct? (map #(elect db % live) ["@view:b1" "@view:b2" nil])))
+         (apply distinct? (map #(elect! db % live) ["@view:b1" "@view:b2" nil])))
     (chk "isolation: a branch write NEVER changes main's election"
-         (= "base" (val-of (elect db nil live))))
+         (= "base" (val-of (elect! db nil live))))
 
     ;; ---- (3) view-selects reads the overlay; select! is idempotent ----
     (chk "view-selects: b1 selects EXACTLY its one rival"
-         (= #{(:cid b1)} (view-selects db "@view:b1")))
+         (= #{(:cid b1)} (view-selects! db "@view:b1")))
     (chk "select!: re-selecting a cid is idempotent (no duplicate overlay edge)"
          (and (:idempotent (select! db "@view:b1" (:cid b1)))
-              (= 1 (count (view-selects db "@view:b1"))))))
+              (= 1 (count (view-selects! db "@view:b1"))))))
 
   ;; ---- (4) inherit-the-base: a view SILENT on a (s,p) falls back to main ----
   (commit! db "main" "T" "size" :assert "M" nil)            ; only main writes (T,size)
   (let [live (live-of "T" "size")]
     (chk "inherit: a branch silent on (T,size) inherits main's election"
-         (= "M" (val-of (elect db "@view:b1" live))))
+         (= "M" (val-of (elect! db "@view:b1" live))))
     (chk "inherit: an UNKNOWN view selects nothing -> inherits main"
-         (= "M" (val-of (elect db "@view:never" live)))))
+         (= "M" (val-of (elect! db "@view:never" live)))))
 
   ;; ---- (5) within-view election is deterministic (the elect-everywhere-identical guarantee) ----
   (let [live (live-of "T" "color")]
     (chk "view election is input-order-INDEPENDENT (reversed input, same winner)"
-         (= (elect db "@view:b1" live) (elect db "@view:b1" (vec (reverse live)))))
+         (= (elect! db "@view:b1" live) (elect! db "@view:b1" (vec (reverse live)))))
     (chk "view election is STABLE across repeated reads"
-         (= (elect db "@view:b2" live) (elect db "@view:b2" live))))
+         (= (elect! db "@view:b2" live) (elect! db "@view:b2" live))))
 
   ;; ---- (6) durability: per-branch selection survives a replay of the log ----
   (let [st2  (replay log)
         co2  {:store st2 :log nil :lock (Object.)}
         live (vec (live-cids-lp co2 (s/resolve-name st2 "T") (c/value-id st2 "color")))]
     (chk "replay: branch b1 still elects b1val after a cold log replay"
-         (= "b1val" (c/literal st2 (:r (c/fact-of st2 (elect co2 "@view:b1" live))))))
+         (= "b1val" (c/literal st2 (:r (c/fact-of st2 (elect! co2 "@view:b1" live))))))
     (chk "replay: main still elects base after a cold log replay"
-         (= "base" (c/literal st2 (:r (c/fact-of st2 (elect co2 live)))))))
+         (= "base" (c/literal st2 (:r (c/fact-of st2 (elect! co2 live)))))))
 
   (let [cs @checks fails (remove second cs)]
     (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))

@@ -1,7 +1,6 @@
 ;; Authoritative TermStore occurrence history.
 ;;   env -u FRAM_TELEMETRY_LOG bb -cp out tests/store_test.clj
-(require '[fram.kernel :as kernel]
-         '[fram.store :as store]
+(require '[fram.store :as store]
          '[fram.types :as t])
 
 (defn error-type [f]
@@ -10,7 +9,7 @@
     nil
     (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))
 
-(def proposition (t/triple "Alice" :email "alice@example.com"))
+(def proposition (t/triple "Alice" :contactable_at "alice@example.com"))
 (def nested-proposition
   (t/triple (t/triple "Alice" :account "primary")
             (t/triple :slot "email" 2)
@@ -27,28 +26,30 @@
 (def assertions-after-tx1 (store/live-occurrences ctx))
 (def first-assertion (nth assertions-after-tx1 0))
 (def second-assertion (nth assertions-after-tx1 1))
-(def first-coordinate (kernel/occurrence-of first-assertion))
-(def second-coordinate (kernel/occurrence-of second-assertion))
+(def first-coordinate (t/operationoccurrence-coordinate first-assertion))
+(def second-coordinate (t/operationoccurrence-coordinate second-assertion))
 
 ;; Retractions withdraw the most recent live occurrence of equal content.
 (def tx2 (store/commit-transaction! ctx [(store/retract-operation proposition)]))
 (def live-after-first-retract (store/live-occurrences ctx))
-(def withdrawals-after-first-retract (store/withdrawal-triples ctx))
+(def withdrawals-after-first-retract (store/withdrawals ctx))
 
 (def tx3 (store/commit-transaction! ctx [(store/retract-operation proposition)]))
 (def live-after-second-retract (store/live-occurrences ctx))
-(def withdrawals-after-second-retract (store/withdrawal-triples ctx))
+(def withdrawals-after-second-retract (store/withdrawals ctx))
 
 ;; A retraction with no live target remains an exact history occurrence but
 ;; does not invent a withdrawal edge.
 (def tx4 (store/commit-transaction! ctx [(store/retract-operation proposition)]))
-(def occurrences-after-noop (store/operation-occurrences ctx))
-(def withdrawals-after-noop (store/withdrawal-triples ctx))
+(def occurrences-after-noop (store/occurrences ctx))
+(def withdrawals-after-noop (store/withdrawals ctx))
 
 (def tx5 (store/commit-transaction! ctx [(store/assert-operation nested-proposition)]))
 (def dump (store/dump-term-store ctx))
-(def history (store/semantic-history ctx))
-(def occurrences (store/operation-occurrences ctx))
+(def occurrences (store/occurrences ctx))
+(def withdrawals (store/withdrawals ctx))
+(def withdrawal-window
+  (store/withdrawal-tuples-between (deref ctx) 2 3))
 (def historical-frames-result
   (store/transaction-frames-between-result (deref ctx) -1 5))
 
@@ -164,18 +165,22 @@
          (= (t/occurrence-coordinate tx1 0) first-coordinate)
          (= (t/occurrence-coordinate tx1 1) second-coordinate))]
    ["two equal assertions preserve the same proposition"
-    (and (= proposition (kernel/proposition-of first-assertion))
-         (= proposition (kernel/proposition-of second-assertion)))]
+    (and (= proposition (t/operationoccurrence-proposition first-assertion))
+         (= proposition (t/operationoccurrence-proposition second-assertion)))]
    ["first retraction withdraws the most recent matching occurrence"
     (and (= [first-assertion] live-after-first-retract)
          (= 1 (count withdrawals-after-first-retract))
          (= second-coordinate
-            (kernel/withdrawal-target (first withdrawals-after-first-retract))))]
+            (t/operationoccurrence-coordinate
+             (t/withdrawal-assertion
+              (first withdrawals-after-first-retract)))))]
    ["second retraction withdraws the earlier matching occurrence"
     (and (empty? live-after-second-retract)
          (= 2 (count withdrawals-after-second-retract))
          (= first-coordinate
-            (kernel/withdrawal-target (second withdrawals-after-second-retract))))]
+            (t/operationoccurrence-coordinate
+             (t/withdrawal-assertion
+              (second withdrawals-after-second-retract)))))]
    ["no-target retraction is history without a fabricated withdrawal"
     (and (= 5 (count occurrences-after-noop))
          (= 2 (count withdrawals-after-noop)))]
@@ -196,8 +201,14 @@
    ["physical operation identity contains no wall-clock field"
     (= #{:tx-sequence :ordinal :action :triple-handle}
        (set (keys first-row)))]
-   ["semantic projection consists only of Triples"
-    (and (every? t/triple? occurrences) (every? t/triple? history))]
+   ["history projection uses non-Term system records"
+    (and (every? t/operation-occurrence? occurrences)
+         (every? t/withdrawal? withdrawals)
+         (not-any? t/term? occurrences)
+         (not-any? t/term? withdrawals))]
+   ["withdrawal/2 windows on the retraction and projects coordinates"
+    (= [[(t/occurrence-coordinate tx3 0) first-coordinate]]
+       withdrawal-window)]
    ["typed historical frame outcomes reject corrupt state before resolution"
     (and (store/transactionframesresult-ok historical-frames-result)
          (= (store/transaction-frames-between (deref ctx) -1 5)
@@ -228,8 +239,9 @@
          (= 6 (t/termstoredump-next-sequence dump)))]
    ["dump/load preserves authoritative rows exactly"
     (= dump (store/dump-term-store restored))]
-   ["dump/load rebuilds identical semantic history"
-    (and (= history (store/semantic-history restored))
+   ["dump/load rebuilds identical system history"
+    (and (= occurrences (store/occurrences restored))
+         (= withdrawals (store/withdrawals restored))
          (= (store/live-occurrences ctx) (store/live-occurrences restored)))]
    ["typed load outcomes preserve success and reject before mutation"
     (and (store/termstoreloadresult-ok successful-load)
@@ -264,10 +276,12 @@
    ["active occurrence index growth preserves exact withdrawal state"
     (and (= 257 growth-live-count)
          (empty? (store/live-occurrences growth-context))
-         (= 257 (count (store/withdrawal-triples growth-context)))
+         (= 257 (count (store/withdrawals growth-context)))
          (= growth-dump (store/dump-term-store growth-restored))
-         (= (store/semantic-history growth-context)
-            (store/semantic-history growth-restored)))]
+         (= (store/occurrences growth-context)
+            (store/occurrences growth-restored))
+         (= (store/withdrawals growth-context)
+            (store/withdrawals growth-restored)))]
    ["a fold-open child cannot change its parent's version or liveness"
     (and (= 1 fork-parent-after-child-version)
          (= [fork-proposition] fork-parent-after-child-live))]

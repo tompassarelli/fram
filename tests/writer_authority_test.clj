@@ -1,4 +1,4 @@
-;; Writer authority and FRAMRPC v1 JVM server integration.
+;; Writer authority and FRAMRPC v2 JVM server integration.
 (require '[babashka.process :as process]
          '[clojure.java.io :as io]
          '[clojure.string :as str]
@@ -94,13 +94,12 @@
           response (direct-request!
                     space :rpc/assert
                     (wire/rpc-write! proposition wire/rpc-subject-any nil))
-          [[_ changed occurrences]]
+          [[_ changed coordinate]]
           (let [[results]
                 (wire/rpc-record-fields!
                  (t/rpc-response-payload-value response) :rpc/mutation-result 1)]
             (mapv #(wire/rpc-record-fields! % :rpc/action-result 3)
-                  (wire/rpc-list-values! results)))
-          [coordinate] (wire/rpc-list-values! occurrences)]
+                  (wire/rpc-list-values! results)))]
       (check! "active write returns logical version and occurrence coordinate"
               (and changed (= 1 (t/rpcresponse-served-version response))
                    (t/occurrence-coordinate? coordinate)
@@ -145,7 +144,7 @@
     (finally (server/shutdown!))))
 
 ;; One active JVM writer, one JVM standby, and a refused duplicate active over
-;; the same canonical FRAMLOG. All client traffic is FRAMRPC v1 binary.
+;; the same canonical FRAMLOG. All client traffic is FRAMRPC v2 binary.
 (let [log (str (io/file scratch "shared.framlog"))
       space "shared-space"
       active-port (free-port)

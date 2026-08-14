@@ -1,5 +1,5 @@
 // Zero-dependency Cloudflare Worker client for the JSON edge representation of
-// FRAMRPC v1. Every data value is one exact tagged Term array; integers stay
+// FRAMRPC v2. Every data value is one exact tagged Term array; integers stay
 // decimal strings and float identity stays IEEE-754 bits across JSON runtimes.
 
 const MAX_JSON_BYTES = 1024 * 1024;
@@ -229,6 +229,21 @@ function scanPayload(pattern) {
   ]);
 }
 
+function querySnapshot(opts) {
+  const hasAsOf = Object.hasOwn(opts, 'asOf');
+  const hasSince = Object.hasOwn(opts, 'since');
+  if (hasAsOf && hasSince) fail('query accepts asOf or since, not both');
+  if (hasAsOf) return record('query/as-of', [integerTerm(opts.asOf)]);
+  if (!hasSince) return keywordTerm('query/current');
+  const since = typeof opts.since === 'object' && opts.since !== null
+    ? opts.since : { lowerExclusive: opts.since };
+  exactKeys(since, ['lowerExclusive'], ['lowerExclusive', 'upper'], 'since selector');
+  const upper = !Object.hasOwn(since, 'upper') || since.upper === 'current'
+    ? keywordTerm('query/current')
+    : record('query/as-of', [integerTerm(since.upper)]);
+  return record('query/since', [integerTerm(since.lowerExclusive), upper]);
+}
+
 export function framClient({ url, host, port, token, space, fetch: fetchImpl } = {}) {
   if (!token) throw new Error('framClient: token required');
   if (typeof space !== 'string' || !space.trim()) throw new Error('framClient: space required');
@@ -282,15 +297,13 @@ export function framClient({ url, host, port, token, space, fetch: fetchImpl } =
   }
 
   return {
-    version: () => send('/q', 'rpc/version', unit),
-    status: () => send('/q', 'rpc/status', unit),
-    validate: () => send('/q', 'rpc/validate', unit),
+    version: opts => send('/q', 'rpc/version', unit, opts),
+    status: opts => send('/q', 'rpc/status', unit, opts),
+    validate: opts => send('/q', 'rpc/validate', unit, opts),
     occurrences: opts => send('/q', 'rpc/occurrences', unit, opts),
     scan: (pattern = {}, opts) => send('/q', 'rpc/scan', scanPayload(pattern), opts),
     query: (plan, opts = {}) => send('/q', 'rpc/query',
-      record('query/request', [term(plan), opts.asOf === undefined
-        ? keywordTerm('query/current')
-        : record('query/as-of', [integerTerm(opts.asOf)])]), opts),
+      record('query/request', [term(plan), querySnapshot(opts)]), opts),
     assert: (t1, t2, t3, opts = {}) => send('/assert', 'rpc/assert',
       writePayload(tripleTerm(t1, t2, t3), opts), opts),
     retract: (t1, t2, t3, opts = {}) => send('/assert', 'rpc/retract',

@@ -16,9 +16,16 @@ The deciding prior is Datalog: a fact is a proposition present in the evaluated 
 
 ## world — chosen 2026-07-26; retired 2026-08-07
 
-**Retired 2026-08-07:** the Worlds service is deleted from the tree. `world` and `version` name no module, primitive, or FRAMRPC operation, and the word is spent for new naming. Durable FRAMLOG data that service wrote (`evidence.world`, `world.record`, `world.version:`) keeps its spelling: respelling stored predicates is a data migration, not a rename.
+**Retired 2026-08-07:** the Worlds service is deleted from the tree. `world`
+and the bare historical name `version` name no current module or primitive and
+are spent for new naming. The live closed-wire operation `:rpc/version` is
+unrelated and remains current. Durable FRAMLOG data that service wrote
+(`evidence.world`, `world.record`, `world.version:`) keeps its spelling:
+respelling stored predicates is a data migration, not a rename.
 
-The former ruling read: historical Worlds-service vocabulary; the service left the public recursive-kernel runtime, so `world` and `version` are not kernel primitives or FRAMRPC operations.
+The former ruling read: historical Worlds-service vocabulary; the service left
+the public recursive-kernel runtime, so `world` and bare `version` are not
+kernel primitives. This retirement does not name or remove `:rpc/version`.
 
 The thing was a named, forkable lineage of immutable versions that fixed which facts a query saw without promising consistency. The possible-worlds prior decided it: propositions are evaluated at a way things could stand.
 
@@ -47,7 +54,11 @@ The old `chartroom` name survives only where provenance would otherwise become f
 
 ## Turtle — architecture prior, never a primitive — chosen 2026-08-01
 
-**Turtle** invokes “turtles all the way down”: use ordinary recursive Triples for data, coordinates, history, and metadata when the model permits. It never names a record, identifier, log, or second stored type; the literal semantic vocabulary is linked from the [glossary](glossary.md#semantic-kernel).
+**Turtle** invokes “turtles all the way down”: use recursive Terms for semantic
+content and structural coordinates when the model permits. It never turns
+operation or withdrawal rows into domain proposition Triples, and it never
+names a record, identifier, log, or second stored type; the literal semantic
+vocabulary is linked from the [glossary](glossary.md#semantic-kernel).
 
 Roles remain ontology conventions, not kernel positions. Membership implied by spelling must be asserted, as [ontology](ontology.md#normalization) specifies.
 
@@ -66,45 +77,64 @@ Rejected bench:
 
 Skills are named for the tool (`fram-modeling`, `beagle-authoring`) or the bet (`code-as-facts`), never the current layer's stored-thing word.
 
-## normalized example — settled 2026-08-03
+## normalized example — settled 2026-08-03; superseded 2026-08-14
 
-The thing is one copyable positive example of kernel-level normalization,
-defined only in [ontology](ontology.md#normalization). It replaced the earlier
-`:contact/email` example whose spelling contradicted the new rule. The deciding
-prior is copy behavior: readers reproduce a concrete example more reliably
-than a prohibition. It is legal Fram, but it is not the stricter application
-discipline later named Fact Normal Form.
+The August 3 example removed the spelling namespace from `:contact/email`, but
+left the noun `:email` in the relation position. That was not a valid positive
+proposition example and is superseded by the `:contactable_at` example in
+[ontology](ontology.md#normalization). The correction keeps the useful part of
+the ruling—copyable positive examples and explicit vocabulary membership—while
+requiring the middle Term, under that profile, to name the relationship actually
+being stated.
 
-The ruling is unnamespaced domain vocabulary with membership asserted as an ordinary Triple. `:kernel/*` occurrence predicates are primitive-exempt; closed `:rpc/*` tags are wire syntax; `SPO`/`POS`/`OSP` are private rotations.
+Closed `:kernel/*` and `:rpc/*` tags are protocol vocabulary, not patterns
+applications may copy into their ontology. `SPO`/`POS`/`OSP` remain private
+rotations.
 
 Rejected bench:
 
 - **`:contact-email`** — hides the same membership behind different punctuation.
-- **value reification** — invents an entity and joins where recursive proposition annotation already works.
+- **flat noun-as-relation triples** — removing a slash does not make `:email`
+  name a relationship.
 - **prohibition-only documentation** — loses to any nearby copyable counterexample.
 
-## Fact Normal Form — preferred application discipline — chosen 2026-08-14
+## Fact Normal Form — fact-oriented profile discipline — chosen 2026-08-14
 
-Fact Normal Form (FNF) gives every particular domain fact an application-level
-Term and states three separate propositions:
+Fact Normal Form (FNF) applies to propositions admitted by a fact-oriented
+profile, not to every assertion or recursive Term. Every semantic relationship
+that profile needs to interpret, join, classify, or validate the domain is an
+admitted Triple rather than structure recoverable only from Atom spelling, an
+assumed slot, or a specialized out-of-band schema cell. Other asserted profiles
+own their own admission discipline. In a profile whose middle position is
+relational, that Term names the actual relationship: `:contactable_at` states
+reachability while the noun `:email` does not.
+
+FNF does not require a new opaque Term for each proposition. Use an existing
+Atom directly when its kind and canonical payload provide exactly the domain's
+equality contract. Introduce a new Atom kind through a deliberate kernel and
+codec extension when intrinsic validation, ordering, canonical encoding, or
+equality differs; ontology spelling cannot create one. Mint a resource identity
+only when the denoted thing has continuity or representation independent of the
+Atom.
+
+The intended identity ruling is:
 
 ```text
-(subject, relation, fact)
-(fact, :value, value)
-(fact, :member_of, class)
+Atom identity         Atom kind + canonical payload
+Proposition identity  recursive structural Triple equality
+Assertion identity    occurrence coordinate
 ```
 
-The relation names the real affordance, such as `:contactable_at` or
-`:followable_at`; `:has` is correct only for actual possession. A relation must
-point to the identified fact, never directly to its scalar value. This is the
-operator's preferred application discipline over Fram, not a new kernel type.
-The exact structural Triples remain proposition identities, and assertion
-occurrences retain their separate engine coordinates.
+Current Float behavior is a documented exception to the intended Atom ruling;
+see N4 in [guarantees](guarantees.md#wire). Host interning makes NaN unequal to
+itself and equates `+0.0` with `-0.0`, while FRAMRPC canonicalizes NaN and
+distinguishes signed zero. The ruling stands, but the core does not yet satisfy
+it for Float.
 
-The stricter application rule does not reverse the kernel's rejection of
-compulsory *statement* reification above. The FNF Term identifies a particular
-domain fact; it is not a surrogate identifier for proposition content or an
-occurrence.
+Self-denoting value and resource name are semantic roles of Atom, not physical
+variants. Context comes from relations and never mutates the underlying Term.
+Constructing or nesting a Triple does not assert it; an occurrence supplies
+assertion identity.
 
 ## Beagle fact projections — identifiers retained; contracts split — chosen 2026-08-03
 
@@ -147,7 +177,15 @@ Rejected bench:
 
 ## profile — and the EAV reading — chosen 2026-08-04
 
-The thing is the word for an optional, stored contract above the unchanged kernel, and the role vocabulary of the first one. **Profile** follows the standards prior (Bluetooth profiles, OWL 2 profiles): a named usage convention that constrains and reads one substrate without changing it. The relational profile's reading of the positions is **entity (t1), attribute (t2), value (t3)** — the database literature's EAV prior. Role words are profile vocabulary: profile documentation and profile-aware surfaces such as `text-match(entity, attribute, needle)` may speak them; kernel and wire vocabulary stays t1/t2/t3.
+The thing is the word for an optional, stored contract above the unchanged
+kernel, and the role vocabulary of the first one. **Profile** follows the
+standards prior (Bluetooth profiles, OWL 2 profiles): a named usage convention
+that constrains and reads one substrate without changing it. The stored profile
+kind named `"relational"` reads the positions as **entity (t1), attribute (t2),
+value (t3)** — the database literature's EAV prior. The name is historical: the
+kernel is already relational in the weaker formal sense of one recursive
+ternary relation. Role words are profile vocabulary; kernel and wire vocabulary
+stays t1/t2/t3.
 
 Rejected bench:
 
@@ -159,7 +197,18 @@ Rejected bench:
 
 ## time lives in the log, not the Triple — architecture ruling — chosen 2026-08-04
 
-The thing is where time attaches. A Triple is timeless content; time is the occurrence's log coordinate, and any time that must be data is an ordinary Triple, per the [glossary](glossary.md#semantic-kernel). Two priors decide it. Recursion: a quoted Triple must be timeless, or `((a, :works-for, b), :supported-by, doc)` cannot say which version it quotes — Datomic's datom fuses `(e, a, v)` with `(tx, added)` and therefore cannot nest, reifying statements as entities instead. Type–token: separate occurrences keep equal propositions asserted independently as two corroborating events, where Datomic elides the redundant datom. The accepted cost is that as-of filtering rides snapshot machinery at the query boundary instead of a time field in every index row.
+The thing is where time attaches. A Triple is timeless structural content;
+assertion time belongs to the occurrence's log coordinate, and any time that
+must be domain data is another Term, per the
+[glossary](glossary.md#semantic-kernel). Two priors decide it. Recursion: a
+quoted Triple must be timeless, or `((a, :works-for, b), :supported-by, doc)`
+cannot say which content it quotes. Nesting that inner Triple does not assert it
+independently. Datomic's datom fuses `(e, a, v)` with `(tx, added)` and
+therefore cannot nest, reifying statements as entities instead. Type–token:
+separate occurrences keep equal propositions asserted independently as two
+corroborating events, where Datomic elides the redundant datom. The accepted
+cost is that as-of filtering rides snapshot machinery at the query boundary
+instead of a time field in every index row.
 
 Rejected bench:
 
@@ -211,7 +260,8 @@ names its result.
 
 Rejected bench:
 
-- **world**, **version** — retired 2026-08-07 and spent for new naming.
+- **world**, bare **version** — retired 2026-08-07 and spent for new naming;
+  the closed-wire `:rpc/version` operation remains live.
 - **lane** — carries no prior about sharing history with what it came from.
 - **timeline** — imports an ordering across branches that no branch promises.
 - **line** — too weak to carry a module name and a directory name.

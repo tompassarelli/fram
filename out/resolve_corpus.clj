@@ -125,7 +125,7 @@
 (def ^String RESOLVE-SPACE "resolve")
 
 (defn resolve-edn! [^CorpusHost host edn-paths body]
-  (let [ctx (ri/new-graph RESOLVE-SPACE)
+  (let [ctx (ri/new-graph! RESOLVE-SPACE)
    with-state (:with-state host)]
   (with-state ctx (fn [] (let [state-fn (:state host)
    load (:load-edn host)

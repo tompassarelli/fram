@@ -127,7 +127,7 @@ class RequestReader {
 }
 
 /**
- * Parse only the fixed FRAMRPC v1 envelope fields an embedder must authorize.
+ * Parse only the fixed FRAMRPC v2 envelope fields an embedder must authorize.
  * The engine remains the authority for the complete recursive payload codec.
  */
 export function inspectFramRpcRequest(frame) {
@@ -150,7 +150,7 @@ export function inspectFramRpcRequest(frame) {
   const flags = view.getUint8(13);
   const bodyBytes = view.getUint32(14, true);
   const requestId = view.getBigInt64(18, true);
-  if (major !== 1 || minor !== 0) {
+  if (major !== 2 || minor !== 0) {
     requestFail("protocol version is unsupported", "request/unsupported-version");
   }
   if (kind !== 1) requestFail("frame is not a request", "request/invalid-kind");
@@ -168,7 +168,7 @@ export function inspectFramRpcRequest(frame) {
     requestFail("SpaceId is empty or too large", "request/invalid-space");
   }
   if (!FRAMRPC_OPERATIONS.has(operation)) {
-    requestFail("operation is outside FRAMRPC v1", "request/unsupported-operation");
+    requestFail("operation is outside FRAMRPC v2", "request/unsupported-operation");
   }
   return Object.freeze({
     space,
@@ -317,7 +317,7 @@ function statusFrame(spaceId) {
   const frame = new Uint8Array(FRAMRPC_HEADER_BYTES + bodyLength);
   frame.set(FRAMRPC_MAGIC, 0);
   const view = new DataView(frame.buffer);
-  view.setUint16(8, 1, true);
+  view.setUint16(8, 2, true);
   view.setUint16(10, 0, true);
   view.setUint8(12, 1); // request
   view.setUint8(13, 0);
@@ -350,7 +350,7 @@ function decodeStatusServedVersion(frame, expectedSpaceId) {
   }
   const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
   if (
-    view.getUint16(8, true) !== 1 ||
+    view.getUint16(8, true) !== 2 ||
     view.getUint16(10, true) !== 0 ||
     view.getUint8(12) !== 2 ||
     view.getUint8(13) !== 0 ||

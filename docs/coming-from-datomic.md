@@ -5,32 +5,39 @@ onto Fram's, states every difference that will bite, and lists what is honestly
 not here yet.
 
 **Scope.** Everything below describes the native engine — the Beagle sources
-behind `bin/fram` and `bin/fram-server` — and the closed FRAMRPC v1 surface it
-serves. The retained JVM route genuinely differs in two places (text-index
-retention and transaction metadata); both are called out inline rather than
-averaged away. Vocabulary is the [glossary](glossary.md); guarantee statuses
-cited as `D1`, `Q7`, `P2` are rows of [guarantees](guarantees.md).
+behind `bin/fram` and `bin/fram-server` — and the closed FRAMRPC v2 (wire
+version 2.0) surface it serves. The retained JVM route differs in several
+compatibility behaviors, called out inline rather than averaged away: it
+retains text indexes across requests, writes transaction metadata, filters its
+effective live view through stored `:kernel/supersedes` propositions, applies a
+`since` lower bound only to history relations, and has different unpaged read
+and scan-limit behavior. Vocabulary is the [glossary](glossary.md); guarantee
+statuses cited as `D1`, `Q7`, `P2` are rows of
+[guarantees](guarantees.md).
 
 ## 1. The mental-model bridge
 
 A datom is `(e, a, v, tx, added?)`: content, the act, and time fused into one
 row. Fram splits that fusion in two.
 
-- A **proposition** is the content: one `Triple` of three `Term`s, timeless and
-  structurally identified. Assert the same content twice and it is still one
-  interned term.
+- A **Triple** is timeless structural content. Constructing or nesting it does
+  not assert it. When an occurrence carries it as statement content, its
+  **proposition identity** is recursive structural Triple equality.
 - An **occurrence** is the act: an assertion or retraction at a coordinate.
-  The coordinate is itself made of Triples, so you can query it and make
-  statements about it.
+  That coordinate is assertion identity. Fram records what the writer asserted;
+  it does not certify truth.
 
 ```text
-tx          := ("my-space", :kernel/tx-sequence, 7)
-occurrence  := (tx, :kernel/op-ordinal, 0)
-proposition := ("Alice", :email, "alice@example.com")
-
-(occurrence, :kernel/asserts, proposition)
-(tx, :kernel/recorded-at, Instant(...))
+occurrence(
+  (("my-space", :kernel/tx-sequence, 7), :kernel/op-ordinal, 0),
+  :assert,
+  ("Alice", :contactable_at, "alice@example.com"))
 ```
+
+That row is the direct history interface. FRAMLOG physically stores the action
+and recursive proposition content. A successful retraction also yields
+`withdrawal(retraction-coordinate, assertion-coordinate)`, a system relation
+to the exact earlier assertion occurrence it cancelled.
 
 Three consequences worth pausing on:
 
@@ -39,25 +46,29 @@ a sequence number, not a minted entity you attach attributes to. Provenance
 about an act attaches to the act's coordinate directly, because the coordinate
 is an ordinary Term.
 
-**There are no entity ids.** An "entity" is whatever Term you put in `t1` — a
-String, a Keyword, a minted coordinate, or another Triple. Nothing mints an id
-for you and nothing resolves one. Positions are coordinates named `t1`, `t2`,
-`t3`; the entity/attribute/value reading is a **profile** you opt into, not
-physics ([ontology](ontology.md#profiles-and-anchoring)).
+**There is no kernel Entity type.** A profile may read whatever Term occupies
+`t1` as an entity: a String, a Keyword naming an open-ended resource, a minted
+coordinate, or another Triple. Fram does not mint or resolve domain identities
+for you. Positions are coordinates named `t1`, `t2`, `t3`; the
+entity/attribute/value reading is a **profile** you opt into, not physics
+([ontology](ontology.md#profiles-and-anchoring)).
 
-**Content is a counted multiset, not a set.** Datomic's set semantics absorb a
-redundant re-assertion. Fram records each act: two assertions of equal content
-are two corroborating occurrences, and a retraction withdraws the newest live
-equal occurrence and records exactly which one it killed
-(`(retraction-op, :kernel/withdraws, assertion-op)`).
+**Live assertions form a counted multiset; `triple` is a set projection.**
+Datomic's set semantics absorb a redundant re-assertion. Fram records each act:
+two assertions of equal content are two corroborating live occurrences, and
+direct `rpc/scan` preserves both equal rows. The Datalog `triple` relation uses
+structural set semantics and exposes that content once. A retraction withdraws
+the newest live equal occurrence, so older duplicates may remain; the
+`withdrawal` relation records exactly which assertion it cancelled.
 
 *Sidebar — the RDF-star prior.* RDF-star lets a quoted triple stand in the
 object position so you can say things about statements. Fram generalizes that
 to all three positions and any depth: a Triple is a Term, so
-`(("Alice", :email, "a@example.com"), :verified-by, "checker-1")` is ordinary
-data, not a reification pattern. This is exactly why time cannot live inside
-the Triple: a quoted proposition has to be timeless, or it could not say which
-version of the statement it quotes ([naming ledger](naming.md)).
+`(("Alice", :contactable_at, "alice@example.com"), :verified_by, "checker-1")`
+is ordinary data, not a reification pattern. Asserting the outer Triple does
+not independently assert the inner Triple. This is exactly why time cannot live
+inside the structural content: the nested Term has to remain stable
+([naming ledger](naming.md)).
 
 ## 2. The exact-difference table
 
@@ -71,9 +82,10 @@ version of the statement it quotes ([naming ledger](naming.md)).
 | Upsert by identity | `@tompassarelli/framrpc/schema` provides `createUnique`, `upsertUnique`, `updateUnique`, multi-subject `updateUniqueMany`, and mixed `transactUnique`. Each attempt combines snapshot-pinned reads with one exactly preflighted OCC batch; planned create identities can satisfy same-batch reference guards, and a conflict retries from a fresh snapshot | **Present in the official Bun application layer; no dedicated wire operation** |
 | `:db/isComponent`, cascade retract | Nothing | **Absent** |
 | `retractEntity`, retract by pattern | Only exact-proposition retraction exists | **Absent** |
-| Retraction semantics | Withdraws the newest live equal occurrence, records its exact target, and a retraction with no live match is an explicit unchanged receipt that does not advance the version | **Different** |
+| Retraction semantics | Withdraws the newest live equal occurrence and records its exact target. A retraction with no live match still records an occurrence and advances the version, but reports `stateChanged = false` and creates no withdrawal | **Different** |
 | Transaction metadata | The JVM route writes `:kernel/recorded-at` and `:kernel/asserted-by` about the tx coordinate. A FRAMRPC action carries a proposition and a subject policy — nothing else | **JVM route only** |
-| `d/history`, `d/as-of`, `d/since` | The `occurrence` relation plus `:query/current`, `:query/as-of U`, `:query/since L upper`. A `(L,U]` window never materializes the full occurrence relation, and page cursors pin their snapshot | **Present, richer** (`Q6`) |
+| Legacy effective supersession | Native liveness follows assertions and exact retractions. The retained JVM route additionally treats a live `:kernel/supersedes` proposition as suppressing its target occurrence | **Retained JVM compatibility only** |
+| `d/history`, `d/as-of`, `d/since` | The `occurrence` and `withdrawal` relations plus `:query/current`, `:query/as-of U`, `:query/since L upper`. Native applies `(L,U]` to every base relation. The retained JVM route lower-bounds only `occurrence` and `withdrawal`, leaving `triple` and text at upper snapshot `U`. Page cursors pin their snapshot | **Present, route-sensitive** (`Q6`) |
 | `d/with` | Nothing on the wire. In-process staged builder reads are the read-side analogue | **Absent from FRAMRPC** |
 | Tempids | `txn/mint!` hands out `(tx-coordinate, :mint-ordinal, n)`. Builder-local while you build, durable once the transaction commits | **Different** |
 | AVET, range scans | Rotations index single positions and position pairs by equality only. Comparisons run as post-filters over bound rows | **Absent** |
@@ -101,9 +113,9 @@ point can still write propositions that violate an application's constraints.
   freeform write behavior (`P1`).
 - **Transaction-entity gymnastics for provenance.** Assert about the occurrence
   coordinate directly.
-- **Audit side-tables.** History is Triples. "What did this retraction kill" is
-  a `:kernel/withdraws` edge, and "what happened between these two
-  transactions" is a since window.
+- **Audit side-tables.** History is directly queryable through `occurrence` and
+  `withdrawal`; "what happened between these two transactions" is a since
+  window.
 
 ## 4. Three adoption styles
 
@@ -155,9 +167,11 @@ Each row is a work order, not a caveat to be argued away.
 - **Retention and excision are partial** (`Q7`). Sealed ranges, unavailable,
   and expired are distinct and typed; active-log compaction and production
   retention policy are not gated.
-- **Store materialization is superlinear.** Boot cost and memory grow as
-  roughly the square of live triples, which — not log length — is what bounds
-  a store today. The measured shape is in the capacity section of
+- **Store materialization needs full re-certification.** v0.5.0 removed the old
+  roughly quadratic boot-time and boot-memory growth; current measurements are
+  about linear in live triples. The pre-fix capacity matrix remains
+  conservative until the queued full re-certification is complete; see the
+  capacity section of
   [guarantees](guarantees.md#capacity-and-performance-envelope--open-rungs).
 
 **Profile roadmap**, in the order the code makes cheap: enforce mode at the
@@ -175,9 +189,9 @@ knowledge.
 |---|---|
 | Lookup refs | For schema-aware Bun applications, use `@tompassarelli/framrpc/schema` identities and required-unique guards; duplicate owners reject instead of being selected arbitrarily. `resolve-name` remains the in-process registry convention, not an engine-wide uniqueness rule |
 | Entity API | The pull projection over an immutable store, in process |
-| `d/history` | The `occurrence` relation; follow `:kernel/withdraws` for what a retraction targeted |
-| `d/as-of` / `d/since` | The `:query/as-of` and `:query/since` selectors. Since restricts every base relation to its window, not just `occurrence` |
+| `d/history` | The `occurrence` relation plus `withdrawal(retraction, assertion)` for the exact target of a successful retraction |
+| `d/as-of` / `d/since` | The `:query/as-of` and `:query/since` selectors. Native since restricts every base relation to `(L,U]`; the retained JVM route restricts only `occurrence` and `withdrawal` and leaves `triple` and text at `U` |
 | `d/with` | A staged builder read, in process only |
-| Paging | Snapshot-pinned cursors. A paged current query stays stable because the continuation reuses the cursor's resolved version, not head. Keep pages well under the 248-row unpaged bound (`N3`) |
+| Paging | Native cursors are operation-specific and snapshot-pinned. Unpaged `rpc/query` refuses above 248 rows with `:term-depth-exceeded`; `rpc/scan` has a 200-row unpaged/page maximum, refuses larger unpaged results with `:rpc/native-page-required`, and emits `:rpc/native-scan-cursor`; unpaged `rpc/occurrences` silently returns only its first 248 rows, so page it. The retained JVM route instead refuses all three oversized unpaged reads with `:term-depth-exceeded` and syntactically accepts page limits through 4096, still subject to the codec depth bound |
 | Bulk load | Batches have a 247-action depth ceiling and must also fit the exact predicted response byte limit; a batch commits as one frame or not at all (`A1`, `N3`) |
 | "Did my write land" | The mutation receipt returns occurrence coordinates, and `expected-version` gives you OCC: a stale or future version fails `:rpc/conflict` without moving the version (`I2`) |

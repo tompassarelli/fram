@@ -706,7 +706,7 @@ function summarize(subject, created, asOf, response = null) {
   return Object.freeze({
     subject,
     created,
-    changed: response.result.some(action => action.changed === true),
+    changed: response.result.some(action => action.stateChanged === true),
     servedVersion,
     result: response.result,
   });
@@ -732,7 +732,7 @@ function summarizeMany(subjects, asOf, response = null) {
   }
   return Object.freeze({
     subjects: exactSubjects,
-    changed: response.result.some(action => action.changed === true),
+    changed: response.result.some(action => action.stateChanged === true),
     servedVersion,
     result: response.result,
   });
@@ -768,7 +768,7 @@ function summarizeTransaction(
   return Object.freeze({
     createdSubjects: exactCreatedSubjects,
     updatedSubjects: exactUpdatedSubjects,
-    changed: response.result.some(action => action.changed === true),
+    changed: response.result.some(action => action.stateChanged === true),
     servedVersion,
     result: response.result,
     preflight,

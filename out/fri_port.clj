@@ -493,7 +493,7 @@
    transaction (t/transaction-coordinate (t/termstoredump-space-id dump) (t/operationrow-tx-sequence row))
    occurrence (t/occurrence-coordinate transaction (t/operationrow-ordinal row))
    proposition (resolve-handle dump (t/operationrow-triple-handle row))]
-  (if (= t/assert-action (t/operationrow-action row)) (t/assertion-occurrence occurrence proposition) (t/retraction-occurrence occurrence proposition))))
+  (t/operation-occurrence occurrence (t/operationrow-action row) proposition)))
 
 (defn close-fri! [image]
   nil)
@@ -516,11 +516,11 @@
 (defn operation-count [image]
   (store/operation-count (cacheimage-store image)))
 
-(defn semantic-history [image]
-  (store/semantic-history (cacheimage-store image)))
+(defn occurrences [image]
+  (store/occurrences (cacheimage-store image)))
 
-(defn operation-occurrences [image]
-  (store/operation-occurrences (cacheimage-store image)))
+(defn withdrawals [image]
+  (store/withdrawals (cacheimage-store image)))
 
 (defn live-occurrences [image]
   (store/live-occurrences (cacheimage-store image)))

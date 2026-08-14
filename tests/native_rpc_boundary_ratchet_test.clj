@@ -48,7 +48,7 @@
           nil))
 
 (let [runtime (file-source "src/fram/rt.clj")
-      native (between runtime ";; --- FRAMRPC v1 client"
+      native (between runtime ";; --- FRAMRPC v2 client"
                       ";; The human syntax is deliberately")]
   (check! "shared binary client section has no legacy socket dependency"
           (and native
@@ -92,6 +92,11 @@
           nil)
   (check! "CLI EDN use is confined to the local human query parser"
           (= 2 (count (re-seq #"(?:clojure\.edn|edn/read-string)" fast)))
+          nil)
+  (check! "CLI occurrences drains bounded pages instead of truncating history"
+          (and (str/includes? fast "(wire/rpc-page-request! 200 cursor)")
+               (str/includes? fast "(t/rpcpageresponse-done page)")
+               (str/includes? fast "(t/rpc-page-response-cursor-value page)"))
           nil)
   (check! "readiness and deep probes speak native version frames"
           (and (str/includes? up "native-call!")

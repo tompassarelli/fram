@@ -106,27 +106,3 @@
 
 (defn by-t13 [triples t1 t3]
   (filterv (fn [value] (and (= t1 (t/triple-t1 value)) (= t3 (t/triple-t3 value)))) triples))
-
-(defn ^Boolean assertion-occurrence? [value]
-  (and (t/triple? value) (and (t/occurrence-coordinate? (t/triple-t1 value)) (and (= t/asserts (t/triple-t2 value)) (t/triple? (t/triple-t3 value))))))
-
-(defn ^Boolean retraction-occurrence? [value]
-  (and (t/triple? value) (and (t/occurrence-coordinate? (t/triple-t1 value)) (and (= t/retracts (t/triple-t2 value)) (t/triple? (t/triple-t3 value))))))
-
-(defn ^Boolean operation-occurrence? [value]
-  (or (assertion-occurrence? value) (retraction-occurrence? value)))
-
-(defn ^Boolean withdrawal? [value]
-  (and (t/triple? value) (and (t/occurrence-coordinate? (t/triple-t1 value)) (and (= t/withdraws (t/triple-t2 value)) (t/occurrence-coordinate? (t/triple-t3 value))))))
-
-(defn occurrence-of [event]
-  (if (operation-occurrence? event) (t/triple-t1 event) (throw (ex-info "fram: value is not an operation occurrence" {:type :invalid-operation-occurrence}))))
-
-(defn proposition-of [event]
-  (if (operation-occurrence? event) (t/triple-t3 event) (throw (ex-info "fram: value is not an operation occurrence" {:type :invalid-operation-occurrence}))))
-
-(defn withdrawal-source [value]
-  (if (withdrawal? value) (t/triple-t1 value) (throw (ex-info "fram: value is not a withdrawal" {:type :invalid-withdrawal}))))
-
-(defn withdrawal-target [value]
-  (if (withdrawal? value) (t/triple-t3 value) (throw (ex-info "fram: value is not a withdrawal" {:type :invalid-withdrawal}))))

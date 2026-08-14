@@ -1,7 +1,6 @@
 ;; FRI2-backed covering rotations preserve occurrence coordinates.
 ;;   env -u FRAM_TELEMETRY_LOG bb -cp out tests/rotations_v2_test.clj
 (require '[fri :as fri]
-         '[fram.kernel :as kernel]
          '[fram.store :as store]
          '[fram.types :as t])
 (load-file "rotations.clj")
@@ -47,8 +46,8 @@
     (and (= 2 (rotations/occurrence-count index-before))
          (= [proposition proposition]
             (rotations/matching-propositions index-before [nil nil nil]))
-         (not= (kernel/occurrence-of first-event)
-               (kernel/occurrence-of second-event)))]
+         (not= (t/operationoccurrence-coordinate first-event)
+               (t/operationoccurrence-coordinate second-event)))]
    ["all eight bound-slot subsets use exact covering buckets"
     (every? #(= events-before (rotations/matching index-before %)) subset-patterns)]
    ["deleting one occurrence does not delete equal content at another coordinate"

@@ -1,7 +1,6 @@
 ;; Transaction-frame fold over exact assertion occurrences.
 ;;   env -u FRAM_TELEMETRY_LOG bb -cp out tests/fold_occurrence_test.clj
 (require '[fram.fold :as fold]
-         '[fram.kernel :as kernel]
          '[fram.store :as store]
          '[fram.types :as t])
 
@@ -23,11 +22,13 @@
 
 (def result (fold/fold! "msa-space" frames))
 (def refolded (fold/refold! "msa-space" (:dump result)))
-(def history (:history result))
+(def occurrences (:occurrences result))
+(def withdrawals (:withdrawals result))
 (def live-occurrences (:live-occurrences result))
 (def live-propositions (:live-propositions result))
 (def live-proposition-events
-  (filterv #(= proposition (kernel/proposition-of %)) live-occurrences))
+  (filterv #(= proposition (t/operationoccurrence-proposition %))
+           live-occurrences))
 
 (def checks
   [["fold preserves SpaceId" (= "msa-space" (:space-id result))]
@@ -36,26 +37,32 @@
     (= 2 (count (t/termstoredump-transactions (:dump result))))]
    ["max-sequence reads logical coordinates" (= 12 (fold/max-sequence frames))]
    ["equal proposition occurrences remain separately addressable"
-    (let [events (filterv kernel/assertion-occurrence?
-                          (filterv #(= proposition (kernel/proposition-of %))
-                                   (take 2 history)))]
+    (let [events (filterv t/assertion-occurrence?
+                          (filterv
+                           #(= proposition
+                               (t/operationoccurrence-proposition %))
+                           (take 2 occurrences)))]
       (and (= 2 (count events))
-           (not= (kernel/occurrence-of (first events))
-                 (kernel/occurrence-of (second events)))))]
+           (not= (t/operationoccurrence-coordinate (first events))
+                 (t/operationoccurrence-coordinate (second events)))))]
    ["one retraction removes only the latest equal occurrence"
     (= 1 (count live-proposition-events))]
    ["unrelated nested proposition remains live"
     (= [proposition nested] live-propositions)]
-   ["history projects operation and withdrawal rows as ordinary Triples"
-    (and (= 5 (count history))
-         (every? t/triple? history)
-         (= 1 (count (filter kernel/withdrawal? history))))]
+   ["history keeps operation occurrences and withdrawals outside Term"
+    (and (= 4 (count occurrences))
+         (= 1 (count withdrawals))
+         (every? t/operation-occurrence? occurrences)
+         (every? t/withdrawal? withdrawals)
+         (not-any? t/term? (concat occurrences withdrawals)))]
    ["withdrawal points to the second assertion coordinate"
-    (let [withdrawal (first (filter kernel/withdrawal? history))]
+    (let [withdrawal (first withdrawals)]
       (= (t/occurrence-coordinate (t/transaction-coordinate "msa-space" 10) 1)
-         (kernel/withdrawal-target withdrawal)))]
+         (t/operationoccurrence-coordinate
+          (t/withdrawal-assertion withdrawal))))]
    ["dump refold is projection-identical"
-    (and (= (:history result) (:history refolded))
+    (and (= (:occurrences result) (:occurrences refolded))
+         (= (:withdrawals result) (:withdrawals refolded))
          (= (:live-occurrences result) (:live-occurrences refolded))
          (= (:live-propositions result) (:live-propositions refolded))
          (= (:version result) (:version refolded)))]

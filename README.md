@@ -15,43 +15,75 @@ Triple := (Term, Term, Term)
 
 The positions are `t1`, `t2`, and `t3`. The kernel does not impose
 subject/predicate/object roles, and any Triple can occupy any position of another
-Triple. `Atom`, `Term`, and `Triple` are the public semantic vocabulary;
-`TripleRow` and integer term handles are private storage mechanics.
+Triple. The intended identity contract for an Atom is its kind plus canonical
+payload. Current Float handling does not yet satisfy that contract end to end:
+host interning makes NaN unequal to itself and treats `+0.0` and `-0.0` as
+equal, while the wire canonicalizes NaN bits and distinguishes signed zero. A
+Triple has recursive structural identity. Constructing or nesting one creates a
+Term; it does not assert anything. `TripleRow` and integer term handles are
+private storage mechanics.
 
-A proposition is one Triple. Its place in history is another Triple, not a
-fourth field attached to the proposition:
+Three identities stay separate:
 
 ```text
-vocabulary  := (:email, :member_of, :contact_relations)
-proposition := ("Alice", :email, "alice@example.com")
-tx          := ("demo-space", :kernel/tx-sequence, 1)
-occurrence  := (tx, :kernel/op-ordinal, 0)
-
-(occurrence, :kernel/asserts, proposition)
-(tx, :kernel/recorded-at, Instant(...))
+Atom identity target  Atom kind + canonical payload
+Proposition identity  recursive structural Triple equality
+Assertion identity    occurrence coordinate
 ```
 
-Domain vocabulary earns its structure by assertion: the membership a
-namespaced spelling would smuggle into a slash is stored as an ordinary
-Triple instead, where the query engine can join on it. The canonical
-kernel-normalized example lives in the [ontology](docs/ontology.md); strict
-application Fact Normal Form additionally gives each particular fact identity.
+A Triple takes the role of proposition content when an occurrence carries it
+as an assertion or retraction. A profile may constrain which Triple structures
+it admits and how it interprets their positions. Fram records that a writer
+asserted content; Fram does not certify it as true. A nested Triple may instead
+be a compound value, and nesting never asserts it independently.
 
-Equal propositions can have distinct assertion occurrences. Retractions and
-withdrawals are ordinary Triples too. Logical transaction order is intrinsic to
-the occurrence coordinate; wall-clock, valid, and observation time are related
-metadata and never part of proposition identity.
+In a profile that reads the middle position as a relation, the relation must
+actually state the relationship. These are three separately asserted domain
+propositions:
+
+```text
+(:contactable_at, :member_of, :contact_relations)
+("alice@example.com", :member_of, :email_addresses)
+("Alice", :contactable_at, "alice@example.com")
+```
+
+The direct String form is correct only when ordinary String canonicalization
+and equality are exactly the equality contract wanted for email addresses. Use
+a distinct Atom kind when intrinsic validation or equality differs; that is a
+deliberate kernel and codec extension, not ontology spelling. Mint a resource
+identity only when the address has continuity or a mutable representation
+independent of the String. Membership contextualizes the String; it never
+changes the underlying Atom.
+
+Committing proposition content creates an occurrence with a coordinate and an
+`assert` or `retract` action. Equal propositions can have distinct assertion
+occurrences. A successful content retraction withdraws the newest live equal
+assertion occurrence; another equal occurrence remains live if one exists. A
+no-match retraction still records an occurrence and advances the version, but
+reports `stateChanged = false` and creates no withdrawal. FRAMLOG stores these
+signed operations; the query engine exposes them as
+`occurrence(coordinate, action, proposition)` and exposes a successful targeted
+retraction as `withdrawal(retraction, assertion)`.
+
+Live occurrence state preserves multiplicity: `rpc/scan` returns one matching
+row per live assertion occurrence, including structurally equal duplicates.
+Datalog's `triple` relation is instead a structural set projection. Logical
+transaction order is intrinsic to the occurrence coordinate; wall-clock,
+valid, and observation time are metadata and never part of proposition
+identity.
 
 “Turtles” names the architectural prior—*turtles all the way down*: prefer the
-same recursive Triple language for data, identity coordinates, history, and
-metadata whenever the model permits. It is not a second primitive or a code
-type. See the [naming ledger](docs/naming.md).
+same recursive Term language for semantic content and structural coordinates
+whenever the model permits. Operation and withdrawal rows remain explicit
+history machinery, not manufactured domain propositions. It is not a second
+primitive or a code type. See the [naming ledger](docs/naming.md).
 
 ## Current documentation
 
 - [Architecture](docs/architecture.md) — semantic kernel, physical rows, database, server, and projections.
 - [Glossary](docs/glossary.md) — the single vocabulary source for current documents.
-- [Query reference](docs/query-reference.md) — `triple` and `occurrence`, recursion, filters, arithmetic, and aggregates.
+- [Query reference](docs/query-reference.md) — `triple`, `occurrence`, and
+  `withdrawal`, recursion, filters, arithmetic, and aggregates.
 - [Ontology](docs/ontology.md) — modeling rules, the canonical normalized example, profiles, and semantic hints.
 - [Guarantees](docs/guarantees.md) — guarantees, concurrency, workload envelope, and client obligations.
 - [Naming ledger](docs/naming.md) — durable naming verdicts and rejected alternatives.
@@ -77,15 +109,17 @@ $ export FRAM_SPACE_ID=fram-demo
 $ export FRAM_LOG=/tmp/fram-demo.framlog
 $ export FRAM_SERVER_RUNTIME=jvm-dev  # explicit checkout fallback
 $ bin/fram-up
-$ bin/fram tell :email :member_of :contact_relations
-$ bin/fram tell Alice :email alice@example.com
-$ bin/fram show Alice
-$ bin/fram query '{:find "emails" :rules [{:head {:rel "emails" :args [{:var "who"} {:var "email"}]} :body [{:rel "triple" :args [{:var "who"} :email {:var "email"}]}]}]}'
+$ bin/fram tell :contactable_at :member_of :contact_relations
+$ bin/fram tell '"alice@example.com"' :member_of :email_addresses
+$ bin/fram tell '"Alice"' :contactable_at '"alice@example.com"'
+$ bin/fram show '"Alice"'
+$ bin/fram query '{:find "emails" :rules [{:head {:rel "emails" :args [{:var "who"} {:var "email"}]} :body [{:rel "triple" :args [{:var "who"} :contactable_at {:var "email"}]}]}]}'
 $ bin/fram occurrences
 $ bin/fram validate
 ```
 
-Bare `Alice` is local CLI shorthand for the String `"@Alice"`; keywords,
+Bare `Alice` is local CLI shorthand for the String `"@Alice"`; the quoted
+arguments above preserve the exact canonical-example Strings. Keywords,
 numbers, recursive three-element vectors, and `{:instant [seconds nanos]}` are
 lowered to Terms before the socket opens. EDN is only human CLI syntax. The live
 engine wire is binary FRAMRPC.
@@ -96,8 +130,10 @@ engine wire is binary FRAMRPC.
   requires `FRAM_NATIVE_ARTIFACT_DIR` to name a READY artifact containing
   `bin/fram-server-native`; it never falls back silently. `jvm-oracle` and
   `jvm-dev` are explicit retained routes. The launched server owns one database
-  (`SpaceId` plus `history.framlog`), accepts the closed thirteen-operation
-  FRAMRPC v1 set, and holds writer authority for its active lifetime.
+  (`SpaceId` plus `history.framlog`), accepts FRAMRPC v2's closed data surface
+  of thirteen operations (exact wire version 2.0), and holds writer authority
+  for its active lifetime. The native server additionally accepts the separately named
+  `rpc/checkpoint` operator capability.
 - `bin/fram` routes public data commands (`tell`, `retract`, `show`, `query`,
   `scan`, `occurrences`, `version`, `status`, and `validate`) over FRAMRPC.
   Explicit local migration/projection/admin commands are separate from that
@@ -113,7 +149,7 @@ engine wire is binary FRAMRPC.
 - `clients/bun/framrpc.mjs` is the official zero-dependency Bun 1.3.13+ client for
   direct builder and application traffic. It preserves recursive Terms,
   batches, versions, occurrence replay, paging/cursors, snapshot selectors,
-  and leases across all thirteen FRAMRPC v1 operations. Its optional
+  and leases across all thirteen FRAMRPC v2 data operations. Its optional
   `@tompassarelli/framrpc/schema` entry point composes those operations into
   occurrence-correct single-value replacement, unique creation/upsert,
   identity-resolved guarded updates, and mixed create/update transactions
@@ -126,16 +162,17 @@ engine wire is binary FRAMRPC.
 - The engine also links as a library: `native/fram.h` publishes embedding ABI
   v1 (`libfram.a`, `libfram.so`), and `--host wasm-embed` links the same ABI
   into a wasm32 module an isolate embeds with no server and no socket. Both
-  take one canonical FRAMRPC v1 frame in and give one out, and the wasm engine
+  take one canonical FRAMRPC v2 frame in and give one out, and the wasm engine
   answers byte-for-byte what the native library answers. See
   [isolation and deployment](docs/isolation-and-deployment.md#the-wasm-embed-contract).
 
 ## Why own the engine?
 
 Fram's differentiator is not “a triple plus an id.” It is the uniform recursive
-term model: a Triple is itself a Term, so a relationship, an identity
-coordinate, an assertion occurrence, and metadata can all use the same three
-positions without a privileged attribute position or bolt-on statement entity.
+term model: a Triple is itself a Term, so relationships, compound values,
+identity coordinates, and domain metadata can use the same three positions
+without a privileged attribute position or bolt-on statement entity. Assertion
+identity remains an occurrence coordinate in the explicit operation history.
 
 The storage implementation interns Atoms and Triples and keeps compact
 `TripleRow`/operation tables, but those handles are deliberately not semantic

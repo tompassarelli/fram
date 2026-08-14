@@ -734,14 +734,15 @@
                                (t/operationrow-tx-sequence row))
      (t/operationrow-ordinal row))))
 
-(defn- event-at [(store t/TermStore) (operation-position Int)] t/Triple
+(defn- operation-occurrence-at
+  [(store t/TermStore) (operation-position Int)] t/OperationOccurrence
   (let [(row t/OperationRow) (nth (store-operations store) operation-position)
         (occurrence t/Triple) (occurrence-at store operation-position)
         (proposition t/Triple)
         (resolve-triple-handle store (t/operationrow-triple-handle row))]
-    (if (= t/assert-action (t/operationrow-action row))
-      (t/assertion-occurrence occurrence proposition)
-      (t/retraction-occurrence occurrence proposition))))
+    (t/operation-occurrence occurrence
+                            (t/operationrow-action row)
+                            proposition)))
 
 (defn- first-transaction-after
   [(transactions (Vec t/TransactionRow)) (sequence Int)] Int
@@ -869,42 +870,62 @@
       candidates)))
 
 (defn occurrence-tuple-at [(store t/TermStore) (position Int)] (Vec Any)
-  (let [(event t/Triple) (event-at store position)]
-    [(t/triple-t1 event) (t/triple-t2 event) (t/triple-t3 event)]))
+  (let [(occurrence t/OperationOccurrence)
+        (operation-occurrence-at store position)]
+    [(t/operationoccurrence-coordinate occurrence)
+     (t/operationoccurrence-action occurrence)
+     (t/operationoccurrence-proposition occurrence)]))
 
-(defn operation-occurrences [(ctx (Atom t/TermStore))] (Vec t/Triple)
+(defn occurrences [(ctx (Atom t/TermStore))] (Vec t/OperationOccurrence)
   (let [(store t/TermStore) (deref ctx)]
-    (loop [(position Int) 0 (events (Vec t/Triple)) []]
+    (loop [(position Int) 0
+           (values (Vec t/OperationOccurrence)) []]
       (if (>= position (count (store-operations store)))
-        events
-        (recur (inc position) (conj events (event-at store position)))))))
+        values
+        (recur (inc position)
+               (conj values (operation-occurrence-at store position)))))))
 
-(defn withdrawal-triples [(ctx (Atom t/TermStore))] (Vec t/Triple)
+(defn withdrawals [(ctx (Atom t/TermStore))] (Vec t/Withdrawal)
   (let [(store t/TermStore) (deref ctx)]
-    (loop [(position Int) 0 (withdrawals (Vec t/Triple)) []]
+    (loop [(position Int) 0 (values (Vec t/Withdrawal)) []]
       (if (>= position (count (store-operations store)))
-        withdrawals
+        values
         (let [target (nth (store-withdrawal-targets store) position)]
           (if (>= target 0)
             (recur (inc position)
-                   (conj withdrawals
-                         (t/withdrawal (occurrence-at store position)
-                                       (occurrence-at store target))))
-            (recur (inc position) withdrawals)))))))
+                   (conj values
+                         (t/withdrawal
+                          (operation-occurrence-at store position)
+                          (operation-occurrence-at store target))))
+            (recur (inc position) values)))))))
 
-(defn semantic-history [(ctx (Atom t/TermStore))] (Vec t/Triple)
-  (let [(store t/TermStore) (deref ctx)]
-    (loop [(position Int) 0 (history (Vec t/Triple)) []]
-      (if (>= position (count (store-operations store)))
-        history
-        (let [(with-event (Vec t/Triple)) (conj history (event-at store position))
-              (target Int) (nth (store-withdrawal-targets store) position)]
+;; System relation rows are ordinary query tuples, not Terms. A withdrawal is
+;; visible in the window where its retraction occurrence happened; the target
+;; assertion may precede the lower bound.
+(defn withdrawal-tuples-between
+  [(store t/TermStore)
+   (lower-exclusive Int)
+   (upper-inclusive Int)]
+  (Vec (Vec Any))
+  (let [(bounds (Vec Int))
+        (operation-range-bounds store lower-exclusive upper-inclusive)
+        (start Int) (nth bounds 0)
+        (end Int) (nth bounds 1)]
+    (loop [(position Int) start (rows (Vec (Vec Any))) []]
+      (if (>= position end)
+        rows
+        (let [(target Int) (nth (store-withdrawal-targets store) position)]
           (if (>= target 0)
-            (recur (inc position)
-                   (conj with-event
-                         (t/withdrawal (occurrence-at store position)
-                                       (occurrence-at store target))))
-            (recur (inc position) with-event)))))))
+            (let [(retraction t/OperationOccurrence)
+                  (operation-occurrence-at store position)
+                  (assertion t/OperationOccurrence)
+                  (operation-occurrence-at store target)]
+              (recur
+               (inc position)
+               (conj rows
+                     [(t/operationoccurrence-coordinate retraction)
+                      (t/operationoccurrence-coordinate assertion)])))
+            (recur (inc position) rows)))))))
 
 ;; Liveness is derived, never stored: operation p is live exactly when it
 ;; asserts and no later operation withdraws it. That is exactly the bucket
@@ -920,15 +941,17 @@
          (and (< offset (count positions))
               (= position (nth positions offset))))))
 
-(defn live-occurrences [(ctx (Atom t/TermStore))] (Vec t/Triple)
+(defn live-occurrences [(ctx (Atom t/TermStore))] (Vec t/OperationOccurrence)
   (let [(store t/TermStore) (deref ctx)
         (operations (Vec t/OperationRow)) (store-operations store)
         (total Int) (count operations)]
-    (loop [(position Int) 0 (live (Vec t/Triple)) []]
+    (loop [(position Int) 0
+           (live (Vec t/OperationOccurrence)) []]
       (if (>= position total)
         live
         (if (operation-live? store position (nth operations position))
-          (recur (inc position) (conj live (event-at store position)))
+          (recur (inc position)
+                 (conj live (operation-occurrence-at store position)))
           (recur (inc position) live))))))
 
 (defn live-propositions [(ctx (Atom t/TermStore))] (Vec t/Triple)

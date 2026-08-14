@@ -48,8 +48,8 @@
 (defn encode-term [value]
   (let [out (java.io.ByteArrayOutputStream.)]
     (wire/write-term-codec-v1!
-     out value wire/rpc-v1-max-string-bytes
-     wire/rpc-v1-max-term-nodes wire/rpc-v1-max-term-depth)
+     out value wire/rpc-v2-max-string-bytes
+     wire/rpc-v2-max-term-nodes wire/rpc-v2-max-term-depth)
     (.toByteArray out)))
 
 (defn decode-term [bytes]
@@ -57,17 +57,17 @@
                  (.order java.nio.ByteOrder/LITTLE_ENDIAN))
         decoded
         (wire/decode-term-codec-v1!
-         buffer wire/rpc-v1-max-string-bytes
-         wire/rpc-v1-max-term-nodes wire/rpc-v1-max-term-depth)]
+         buffer wire/rpc-v2-max-string-bytes
+         wire/rpc-v2-max-term-nodes wire/rpc-v2-max-term-depth)]
     (check! "Term golden is consumed exactly" (zero? (.remaining buffer)))
     (t/termcodecdecoded-value decoded)))
 
 (def four-frame-golden
   (str
-   "4652414d5250430001000000010077000000080706050403020101090000006d73612d737061636506050000007175657279012900000000000000011900000001070106000000637572736f720605000000616674657202070000000000000001dc050000070105000000416c6963650702d6ffffffffffffff03000000000000f83f08c059cc690000000015cd5b0705"
-   "4652414d5250430001000000020096000000080706050403020101090000006d73612d7370616365060500000071756572792a00000000000000010200000001070106000000637572736f720605000000616674657202070000000000000000010608000000636f6e666c69637401010d00000076657273696f6e206d6f766564010401070105000000416c6963650702d6ffffffffffffff03000000000000f83f08c059cc690000000015cd5b0705"
-   "4652414d52504300010000000300000000000900000000000000"
-   "4652414d52504300010000000400250000000a0000000000000001090000006d73612d737061636506070000006368616e6765642b00000000000000000000"))
+   "4652414d5250430002000000010077000000080706050403020101090000006d73612d737061636506050000007175657279012900000000000000011900000001070106000000637572736f720605000000616674657202070000000000000001dc050000070105000000416c6963650702d6ffffffffffffff03000000000000f83f08c059cc690000000015cd5b0705"
+   "4652414d5250430002000000020096000000080706050403020101090000006d73612d7370616365060500000071756572792a00000000000000010200000001070106000000637572736f720605000000616674657202070000000000000000010608000000636f6e666c69637401010d00000076657273696f6e206d6f766564010401070105000000416c6963650702d6ffffffffffffff03000000000000f83f08c059cc690000000015cd5b0705"
+   "4652414d52504300020000000300000000000900000000000000"
+   "4652414d52504300020000000400250000000a0000000000000001090000006d73612d737061636506070000006368616e6765642b00000000000000000000"))
 
 (def cursor (t/triple "cursor" :after 7))
 (def payload
@@ -93,7 +93,7 @@
   (wire/rpc-event-frame
    10 (wire/rpc-response! "msa-space" :changed 43 nil nil nil)))
 (def frames [request-frame response-frame cancel-frame event-frame])
-(def encoded-frames (mapv wire/encode-rpc-frame-v1! frames))
+(def encoded-frames (mapv wire/encode-rpc-frame-v2! frames))
 (def encoded-golden (concat-bytes encoded-frames))
 
 (let [actual (bytes-hex encoded-golden)
@@ -108,20 +108,20 @@
           (= four-frame-golden actual)))
 
 (check! "all four frame kinds decode to their closed records"
-        (= frames (mapv wire/decode-rpc-frame-v1! encoded-frames)))
+        (= frames (mapv wire/decode-rpc-frame-v2! encoded-frames)))
 (check! "cancel has a zero-byte body"
         (= 26 (alength ^bytes (nth encoded-frames 2))))
 (check! "request id preserves all signed-long bits"
         (= -1
-           (t/rpcframev1-request-id
-            (wire/decode-rpc-frame-v1!
-             (wire/encode-rpc-frame-v1! (wire/rpc-cancel-frame -1))))))
+           (t/rpcframev2-request-id
+            (wire/decode-rpc-frame-v2!
+             (wire/encode-rpc-frame-v2! (wire/rpc-cancel-frame -1))))))
 (check! "false remains a present optional error-detail Term"
         (false?
          (t/rpc-error-detail-value
           (t/rpcresponse-error
-           (t/rpcframev1-response
-            (wire/decode-rpc-frame-v1! (nth encoded-frames 1)))))))
+           (t/rpcframev2-response
+            (wire/decode-rpc-frame-v2! (nth encoded-frames 1)))))))
 
 (doseq [[label value expected]
         [["String" "é" "0102000000c3a9"]
@@ -154,11 +154,11 @@
         (= :term-depth-exceeded
            (thrown-code #(encode-term (nested-term 257)))))
 (check! "batch action bound is derived from the mutation response envelope"
-        (and (= 9 wire/rpc-v1-mutation-response-wrapper-depth)
-             (= 247 wire/rpc-v1-max-batch-actions)
-             (= wire/rpc-v1-max-term-depth
-                (+ wire/rpc-v1-max-batch-actions
-                   wire/rpc-v1-mutation-response-wrapper-depth))))
+        (and (= 9 wire/rpc-v2-mutation-response-wrapper-depth)
+             (= 247 wire/rpc-v2-max-batch-actions)
+             (= wire/rpc-v2-max-term-depth
+                (+ wire/rpc-v2-max-batch-actions
+                   wire/rpc-v2-mutation-response-wrapper-depth))))
 
 (defn shared-ternary-term [levels]
   (loop [remaining levels value "leaf"]
@@ -169,31 +169,31 @@
 (check! "per-Term 65,536-node cap is enforced before body allocation"
         (= :term-codec-node-limit
            (thrown-code
-            #(wire/encode-rpc-frame-v1!
+            #(wire/encode-rpc-frame-v2!
               (wire/rpc-request-frame
                1 (wire/rpc-request! "s" :op nil nil nil
                                     (shared-ternary-term 10)))))))
 (check! "SpaceId 4,096-byte cap is enforced during encode preflight"
         (= :term-codec-string-limit
            (thrown-code
-            #(wire/encode-rpc-frame-v1!
+            #(wire/encode-rpc-frame-v2!
               (wire/rpc-request-frame
                1 (wire/rpc-request! (apply str (repeat 4097 "s"))
                                     :op nil nil nil true))))))
 (check! "one-MiB body cap is enforced before body allocation"
         (= :rpc-frame-too-large
            (thrown-code
-            #(wire/encode-rpc-frame-v1!
+            #(wire/encode-rpc-frame-v2!
               (wire/rpc-request-frame
                1 (wire/rpc-request! "s" :op nil nil nil
-                                    (.repeat "x" wire/rpc-v1-max-string-bytes)))))))
+                                    (.repeat "x" wire/rpc-v2-max-string-bytes)))))))
 (check! "open-map request payloads are rejected at the closed Term boundary"
         (= :rpc-invalid-term
            (thrown-code #(wire/rpc-request! "s" :op nil nil nil {}))))
 
 (let [request-bytes (first encoded-frames)
       simple-page-response
-      (wire/encode-rpc-frame-v1!
+      (wire/encode-rpc-frame-v2!
        (wire/rpc-response-frame
         1 (wire/rpc-response! "s" :op 0
                               (wire/rpc-page-response! 0 nil false)
@@ -208,52 +208,52 @@
                                  (- (alength ^bytes simple-page-response) 3) 2)]
   (check! "bad magic is typed"
           (= :rpc-invalid-magic
-             (thrown-code #(wire/decode-rpc-frame-v1!
+             (thrown-code #(wire/decode-rpc-frame-v2!
                             (altered-byte request-bytes 0 0)))))
   (check! "unsupported version is typed"
           (= :rpc-unsupported-version
-             (thrown-code #(wire/decode-rpc-frame-v1!
-                            (altered-byte request-bytes 8 2)))))
+             (thrown-code #(wire/decode-rpc-frame-v2!
+                            (altered-byte request-bytes 8 1)))))
   (check! "unknown frame kind is typed"
           (= :rpc-invalid-kind
-             (thrown-code #(wire/decode-rpc-frame-v1!
+             (thrown-code #(wire/decode-rpc-frame-v2!
                             (altered-byte request-bytes 12 9)))))
-  (check! "nonzero v1 flags are rejected"
+  (check! "nonzero v2 flags are rejected"
           (= :rpc-invalid-flags
-             (thrown-code #(wire/decode-rpc-frame-v1!
+             (thrown-code #(wire/decode-rpc-frame-v2!
                             (altered-byte request-bytes 13 1)))))
   (check! "short declared body is typed as truncated"
           (= :rpc-truncated
-             (thrown-code #(wire/decode-rpc-frame-v1! truncated))))
+             (thrown-code #(wire/decode-rpc-frame-v2! truncated))))
   (check! "bytes beyond declared body are rejected"
           (= :rpc-trailing-bytes
-             (thrown-code #(wire/decode-rpc-frame-v1! extra))))
+             (thrown-code #(wire/decode-rpc-frame-v2! extra))))
   (check! "bytes left by the body decoder are rejected"
           (= :rpc-trailing-bytes
-             (thrown-code #(wire/decode-rpc-frame-v1! extra-in-body))))
+             (thrown-code #(wire/decode-rpc-frame-v2! extra-in-body))))
   (check! "presence bytes accept only 0 or 1"
           (= :rpc-invalid-presence
-             (thrown-code #(wire/decode-rpc-frame-v1! invalid-presence))))
+             (thrown-code #(wire/decode-rpc-frame-v2! invalid-presence))))
   (check! "boolean bytes accept only 0 or 1"
           (= :rpc-invalid-boolean
-             (thrown-code #(wire/decode-rpc-frame-v1! invalid-bool))))
+             (thrown-code #(wire/decode-rpc-frame-v2! invalid-bool))))
   (check! "bad Term tag is typed"
           (= :term-codec-bad-tag
-             (thrown-code #(wire/decode-rpc-frame-v1!
+             (thrown-code #(wire/decode-rpc-frame-v2!
                             (altered-byte request-bytes 40 99)))))
   (check! "invalid UTF-8 is typed"
           (= :term-codec-invalid-utf8
              (thrown-code
-              #(wire/decode-rpc-frame-v1!
+              #(wire/decode-rpc-frame-v2!
                 (-> request-bytes
                     (altered-byte 31 0xc3)
                     (altered-byte 32 0x28)))))))
 
-(let [cancel (wire/encode-rpc-frame-v1! cancel-frame)
+(let [cancel (wire/encode-rpc-frame-v2! cancel-frame)
       nonempty (put-u32-le! (appended-byte cancel 0) 14 1)
       too-large-header (put-u32-le!
                         (java.util.Arrays/copyOf ^bytes cancel 26)
-                        14 (inc wire/rpc-v1-max-body-bytes))
+                        14 (inc wire/rpc-v2-max-body-bytes))
       space-prefix (byte-array [(unchecked-byte 1)
                                 (unchecked-byte 1) (unchecked-byte 16)
                                 (unchecked-byte 0) (unchecked-byte 0)])
@@ -263,24 +263,24 @@
       oversized-space (concat-bytes [request-header space-prefix])]
   (check! "cancel rejects a nonempty body"
           (= :rpc-invalid-shape
-             (thrown-code #(wire/decode-rpc-frame-v1! nonempty))))
+             (thrown-code #(wire/decode-rpc-frame-v2! nonempty))))
   (check! "declared body cap is checked before truncation or allocation"
           (= :rpc-frame-too-large
-             (thrown-code #(wire/decode-rpc-frame-v1! too-large-header))))
+             (thrown-code #(wire/decode-rpc-frame-v2! too-large-header))))
   (check! "SpaceId length is rejected before its bytes are allocated/read"
           (= :term-codec-string-limit
-             (thrown-code #(wire/decode-rpc-frame-v1! oversized-space)))))
+             (thrown-code #(wire/decode-rpc-frame-v2! oversized-space)))))
 
-(let [oversized (byte-array (inc wire/rpc-v1-max-frame-bytes))]
+(let [oversized (byte-array (inc wire/rpc-v2-max-frame-bytes))]
   (check! "physical frame cap is checked before ByteBuffer/body allocation"
           (= :rpc-frame-too-large
-             (thrown-code #(wire/decode-rpc-frame-v1! oversized)))))
+             (thrown-code #(wire/decode-rpc-frame-v2! oversized)))))
 
 (let [bad-instant (hex-bytes "08000000000000000000ca9a3b")]
   (check! "noncanonical Instant nanos are rejected"
           (= :term-codec-invalid-instant
              (thrown-code #(decode-term bad-instant)))))
 
-(println (str "fram_rpc_v1_test: "
+(println (str "fram_rpc_v2_test: "
               (if (zero? @failures) "PASS" (str @failures " FAIL"))))
 (System/exit (if (zero? @failures) 0 1))

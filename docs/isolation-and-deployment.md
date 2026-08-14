@@ -8,7 +8,7 @@ Fram has no engine accounts, authorization, or tenant policy. One [SpaceId](glos
 
 `bin/fram-server` launches native by default and fails closed unless `FRAM_NATIVE_ARTIFACT_DIR` names a READY artifact containing `bin/fram-server-native`. `FRAM_SERVER_RUNTIME=graal` selects the transitional self-contained server at the absolute `FRAM_GRAAL_ARTIFACT` path without presenting it as a native program artifact. `jvm-oracle` selects the sealed packaged JVM differential oracle; `jvm-dev` selects the checkout-only Clojure development route. None is an automatic fallback. The server binds `127.0.0.1` by default. `FRAM_BIND` changes the listener intentionally, `FRAM_SERVER_PORT` selects its port, and `FRAM_SERVER_CONNECT` selects the client host. New databases require `FRAM_SPACE_ID`; every request carries the same identity or is rejected. `FRAM_LISTEN_FD` may pass an operator-owned INET listener without changing codec, operations, or writer authority.
 
-The native host admits a bounded number of concurrent clients, each served by one worker thread. `FRAM_MAX_ACTIVE_CLIENTS` sets that bound and `FRAM_CONNECTION_WORKERS` is honored as its deployment-facing name; the default is 64. The bound must stay below every task limit the supervisor imposes — systemd `TasksMax`, cgroup `pids.max`, `RLIMIT_NPROC` — or the cgroup refuses the worker thread before the host's graceful over-cap refusal can engage. Over-cap connections are closed without a response; transient thread or memory pressure refuses the connection and keeps accepting rather than abandoning the listener. `FRAM_CLIENT_IO_TIMEOUT_MS` bounds how long a worker may block on a peer socket (default 15000; 0 removes the bound), so a client that connects and never sends, or vanishes mid-frame, releases its slot instead of holding it open. A connection that reaches the front of the accept queue already at end-of-file is closed without spending a worker at all. A request that arrives complete is always dispatched: FRAMRPC clients may half-close after sending, and a half-close is indistinguishable from a disconnect, so the host never abandons a request it has finished reading.
+The native host admits a bounded number of concurrent clients, each served by one worker thread. `FRAM_MAX_ACTIVE_CLIENTS` sets that bound and `FRAM_CONNECTION_WORKERS` is honored as its deployment-facing name; the default is 64. The bound must stay below every task limit the supervisor imposes — systemd `TasksMax`, cgroup `pids.max`, `RLIMIT_NPROC` — or the cgroup refuses the worker thread before the host's graceful over-cap refusal can engage. Over-cap connections are closed without a response; transient thread or memory pressure refuses the connection and keeps accepting rather than abandoning the listener. `FRAM_CLIENT_IO_TIMEOUT_MS` bounds how long a worker may block on a peer socket (default 15000; 0 removes the bound), so a client that connects and never sends, or vanishes mid-frame, releases its slot instead of holding it open. A connection that reaches the front of the accept queue already at end-of-file is closed without spending a worker at all. A request that arrives complete is always dispatched: FRAMRPC clients may half-close after sending, and a half-close is indistinguishable from a disconnect, so the host never abandons a request it has finished reading. Worker threads can read their sockets concurrently, but native production holds one `dispatch_mutex` across the dispatch of each fully read request; the client admission count is not a non-convoying-read guarantee.
 
 When `NOTIFY_SOCKET` is set, the native host sends `READY=1` once the store has booted and replayed and the accept loop is running, and `STOPPING=1` when it begins draining. Readiness deliberately does not mean "listening": under socket activation the listener exists before the process does, so a unit that gates on the socket learns nothing. Outside a service manager `NOTIFY_SOCKET` is unset and the notification is a no-op; the host links no libsystemd.
 
@@ -18,9 +18,30 @@ the authenticated HTTP shim remains a separate Babashka container.
 
 The listener is plaintext. Remote deployments keep it private and terminate TLS, authentication, tenant routing, request limits, and public audit policy at a gateway or sidecar.
 
-## FRAMRPC v1
+## FRAMRPC v2
 
-FRAMRPC v1 is a bounded binary protocol. Each frame carries magic, version, request identity, SpaceId, one operation tag, typed controls, and a closed payload. Terms use the recursive tagged codec linked from the [glossary](glossary.md#semantic-kernel); triples are positional tagged arrays, so `t1`/`t2`/`t3` never appear on the wire.
+FRAMRPC v2 (wire version 2.0) is a bounded binary protocol. Version 2.0 is
+exact: a mismatch in either the major or minor version is rejected. Every frame
+has a 26-byte header carrying magic, version, frame kind, flags, body length,
+and request id; its body is at most 1,048,576 bytes, so the complete frame is at
+most 1,048,602 bytes. A request body carries a SpaceId of at most 4,096 UTF-8
+bytes, one operation tag, typed controls, and one closed payload. A response
+body carries SpaceId, operation, served version, and optional page, error, and
+payload fields. Terms use the recursive tagged codec linked from the
+[glossary](glossary.md#semantic-kernel); triples are positional tagged arrays,
+so `t1`/`t2`/`t3` never appear on the wire.
+
+Version 2 is intentionally incompatible with version 1. Occurrence responses
+carry explicit `coordinate`, `action`, and `proposition` fields, and each
+mutation action result carries one occurrence coordinate rather than a list of
+manufactured history Terms. Clients and servers reject every version other
+than 2.0 instead of translating or negotiating it.
+
+The JVM codec models all four frame kinds: request, response, cancel, and event.
+A cancel frame still carries the header and request id but requires a zero-byte
+body. The native boundary is deliberately directional: its decoder accepts only
+request frames and its encoder emits only response frames. Shared canonical
+request/response bytes do not imply an identical host codec surface.
 
 Unknown operation, record, field, and Term tags, trailing bytes, or over-limit nesting are rejected. FRAMRPC is not EDN, JSON, HTTP, or MCP.
 
@@ -31,7 +52,19 @@ The data surface is exactly thirteen operations:
 - read: `rpc/scan`, `rpc/query`, `rpc/occurrences`;
 - fencing: `rpc/lease-acquire`, `rpc/lease-renew`, `rpc/lease-release`, `rpc/lease-check`.
 
-Query, scan, and occurrences accept page cursors; only query accepts a timeout. Mutations may carry expected logical version, reads report served version, and status reports ordered-result-cache counters. There is no FRAMRPC pull, import/export, graph-edit, deployment, or cutover operation; those local or sealed controls do not enlarge FRAMRPC.
+Query, scan, and occurrences accept page requests, with operation-specific
+cursors; only query accepts a timeout. On native, an unpaged query above 248
+rows refuses `:term-depth-exceeded`; scan allows at most 200 rows per page,
+refuses a larger unpaged result with `:rpc/native-page-required`, and emits a
+native scan cursor; unpaged `rpc/occurrences` silently returns only its first 248
+rows. Paginate every nontrivial read.
+
+Every one of the thirteen data operations accepts an expected logical version,
+which is enforced before operation-specific handling; a stale or future value
+returns `:rpc/conflict`. Reads report served version, and status reports
+ordered-result-cache counters. There is no FRAMRPC pull, import/export,
+graph-edit, deployment, or cutover operation; those local or sealed controls do
+not enlarge FRAMRPC.
 
 The native engine answers one operation beyond that data surface: `rpc/checkpoint`
 takes `:rpc/unit`, refuses a page cursor, writes the
@@ -46,7 +79,7 @@ operation and is not a method on the data client.
 [`../tests/fram_snapshot_boot_test.sh`](../tests/fram_snapshot_boot_test.sh)
 gates the operation and the boot route it feeds.
 
-The official zero-dependency [`clients/bun/framrpc.mjs`](../clients/bun/framrpc.mjs) client requires Bun 1.3.13 or newer, connects directly, and exposes all thirteen operations with recursive Terms, batches, versions, snapshots, paging, replay, and leases.
+The official zero-dependency [`clients/bun/framrpc.mjs`](../clients/bun/framrpc.mjs) client requires Bun 1.3.13 or newer, connects directly, and exposes all thirteen data operations with recursive Terms, batches, versions, snapshots, paging, replay, and leases.
 
 ## Deployment shapes
 
@@ -62,10 +95,11 @@ owns the log bytes, and what makes the writer sole.
 The first two are one process holding a socket and speaking FRAMRPC. The third
 has no socket and no process of its own: the embedder instantiates the module
 and calls `fram_transact`, `fram_query`, or `fram_snapshot` with one canonical
-FRAMRPC v1 request frame in linear memory, receiving one canonical response
-frame. Framing, codec, operations, and refusals are the same in all three, and
-the wasm engine answers byte-for-byte what the native embed library answers on
-the same frames — including the FRAMLOG bytes both write
+FRAMRPC v2 request frame in linear memory, receiving one canonical response
+frame. The accepted request and emitted response framing, operations, and
+refusals are shared subject to the directional native codec restriction above.
+The wasm engine answers byte-for-byte what the native embed library answers on
+the same accepted request frames — including the FRAMLOG bytes both write
 ([`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh)).
 
 Exclusivity per regime:
@@ -273,8 +307,11 @@ The patterns that keep growth proportional to change:
 
 ## Probes
 
-- [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj): recursive Term records and codec.
-- [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) and [`../tests/bun_framrpc_client_test.mjs`](../tests/bun_framrpc_client_test.mjs): real listener and official client.
+- [`../tests/fram_rpc_v2_test.clj`](../tests/fram_rpc_v2_test.clj): recursive Term records and codec.
+- [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj):
+  the JVM listener route despite its historical filename.
+- [`../tests/bun_framrpc_client_test.mjs`](../tests/bun_framrpc_client_test.mjs):
+  the official client against the selected server runtime.
 - [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj): closed operation boundary.
 - [`../tests/writer_authority_test.clj`](../tests/writer_authority_test.clj): writer-authority and JVM-oracle compatibility behavior.
 - [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh): the wasm host-import regime end to end — pinned seams, native/wasm response and FRAMLOG byte identity, the snapshot image, the unpaged codec bound, and the WASI call tally.

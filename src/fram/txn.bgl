@@ -90,7 +90,7 @@
    (predicate Any)
    (value Any)]
   (Vec t/CommitOperation)
-  (conj (mapv (fn [(event t/Triple)] t/CommitOperation (store/retract-operation (rot/proposition-of event))) (rot/newest-first (rot/by-t12 view subject predicate)))
+  (conj (mapv (fn [(event t/OperationOccurrence)] t/CommitOperation (store/retract-operation (rot/proposition-of event))) (rot/newest-first (rot/by-t12 view subject predicate)))
     (store/assert-operation (t/triple subject predicate value))))
 
 (defn update-single!

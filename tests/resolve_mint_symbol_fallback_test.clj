@@ -12,8 +12,8 @@
       (swap! failures inc))))
 
 ;; S2: a predicate IS its spelling Term and a node is a minted coordinate, so the
-;; projection's integers come from ri/ordinal — view coordinates, not identity.
-(def ctx (ri/new-graph "resolve-mint-symbol-fallback-test"))
+;; projection's integers come from ri/ordinal! — view coordinates, not identity.
+(def ctx (ri/new-graph! "resolve-mint-symbol-fallback-test"))
 (def KIND "kind")
 (def Vp "v")
 (def BOUND "bound_to")
@@ -37,28 +37,28 @@
 
 (def emit
   (rmi/->Emit ctx nil BOUND REFERS FIXED {} identity identity #{} #{}))
-(def emit-line (ns-resolve 'resolve-mint 'emit-line))
+(def emit-line! (ns-resolve 'resolve-mint 'emit-line!))
 
 (let [[leaf v-cid] (symbol! "posix/getenv")
       external-target (node!)]
   (ri/assert! ctx leaf REFERS external-target)
   (ri/assert! ctx leaf QUALIFIER "must-not-prefix")
   (check! "unresolved external target preserves the quoted leaf spelling"
-          (str "[" (ri/ordinal ctx leaf) " \"v\" \"posix/getenv\"]")
-          (emit-line emit nil leaf v-cid)))
+          (str "[" (ri/ordinal! ctx leaf) " \"v\" \"posix/getenv\"]")
+          (emit-line! emit nil leaf v-cid)))
 
 (let [[leaf v-cid] (symbol! "old-name")
       [binding _] (symbol! "renamed-name")]
   (ri/assert! ctx leaf REFERS binding)
   (check! "resolved binding identity still projects its renamed spelling"
-          (str "[" (ri/ordinal ctx leaf) " \"v\" \"renamed-name\"]")
-          (emit-line emit nil leaf v-cid)))
+          (str "[" (ri/ordinal! ctx leaf) " \"v\" \"renamed-name\"]")
+          (emit-line! emit nil leaf v-cid)))
 
 ;; The widening's own bar: a projection integer must never be mistaken for a node.
 (let [[leaf _] (symbol! "shape-probe")]
   (check! "a minted identity is a Term, and the ordinal that projects it is not"
           [true false]
-          [(ri/minted-node-id? leaf) (ri/minted-node-id? (ri/ordinal ctx leaf))]))
+          [(ri/minted-node-id? leaf) (ri/minted-node-id? (ri/ordinal! ctx leaf))]))
 
 (println (str "resolve-mint symbol fallback: " (if (zero? @failures) "PASS" "FAIL")))
 (when (pos? @failures)

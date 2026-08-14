@@ -75,7 +75,8 @@
    closure (rsv/blast-closure (mapv (fn [e] [(key->str (nth e 0)) (key->str (nth e 1))]) (vec edges)))]
   {:reaches (set (mapv (fn [r] [(get key-of (nth r 0)) (get key-of (nth r 1))]) (vec (:reaches closure)))) :blast (reduce (fn [m kv] (assoc m (get key-of (nth kv 0)) (set (mapv (fn [x] (get key-of x)) (vec (nth kv 1)))))) {} (vec (:blast closure)))}))
 
-(defn -main [& args]
+(defn -main [& $beagle$rest$host]
+  (let [args (vec $beagle$rest$host)]
   (let [facts-path (str (nth (vec args) 0))
    blocks (parse-corpus! facts-path)
    graph (build-graph blocks)
@@ -89,4 +90,4 @@
    blast-out (into {} (mapv (fn [kv] [(key->str (nth kv 0)) (mapv (fn [x] (key->str x)) (vec (nth kv 1)))]) (vec blast)))]
   (binding [*out* *err*]
   (println (format "callgraph: %d defns, %d scope-correct edges, %d transitive reaches-pairs (Fram Datalog closure)" (count defns) (count edges) (count reaches))))
-  (println (json/generate-string {:defns defns-out :edges edges-out :blast blast-out}))))
+  (println (json/generate-string {:defns defns-out :edges edges-out :blast blast-out})))))

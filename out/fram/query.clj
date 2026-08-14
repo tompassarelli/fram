@@ -115,7 +115,7 @@
 
 (def ^:dynamic *query-control* nil)
 
-(def base-rel-arities {d/triple-relation 3 d/occurrence-relation 3 d/text-match-relation 3 d/text-phrase-relation 3 d/text-substring-relation 3 d/text-stem-relation 3 d/text-search-relation 4})
+(def base-rel-arities {d/triple-relation 3 d/occurrence-relation 3 d/withdrawal-relation 2 d/text-match-relation 3 d/text-phrase-relation 3 d/text-substring-relation 3 d/text-stem-relation 3 d/text-search-relation 4})
 
 (def base-relations d/base-relations)
 
@@ -259,23 +259,23 @@
   (let [error-value (d/candidatesourcesresult-error result)]
   (if (some? error-value) (->ProjectionResult nil error-value) (->ProjectionResult (->Projection database (d/candidatesourcesresult-sources result)) nil))))
 
-(defn ^ProjectionResult project-result [propositions]
-  (projection-from-candidates-result (d/edb propositions) (d/build-text-candidates-result propositions)))
+(defn ^ProjectionResult project-result! [propositions]
+  (projection-from-candidates-result (d/edb propositions) (d/build-text-candidates-result! propositions)))
 
-(defn ^ProjectionResult project-with-occurrences-result [propositions occurrences]
-  (let [database (d/edb-with-occurrences propositions occurrences)]
-  (projection-from-candidates-result database (d/build-text-candidates-result propositions))))
+(defn ^ProjectionResult project-with-history-result! [propositions occurrences withdrawals]
+  (let [database (d/edb-with-history propositions occurrences withdrawals)]
+  (projection-from-candidates-result database (d/build-text-candidates-result! propositions))))
 
 (defn- ^Projection projection-or-raise [^ProjectionResult result]
   (let [projection-value (projectionresult-projection result)
    error-value (projectionresult-error result)]
   (if (some? projection-value) projection-value (if (some? error-value) (d/raise-query-evaluation-error error-value) (throw (ex-info "query projection produced no result" {:type :query-projection-missing-result}))))))
 
-(defn ^Projection project [propositions]
-  (projection-or-raise (project-result propositions)))
+(defn ^Projection project! [propositions]
+  (projection-or-raise (project-result! propositions)))
 
-(defn ^Projection project-with-occurrences [propositions occurrences]
-  (projection-or-raise (project-with-occurrences-result propositions occurrences)))
+(defn ^Projection project-with-history! [propositions occurrences withdrawals]
+  (projection-or-raise (project-with-history-result! propositions occurrences withdrawals)))
 
 (defn- set-union [left right]
   (reduce (fn [acc value] (conj acc value)) left right))
@@ -341,7 +341,7 @@
   (= :builtin (d/literal-kind literal)) #{(d/literal-binding literal)}
   :else #{}))
 
-(defn- text-literal-errors [literal bound]
+(defn- text-literal-errors! [literal bound]
   (if (and (= :relation (d/literal-kind literal)) (contains? d/text-relations (d/literal-relation literal))) (let [relation (d/literal-relation literal)
    arguments (d/literal-arguments literal)]
   (cond
@@ -351,10 +351,10 @@
    variable (d/queryterm-variable needle)]
   (cond
   (some? variable) (if (contains? bound variable) (empty-query-errors) [(query-error :query-text-unbound-needle (str relation " query must be constant or already bound"))])
-  (d/text-relation-needle-valid? relation (d/queryterm-value needle)) (empty-query-errors)
+  (d/text-relation-needle-valid?! relation (d/queryterm-value needle)) (empty-query-errors)
   :else [(query-error :query-text-invalid-needle (str relation " query is empty or invalid"))])))) (empty-query-errors)))
 
-(defn- rule-errors [rule known arities]
+(defn- rule-errors! [rule known arities]
   (let [head-relation (d/rule-head-relation rule)
    head-arguments (d/rule-head-arguments rule)
    head-errors (vec (concat (if (pos? (count head-relation)) (empty-query-errors) [(query-error :query-invalid-rule "rule head relation is empty")]) (concat (if (contains? base-relations head-relation) [(query-error :query-base-shadow (str "rule head cannot redefine base relation '" head-relation "'"))] (empty-query-errors)) (term-errors head-arguments "rule head"))))]
@@ -363,7 +363,7 @@
    bound (empty-string-set)
    errors head-errors]
   (if (>= position (count body)) (vec (concat errors (unbound-errors head-arguments bound "rule head"))) (let [literal (nth body position)]
-  (recur (inc position) (set-union bound (literal-bindings literal)) (vec (concat errors (concat (literal-errors literal known arities bound) (text-literal-errors literal bound)))))))))))
+  (recur (inc position) (set-union bound (literal-bindings literal)) (vec (concat errors (concat (literal-errors literal known arities bound) (text-literal-errors! literal bound)))))))))))
 
 (defn- arity-errors [rules]
   (let [arities (head-arities rules)]
@@ -457,14 +457,14 @@
    limit-errors (if (and (some? limit) (or (< limit 1) (> limit max-results))) [(query-error :query-invalid-limit (str "query limit must be from 1 through " max-results))] [])]
   (vec (concat clause-errors limit-errors))))
 
-(defn validate-plan [^QueryPlan plan]
+(defn validate-plan! [^QueryPlan plan]
   (let [strata (queryplan-strata plan)
    rules (reduce (fn [acc stratum] (vec (concat acc stratum))) (empty-rules) strata)
    derived (derived-relations rules)
    known (set-union base-relations derived)
    arities (head-arities rules)
    empty-errors (if (empty? rules) [(query-error :query-invalid-plan "query plan must contain at least one rule")] (empty-query-errors))
-   rules-errors (reduce (fn [acc rule] (vec (concat acc (rule-errors rule known arities)))) (empty-query-errors) rules)
+   rules-errors (reduce (fn [acc rule] (vec (concat acc (rule-errors! rule known arities)))) (empty-query-errors) rules)
    strata-errors (reduce (fn [acc message] (conj acc (query-error :query-stratification message))) (empty-query-errors) (d/strata-violations strata))]
   (vec (concat empty-errors (concat rules-errors (concat (arity-errors rules) (concat (recursive-builtin-errors rules) (concat (forward-errors strata derived) (concat strata-errors (concat (find-errors (queryplan-find plan) derived arities) (order-errors plan arities)))))))))))
 
@@ -542,12 +542,12 @@
 (defn- ^FindSpec compile-find-form [find]
   (if (string? find) (relation-find find) (aggregate-find (:rel find) (:group find) (mapv (fn [spec] (aggregate-spec (:op spec) (:arg spec))) (:agg find)) (mapv (fn [clause] (having-clause (:op clause) (:agg clause) (:val clause))) (or (:having find) [])))))
 
-(defn ^CompileResult compile-query [form]
-  (if (query-plan? form) (let [errors (validate-plan form)]
+(defn ^CompileResult compile-query! [form]
+  (if (query-plan? form) (let [errors (validate-plan! form)]
   (if (empty? errors) (->CompileResult form []) (->CompileResult nil errors))) (let [errors (syntax-errors form)]
   (if (not (empty? errors)) (->CompileResult nil errors) (let [strata (mapv (fn [stratum] (mapv (fn [rule] (compile-rule-form rule)) stratum)) (raw-strata form))
    plan (ordered-query-plan (compile-find-form (:find form)) strata (mapv (fn [clause] (order-clause (:column clause) (:direction clause))) (or (:order-by form) [])) (:limit form))
-   validation-errors (validate-plan plan)]
+   validation-errors (validate-plan! plan)]
   (if (empty? validation-errors) (->CompileResult plan []) (->CompileResult nil validation-errors)))))))
 
 (defn- ^String length-key [^String tag ^String value]
@@ -802,7 +802,7 @@
   (if (and (nil? (queryplan-limit plan)) (> count-value max-results)) (limited-result (query-error :query-result-limit (str "aggregate result has " count-value " groups, over limit " max-results)) count-value max-results) (success-result (ordered-plan-rows plan survivors)))))))))
 
 (defn ^QueryExecutionResult run-plan-projected-result! [^Projection projection ^QueryPlan plan control]
-  (let [errors (validate-plan plan)]
+  (let [errors (validate-plan! plan)]
   (if (not (empty? errors)) (->QueryExecutionResult (failure-result errors) nil) (let [evaluation (evaluate-plan-result! projection plan control)
    error-value (d/query-evaluation-result-error evaluation)]
   (if (some? error-value) (->QueryExecutionResult nil error-value) (let [db (d/query-evaluation-db evaluation)
@@ -812,8 +812,8 @@
   (if (and (nil? (queryplan-limit plan)) (> count-value max-results)) (limited-result (query-error :query-result-limit (str "result has " count-value " rows, over limit " max-results)) count-value max-results) (success-result (ordered-plan-rows plan (vec rows))))))]
   (->QueryExecutionResult result nil)))))))
 
-(defn ^QueryExecutionResult run-plan-with-occurrences-result! [propositions occurrences ^QueryPlan plan control]
-  (let [projection-result (project-with-occurrences-result propositions occurrences)
+(defn ^QueryExecutionResult run-plan-with-history-result! [propositions occurrences withdrawals ^QueryPlan plan control]
+  (let [projection-result (project-with-history-result! propositions occurrences withdrawals)
    projection-value (projection-result-projection projection-result)
    error-value (projection-result-error projection-result)]
   (cond
@@ -842,10 +842,10 @@
   (run-plan-projected! projection plan))
 
 (defn ^QueryResult run! [propositions ^QueryPlan plan]
-  (run-plan-projected! (project propositions) plan))
+  (run-plan-projected! (project! propositions) plan))
 
 (defn ^QueryResult run-syntax! [propositions form]
-  (let [compiled (compile-query form)
+  (let [compiled (compile-query! form)
    plan (compileresult-plan compiled)]
   (if (some? plan) (run! propositions plan) (failure-result (compileresult-errors compiled)))))
 
@@ -904,7 +904,7 @@
   :else (recur (inc position)))))
 
 (defn ^QueryPage run-page-plan-projected! [^Projection projection ^QueryPlan plan limit after]
-  (let [validation-errors (validate-plan plan)]
+  (let [validation-errors (validate-plan! plan)]
   (cond
   (not (empty? validation-errors)) (failure-page validation-errors)
   (aggregate-find? (queryplan-find plan)) (failure-page [(query-error :query-aggregate-not-pageable "aggregate results are not pageable")])
@@ -931,4 +931,4 @@
   (run-page-plan-projected! projection plan limit after))
 
 (defn ^QueryPage run-page! [propositions ^QueryPlan plan limit after]
-  (run-page-plan-projected! (project propositions) plan limit after))
+  (run-page-plan-projected! (project! propositions) plan limit after))

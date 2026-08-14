@@ -234,7 +234,7 @@
 
 (defn emit-deleted-subtree [r] (:deleted-subtree r))
 
-(defn- emit-line [^Emit m wrap e cid]
+(defn- emit-line! [^Emit m wrap e cid]
   (let [ctx (:ctx m)
    view (:view m)
    ps (ri/predicate-at ctx cid)
@@ -252,15 +252,15 @@
   (some? cpfx) (str cpfx nm0)
   (some? afield) (str (str/lower-case (str nm0)) "-" afield)
   :else nm0))]
-  (str "[" (ri/ordinal ctx e) " \"v\" " (pr-str (cond
+  (str "[" (ri/ordinal! ctx e) " \"v\" " (pr-str (cond
   (nil? nm0) (rr/pred-val ctx view e "v")
   fixed? r
   (some? qual) (str qual "/" nm)
   :else nm)) "]"))
-  (ri/literal? r) (str "[" (ri/ordinal ctx e) " " (pr-str ps) " " (pr-str r) "]")
-  :else (str "[" (ri/ordinal ctx e) " " (pr-str ps) " " (ri/ordinal ctx r) "]"))))
+  (ri/literal? r) (str "[" (ri/ordinal! ctx e) " " (pr-str ps) " " (pr-str r) "]")
+  :else (str "[" (ri/ordinal! ctx e) " " (pr-str ps) " " (ri/ordinal! ctx r) "]"))))
 
-(defn extract-lines [^Emit m ^String src]
+(defn extract-lines! [^Emit m ^String src]
   (let [ctx (:ctx m)
    wrapf (:wrapper-of m)
    desc (:descendants m)
@@ -270,10 +270,10 @@
    root (if (empty? dforms) (wrapf src) nil)
    live (if (some? root) (desc root) nil)
    ents (vec (get (:ents m) src []))
-   rows (reduce (fn [acc e] (if (or (contains? dsub e) (and (some? live) (not (contains? live e)))) acc (reduce (fn [a cid] (let [line (emit-line m wrap e cid)]
+   rows (reduce (fn [acc e] (if (or (contains? dsub e) (and (some? live) (not (contains? live e)))) acc (reduce (fn [a cid] (let [line (emit-line! m wrap e cid)]
   (if (nil? line) a (conj a line)))) acc (ri/by-subject ctx e)))) [] ents)
    forms (if (some? wrap) (vec (remove (fn [f] (contains? dforms f)) (vec (rest (rr/ordered-children ctx wrap))))) [])
-   formlines (mapv (fn [i] (str "[" (ri/ordinal ctx wrap) " \"f" (+ i 1) "\" " (ri/ordinal ctx (nth forms i)) "]")) (vec (range (count forms))))]
+   formlines (mapv (fn [i] (str "[" (ri/ordinal! ctx wrap) " \"f" (+ i 1) "\" " (ri/ordinal! ctx (nth forms i)) "]")) (vec (range (count forms))))]
   (into (into [(str "@file " src)] rows) formlines)))
 
 (defn author-emit-lines [op detail srcs outp]
@@ -322,7 +322,7 @@
   (->Emit ctx view BOUND REFERS FIXED ents (fn [src] (wrapper-of ctx view ents src)) (fn [root] (structural-descendants ctx root)) #{} #{}))
 
 (defn extract-file! [^Emit m ^String src ^String outp]
-  (spit outp (str (str/join "\n" (extract-lines m src)) "\n")))
+  (spit outp (str (str/join "\n" (extract-lines! m src)) "\n")))
 
 (def DEFAULT-RESOLVE-OUT nil)
 

@@ -19,7 +19,7 @@ Usage:
 The source root must be a clean checkout whose requested release tag points at
 HEAD. The command uses Bun 1.3.13 to write the canonical adapter tarball and a
 path-independent receipt, then prints their absolute paths on separate lines.
-The package's 0.2.0 semver is independent from the repository release tag.
+The package's 0.3.0 semver is independent from the repository release tag.
 USAGE
 }
 
@@ -135,7 +135,7 @@ package_version="$(bun -e '
   if (manifest.name !== "@tompassarelli/fram-cloudflare-do") {
     fail("unexpected package name");
   }
-  if (manifest.version !== "0.2.0") fail("package version must be 0.2.0");
+  if (manifest.version !== "0.3.0") fail("package version must be 0.3.0");
   if (manifest.type !== "module") fail("package type must be module");
   if (manifest.types !== "./src/adapter.d.ts") {
     fail("unexpected root declaration entry");
@@ -166,7 +166,7 @@ package_version="$(bun -e '
   }
   console.log(manifest.version);
 ' "$package_json")"
-[[ "$package_version" == "0.2.0" ]] ||
+[[ "$package_version" == "0.3.0" ]] ||
   die "could not read the Cloudflare package version"
 
 root_files=(LICENSE LICENSE-MIT LICENSE-APACHE)

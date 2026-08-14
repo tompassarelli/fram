@@ -16,7 +16,8 @@
    r (t/triple-t3 proposition)]
   (if (integer? r) (println (str "[" l " " (pr-str p) " " r "]")) (println (str "[" l " " (pr-str p) " " (pr-str r) "]")))))
 
-(defn -main [& args]
+(defn -main [& $beagle$rest$host]
+  (let [args (vec $beagle$rest$host)]
   (let [edn-path (str (nth (vec args) 0))
    ctx (c/new-term-store space-id)
    lines (str/split-lines (slurp edn-path))
@@ -26,4 +27,4 @@
   (binding [*out* *err*]
   (println "loaded" (count (c/live-propositions ctx)) "facts into a Fram store"))
   (doseq [proposition (c/live-propositions ctx)]
-  (dump-proposition! proposition))))
+  (dump-proposition! proposition)))))

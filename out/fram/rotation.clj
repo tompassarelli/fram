@@ -32,14 +32,6 @@
 
 (defn occurrenceindex-chain [r] (:chain r))
 
-(defrecord PendingOp [action proposition event])
-
-(defn pendingop-action [r] (:action r))
-
-(defn pendingop-proposition [r] (:proposition r))
-
-(defn pendingop-event [r] (:event r))
-
 (defrecord Rotation [space-id version events by-occurrence spo pos osp pending])
 
 (defn rotation-space-id [r] (:space-id r))
@@ -85,13 +77,13 @@
 (def shape-bits 2)
 
 (defn occurrence-of [event]
-  (t/triple-t1 event))
+  (t/operationoccurrence-coordinate event))
 
 (defn proposition-of [event]
-  (t/triple-t3 event))
+  (t/operationoccurrence-proposition event))
 
 (defn ^Boolean assertion-occurrence? [event]
-  (and (t/triple? event) (and (= t/asserts (t/triple-t2 event)) (and (t/occurrence-coordinate? (t/triple-t1 event)) (t/triple? (t/triple-t3 event))))))
+  (t/assertion-occurrence? event))
 
 (defn- hash-one [a]
   (hash (->KeyOne a)))
@@ -100,7 +92,7 @@
   (hash (->KeyTwo a b)))
 
 (defn- shape-hash [shape event]
-  (let [proposition (t/triple-t3 event)]
+  (let [proposition (proposition-of event)]
   (cond
   (= shape shape-t1) (hash-one (t/triple-t1 proposition))
   (= shape shape-t12) (hash-two (t/triple-t1 proposition) (t/triple-t2 proposition))
@@ -108,8 +100,8 @@
   :else (hash-one (t/triple-t3 proposition)))))
 
 (defn- ^Boolean same-shape-key? [shape left right]
-  (let [lp (t/triple-t3 left)
-   rp (t/triple-t3 right)]
+  (let [lp (proposition-of left)
+   rp (proposition-of right)]
   (cond
   (= shape shape-t1) (= (t/triple-t1 lp) (t/triple-t1 rp))
   (= shape shape-t12) (and (= (t/triple-t1 lp) (t/triple-t1 rp)) (= (t/triple-t2 lp) (t/triple-t2 rp)))
@@ -126,7 +118,7 @@
   (bit-and code shape-mask))
 
 (defn- shape-term [shape event]
-  (let [proposition (t/triple-t3 event)]
+  (let [proposition (proposition-of event)]
   (cond
   (= shape shape-t1) (t/triple-t1 proposition)
   (= shape shape-t2) (t/triple-t2 proposition)
@@ -144,14 +136,14 @@
    chain (bucket-chain bucket)]
   (loop [key (nth (bucket-heads bucket) (mod (hash-two a b) (bucket-width bucket)))]
   (if (< key 0) empty-events (let [code (nth codes key)]
-  (if (and (= shape-t12 (code-shape code)) (let [proposition (t/triple-t3 (nth source (code-position code)))]
+  (if (and (= shape-t12 (code-shape code)) (let [proposition (proposition-of (nth source (code-position code)))]
   (and (= a (t/triple-t1 proposition)) (= b (t/triple-t2 proposition))))) (nth (bucket-events bucket) key) (recur (nth chain key))))))))
 
 (defn- occurrence-event [^OccurrenceIndex index source occurrence]
   (let [chain (occurrenceindex-chain index)]
   (loop [position (nth (occurrenceindex-heads index) (mod (hash-one occurrence) (occurrenceindex-width index)))]
   (if (< position 0) nil (let [event (nth source position)]
-  (if (= occurrence (t/triple-t1 event)) event (recur (nth chain position))))))))
+  (if (= occurrence (occurrence-of event)) event (recur (nth chain position))))))))
 
 (defn- ^Boolean slot-matches? [pattern term]
   (or (nil? pattern) (= pattern term)))
@@ -162,10 +154,10 @@
 (defn- narrowed [base t1 t2 t3]
   (let [kept (loop [position 0
    total 0]
-  (if (>= position (count base)) total (recur (inc position) (if (pattern-match? (t/triple-t3 (nth base position)) t1 t2 t3) (inc total) total))))]
+  (if (>= position (count base)) total (recur (inc position) (if (pattern-match? (proposition-of (nth base position)) t1 t2 t3) (inc total) total))))]
   (if (= kept (count base)) base (loop [built empty-events
    position 0]
-  (if (>= position (count base)) built (recur (if (pattern-match? (t/triple-t3 (nth base position)) t1 t2 t3) (conj built (nth base position)) built) (inc position)))))))
+  (if (>= position (count base)) built (recur (if (pattern-match? (proposition-of (nth base position)) t1 t2 t3) (conj built (nth base position)) built) (inc position)))))))
 
 (defn- without-newest-of [events proposition]
   (let [at (loop [position (dec (count events))]
@@ -178,8 +170,8 @@
   (if (empty? pending) base (loop [events base
    position 0]
   (if (>= position (count pending)) events (let [op (nth pending position)
-   proposition (pendingop-proposition op)]
-  (recur (if (= t/assert-action (pendingop-action op)) (if (pattern-match? proposition t1 t2 t3) (conj events (pendingop-event op)) events) (without-newest-of events proposition)) (inc position)))))))
+   proposition (proposition-of op)]
+  (recur (if (= t/assert-action (t/operationoccurrence-action op)) (if (pattern-match? proposition t1 t2 t3) (conj events op) events) (without-newest-of events proposition)) (inc position)))))))
 
 (defn ^String space-id [^Rotation rotation]
   (rotation-space-id rotation))
@@ -231,7 +223,7 @@
   (loop [position 0
    found base]
   (if (>= position (count pending)) found (let [op (nth pending position)]
-  (recur (inc position) (if (and (= t/assert-action (pendingop-action op)) (= occurrence (occurrence-of (pendingop-event op)))) (pendingop-event op) found))))))]
+  (recur (inc position) (if (and (= t/assert-action (t/operationoccurrence-action op)) (= occurrence (occurrence-of op))) op found))))))]
   (if (nil? candidate) nil (let [present candidate
    live (by-proposition rotation (proposition-of present))
    survives (loop [position 0]
@@ -329,7 +321,7 @@
   (loop [chain empty-ints
    position 0]
   (if (>= position (count events)) (->OccurrenceIndex width (frozen-heads heads) chain) (let [event (checked-assertion (nth events position))
-   slot (mod (hash-one (t/triple-t1 event)) width)
+   slot (mod (hash-one (occurrence-of event)) width)
    linked (conj chain (deref (nth heads slot)))]
   (do
   (reset! (nth heads slot) position)
@@ -349,7 +341,7 @@
    ordinal 0]
   (if (>= ordinal (count operations)) built (let [operation (nth operations ordinal)
    proposition (t/commitoperation-proposition operation)]
-  (recur (conj built (if (= t/assert-action (t/commitoperation-action operation)) (->PendingOp t/assert-action proposition (t/assertion-occurrence (t/occurrence-coordinate coordinate ordinal) proposition)) (->PendingOp t/retract-action proposition proposition))) (inc ordinal)))))))
+  (recur (conj built (t/operation-occurrence (t/occurrence-coordinate coordinate ordinal) (t/commitoperation-action operation) proposition)) (inc ordinal)))))))
 
 (defn ^Rotation staged [^Rotation rotation ^String space-id sequence operations]
   (assoc rotation :pending (pending-with-frame (rotation-pending rotation) space-id (t/->TransactionFrame sequence operations))))

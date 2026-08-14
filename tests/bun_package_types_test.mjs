@@ -61,10 +61,18 @@ test('packed Bun consumer accepts the public declaration surface', async () => {
     await Bun.write(resolve(scratch, 'consumer.mts'), `
 import {
   FRAMRPC_MAX_BATCH_ACTIONS,
+  FRAMRPC_VERSION,
   framNativeCheckpoint,
   keywordTerm,
 } from '@tompassarelli/framrpc';
-import type { BatchPreflight, FramClient, Term } from '@tompassarelli/framrpc';
+import type {
+  BatchPreflight,
+  FramClient,
+  MutationActionResult,
+  Occurrence,
+  OccurrenceCoordinateTerm,
+  Term,
+} from '@tompassarelli/framrpc';
 import { framClient as framTransportClient } from '@tompassarelli/framrpc/core';
 import type { FramTransport } from '@tompassarelli/framrpc/core';
 import {
@@ -81,6 +89,8 @@ import type {
 } from '@tompassarelli/framrpc/schema';
 
 declare const fram: FramClient;
+declare const receipt: MutationActionResult;
+declare const occurrence: Occurrence;
 const transport: FramTransport = async request => request.frame;
 const embedded: FramClient = framTransportClient({
   space: 'worker-space',
@@ -129,10 +139,16 @@ const preflight: BatchPreflight = fram.preflightBatch([{
   t3: state,
 }], { expectedVersion: 1n });
 const code: SchemaConstraintCode = 'schema/current-value-rejected';
+const protocolMajor: 2 = FRAMRPC_VERSION.major;
+const protocolMinor: 0 = FRAMRPC_VERSION.minor;
 const protocolActions: 247 = FRAMRPC_MAX_BATCH_ACTIONS;
 const schemaActions: typeof FRAMRPC_MAX_BATCH_ACTIONS = SCHEMA_MAX_BATCH_ACTIONS;
 const pages: 2 = SCHEMA_MAX_READ_PAGES;
 const checkpoint = framNativeCheckpoint({ space: 'operator-space' });
+const coordinate: OccurrenceCoordinateTerm = receipt.occurrence;
+const stateChanged: boolean = receipt.stateChanged;
+const action: 'assert' | 'retract' = occurrence.action;
+const proposition: Term = occurrence.proposition;
 void schema.updateUnique(update);
 void schema.updateUniqueMany(many);
 void schema.transactUnique(transaction);
@@ -144,10 +160,16 @@ void fram.batch([{
 }], { expectedVersion: 1n, preflight });
 void SchemaConstraintError;
 void code;
+void protocolMajor;
+void protocolMinor;
 void protocolActions;
 void schemaActions;
 void pages;
 void checkpoint;
+void coordinate;
+void stateChanged;
+void action;
+void proposition;
 void embedded;
 `);
 

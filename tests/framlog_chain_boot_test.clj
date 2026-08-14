@@ -75,7 +75,7 @@
 (def lane (database/open-branch! chained-log "lane" space))
 (doseq [step (drop 3 script)] (step lane))
 
-(def lane-tail (branch/branch-tail-path chained-log "lane"))
+(def lane-tail (branch/branch-tail-path! chained-log "lane"))
 (def lane-ref (database/read-branch-ref chained-log "lane"))
 (def sealed-path
   (branch/segment-path
@@ -171,7 +171,7 @@
 (check! "the three-fork fixture really has three sealed segments"
         (= 3 (count full-chain)))
 (java.nio.file.Files/write
- (.toPath (java.io.File. (branch/ref-path hole-log "lane-3")))
+ (.toPath (java.io.File. (branch/ref-path! hole-log "lane-3")))
  (.getBytes (branch/print-ref
              (branch/->RefDocument space [(nth full-chain 0)
                                           (nth full-chain 2)]))
@@ -191,7 +191,7 @@
 (def gap-chain
   (branch/refdocument-segments (database/read-branch-ref gap-log "lane-2")))
 (java.nio.file.Files/write
- (.toPath (java.io.File. (branch/ref-path gap-log "lane-2")))
+ (.toPath (java.io.File. (branch/ref-path! gap-log "lane-2")))
  (.getBytes (branch/print-ref
              (branch/->RefDocument space [(first gap-chain)]))
             java.nio.charset.StandardCharsets/UTF_8)
@@ -210,7 +210,7 @@
 (let [db (database/open-database! sweep-log space)]
   (doseq [step (take 3 script)] (step db)))
 (database/fork-store! sweep-log "lane")
-(def sweep-tail (branch/branch-tail-path sweep-log "lane"))
+(def sweep-tail (branch/branch-tail-path! sweep-log "lane"))
 (def sweep-images
   (let [db (database/open-branch! sweep-log "lane" space)]
     (into [(image db)]

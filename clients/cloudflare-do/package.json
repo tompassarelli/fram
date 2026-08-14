@@ -1,6 +1,6 @@
 {
   "name": "@tompassarelli/fram-cloudflare-do",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Embed the Fram engine inside a Cloudflare Durable Object over the wasm-embed host seam",
   "type": "module",
   "types": "./src/adapter.d.ts",

@@ -364,7 +364,7 @@ try {
   const scanned = await client.scan({ t1: "worker-client-subject" });
   const occurred = await client.occurrences();
   check(
-    asserted.result[0].changed && scanned.result.length === 1,
+    asserted.result[0].stateChanged && scanned.result.length === 1,
     "the official client wrote and read through Worker -> Durable Object -> Fram/wasm",
   );
   check(

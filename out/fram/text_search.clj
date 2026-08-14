@@ -226,9 +226,9 @@
    gram-keys (trigrams normalized)]
   (recur (inc handle) (->SearchBuildState (conj (searchbuildstate-token-rows state) tokens) (conj (searchbuildstate-normalized-rows state) normalized) (postings-add (searchbuildstate-stem-postings state) (vec stem-keys) handle) (postings-add (searchbuildstate-trigram-postings state) (vec gram-keys) handle)))) (recur (inc handle) (->SearchBuildState (conj (searchbuildstate-token-rows state) []) (conj (searchbuildstate-normalized-rows state) "") (searchbuildstate-stem-postings state) (searchbuildstate-trigram-postings state))))))))
 
-(defn ^TextSearchSourceResult build-source-result [propositions maximum]
+(defn ^TextSearchSourceResult build-source-result! [propositions maximum]
   (let [rows (vec propositions)
-   exact-result (text-index/build-source-result rows maximum)
+   exact-result (text-index/build-source-result! rows maximum)
    exact (text-index/source-result-source exact-result)]
   (if (nil? exact) (->TextSearchSourceResult false nil (text-index/source-result-error exact-result)) (let [weight (+ (text-index/source-weight exact) 112 (* 28 (count rows)))
    error (index-limit-error weight maximum)]
@@ -239,20 +239,20 @@
 (defn propositions-for-attributes [propositions attributes]
   (filterv (fn [proposition] (contains? attributes (t/triple-t2 proposition))) propositions))
 
-(defn ^TextSearchSourceResult build-source-for-attributes-result [propositions attributes maximum]
-  (build-source-result (propositions-for-attributes propositions attributes) maximum))
+(defn ^TextSearchSourceResult build-source-for-attributes-result! [propositions attributes maximum]
+  (build-source-result! (propositions-for-attributes propositions attributes) maximum))
 
-(defn ^TextSearchSource build-source [propositions maximum]
+(defn ^TextSearchSource build-source! [propositions maximum]
   (let [rows (vec propositions)
-   exact (text-index/build-source rows maximum)
+   exact (text-index/build-source! rows maximum)
    weight (+ (text-index/source-weight exact) 112 (* 28 (count rows)))
    empty-analyzers nil
    cell (atom empty-analyzers)]
   (index-limit weight maximum)
   (->TextSearchSource exact rows maximum cell weight)))
 
-(defn ^TextSearchSource build-source-for-attributes [propositions attributes maximum]
-  (build-source (propositions-for-attributes propositions attributes) maximum))
+(defn ^TextSearchSource build-source-for-attributes! [propositions attributes maximum]
+  (build-source! (propositions-for-attributes propositions attributes) maximum))
 
 (defn- ^SearchAnalyzersResult analyzers-of-result! [^TextSearchSource source]
   (let [current (deref (textsearchsource-analyzers-cell source))]
@@ -343,7 +343,7 @@
 
 (defn ^TextSearchHandlesResult phrase-handles-result! [^TextSearchSource source needle]
   (let [needle-result (word-needle-result "text-phrase" needle)]
-  (if (not (wordneedleresult-ok needle-result)) (handles-error (wordneedleresult-error needle-result)) (let [indexed-result (text-index/indexed-handles-result (textsearchsource-exact source) needle)]
+  (if (not (wordneedleresult-ok needle-result)) (handles-error (wordneedleresult-error needle-result)) (let [indexed-result (text-index/indexed-handles-result! (textsearchsource-exact source) needle)]
   (if (not (text-index/handles-result-ok? indexed-result)) (handles-error (text-index/handles-result-error indexed-result)) (let [analyzers-result (analyzers-of-result! source)]
   (if (not (searchanalyzersresult-ok analyzers-result)) (handles-error (searchanalyzersresult-error analyzers-result)) (let [tokens (wordneedleresult-tokens needle-result)
    candidates (text-index/handles-result-handles indexed-result)
@@ -493,20 +493,20 @@
   (let [result (ranked-rows-for-handles-result! source needle handles)]
   (if (rows-result-ok? result) (rows-result-rows result) (text-index/raise-text-error (rows-result-error result)))))
 
-(defn ^TextSearchRowsResult exact-indexed-rows-result [^TextSearchSource source needle]
-  (let [result (text-index/indexed-rows-result (textsearchsource-exact source) needle)]
+(defn ^TextSearchRowsResult exact-indexed-rows-result! [^TextSearchSource source needle]
+  (let [result (text-index/indexed-rows-result! (textsearchsource-exact source) needle)]
   (if (text-index/rows-result-ok? result) (rows-ok (text-index/rows-result-rows result)) (rows-error (text-index/rows-result-error result)))))
 
-(defn ^TextSearchRowsResult exact-scan-rows-result [^TextSearchSource source needle]
-  (let [result (text-index/scan-rows-result (textsearchsource-exact source) needle)]
+(defn ^TextSearchRowsResult exact-scan-rows-result! [^TextSearchSource source needle]
+  (let [result (text-index/scan-rows-result! (textsearchsource-exact source) needle)]
   (if (text-index/rows-result-ok? result) (rows-ok (text-index/rows-result-rows result)) (rows-error (text-index/rows-result-error result)))))
 
-(defn exact-indexed-rows [^TextSearchSource source needle]
-  (let [result (exact-indexed-rows-result source needle)]
+(defn exact-indexed-rows! [^TextSearchSource source needle]
+  (let [result (exact-indexed-rows-result! source needle)]
   (if (rows-result-ok? result) (rows-result-rows result) (text-index/raise-text-error (rows-result-error result)))))
 
-(defn exact-scan-rows [^TextSearchSource source needle]
-  (let [result (exact-scan-rows-result source needle)]
+(defn exact-scan-rows! [^TextSearchSource source needle]
+  (let [result (exact-scan-rows-result! source needle)]
   (if (rows-result-ok? result) (rows-result-rows result) (text-index/raise-text-error (rows-result-error result)))))
 
 (defn- ^TextSearchRowsResult rows-for-handles-result [^TextSearchSource source needle ^TextSearchHandlesResult result]

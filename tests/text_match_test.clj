@@ -45,10 +45,10 @@
        :rules [{:head {:rel "hit" :args [{:var "e"}]}
                 :body [{:rel "text-match"
                         :args [{:var "e"} "title" "quick"]}]}]}
-      constant-plan (q/compiled-plan (q/compile-query constant-query))
+      constant-plan (q/compiled-plan (q/compile-query! constant-query))
       variable-plan
       (q/compiled-plan
-       (q/compile-query (relation-query "text-match" "quick")))]
+       (q/compile-query! (relation-query "text-match" "quick")))]
   (chk "constant text attributes produce an exact index scope"
        (= #{"title"} (q/plan-text-attribute-scope constant-plan)))
   (chk "variable text attributes conservatively retain the whole corpus"
@@ -56,10 +56,10 @@
 
 (chk "tokenizer folds case and splits punctuation, underscore, and hyphen"
      (= ["42" "brown" "fox" "quick" "the"]
-        (text-index/tokenize "The QUICK-brown_fox 42")))
+        (text-index/tokenize! "The QUICK-brown_fox 42")))
 (chk "tokenizer keeps Unicode letters and deduplicates repeated terms"
      (= ["42" "café" "noir"]
-        (text-index/tokenize "Café noir café 42")))
+        (text-index/tokenize! "Café noir café 42")))
 (chk "one-token query returns both matching string propositions"
      (= #{["@a" "title"] ["@b" "title"] ["@needle" "value"]}
         (rows (text-query "QUICK"))))

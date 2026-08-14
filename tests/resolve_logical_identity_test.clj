@@ -96,7 +96,7 @@
 
 ;; S2: identities are Terms and a predicate IS its spelling, so there is nothing
 ;; to intern; the supersedes predicate is gone (withdrawal replaced it).
-(def ctx (ri/new-graph "resolve-logical-identity-test"))
+(def ctx (ri/new-graph! "resolve-logical-identity-test"))
 (def KIND "kind")
 (def Vp "v")
 (def BOUND "bound_to")

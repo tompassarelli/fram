@@ -50,7 +50,7 @@ function dataView(bytes) {
   return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
-export const FRAMRPC_VERSION = Object.freeze({ major: 1, minor: 0 });
+export const FRAMRPC_VERSION = Object.freeze({ major: 2, minor: 0 });
 export const FRAMRPC_MAX_BATCH_ACTIONS = 247;
 export const FRAMRPC_MAX_FRAME_BYTES = MAX_FRAME_BYTES;
 
@@ -716,7 +716,9 @@ function decodeResponseFrame(frame, expected) {
   const flags = view.getUint8(13);
   const bodyLength = view.getUint32(14, true);
   const requestId = view.getBigInt64(18, true);
-  if (major !== 1 || minor !== 0) fail('response protocol version is unsupported', 'client/unsupported-version');
+  if (major !== FRAMRPC_VERSION.major || minor !== FRAMRPC_VERSION.minor) {
+    fail('response protocol version is unsupported', 'client/unsupported-version');
+  }
   if (kind !== 2) fail('request expected a response frame', 'client/invalid-kind');
   if (flags !== 0) fail('response flags must be zero', 'client/invalid-flags');
   if (bodyLength > MAX_BODY_BYTES) fail('response body exceeds 1 MiB', 'client/frame-too-large');
@@ -947,13 +949,59 @@ function instantValue(value, label) {
   return { epochSeconds: BigInt(value[1]), nanos: Number(value[2]) };
 }
 
+function transactionCoordinate(value, label) {
+  if (!Array.isArray(value) || value.length !== 4 || value[0] !== 'triple') {
+    fail(`${label} must be a transaction-coordinate Triple`, 'client/invalid-occurrence');
+  }
+  const space = stringValue(value[1], `${label} space`);
+  if (!space) fail(`${label} space must be nonempty`, 'client/invalid-occurrence');
+  if (!isKeyword(value[2], 'kernel/tx-sequence')) {
+    fail(`${label} predicate must be kernel/tx-sequence`, 'client/invalid-occurrence');
+  }
+  const sequence = intValue(value[3], `${label} sequence`);
+  if (sequence < 0n) fail(`${label} sequence must be nonnegative`, 'client/invalid-occurrence');
+  return value;
+}
+
+function occurrenceCoordinate(value, label = 'occurrence coordinate') {
+  if (!Array.isArray(value) || value.length !== 4 || value[0] !== 'triple') {
+    fail(`${label} must be an occurrence-coordinate Triple`, 'client/invalid-occurrence');
+  }
+  transactionCoordinate(value[1], `${label} transaction`);
+  if (!isKeyword(value[2], 'kernel/op-ordinal')) {
+    fail(`${label} predicate must be kernel/op-ordinal`, 'client/invalid-occurrence');
+  }
+  const ordinal = intValue(value[3], `${label} ordinal`);
+  if (ordinal < 0n) fail(`${label} ordinal must be nonnegative`, 'client/invalid-occurrence');
+  return value;
+}
+
+function occurrenceResult(value) {
+  const [coordinate, actionTerm, proposition] = rawRecordFields(value, 'rpc/occurrence', 3);
+  occurrenceCoordinate(coordinate);
+  const action = keywordName(actionTerm, 'occurrence action');
+  if (action !== 'assert' && action !== 'retract') {
+    fail('occurrence action must be assert or retract', 'client/invalid-occurrence');
+  }
+  if (!Array.isArray(proposition) || proposition.length !== 4 || proposition[0] !== 'triple') {
+    fail('occurrence proposition must be a Triple Term', 'client/invalid-occurrence');
+  }
+  return { coordinate, action, proposition };
+}
+
 function mutationResult(payload) {
   const [results] = rawRecordFields(payload, 'rpc/mutation-result', 1);
   return rawListValues(results).map(value => {
-    const [inputIndex, changed, occurrences] = rawRecordFields(value, 'rpc/action-result', 3);
+    const [inputIndex, stateChanged, occurrence] = rawRecordFields(value, 'rpc/action-result', 3);
     const index = intValue(inputIndex, 'action input index');
-    if (index > BigInt(Number.MAX_SAFE_INTEGER)) fail('action input index exceeds safe integer', 'client/integer-range');
-    return { inputIndex: Number(index), changed: boolValue(changed), occurrences: rawListValues(occurrences) };
+    if (index < 0n || index > BigInt(Number.MAX_SAFE_INTEGER)) {
+      fail('action input index is outside the safe nonnegative range', 'client/integer-range');
+    }
+    return {
+      inputIndex: Number(index),
+      stateChanged: boolValue(stateChanged, 'action state changed'),
+      occurrence: occurrenceCoordinate(occurrence, 'action occurrence coordinate'),
+    };
   });
 }
 
@@ -1014,7 +1062,7 @@ function operationResult(operation, payload) {
       return queryRows(payload);
     case 'rpc/occurrences': {
       const [occurrences] = rawRecordFields(payload, 'rpc/occurrences', 1);
-      return rawListValues(occurrences);
+      return rawListValues(occurrences).map(occurrenceResult);
     }
     case 'rpc/lease-acquire':
     case 'rpc/lease-renew': {

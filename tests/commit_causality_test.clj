@@ -60,15 +60,15 @@
       rB  (commit! db "agentB" "TH" "drv" :assert "B" 5)
       live   (live-of db "TH" "drv")
       [cA cB] (sort live)                       ; cA = agentA's (earlier cid), cB = agentB's
-      cid-win    (elect db live)                ; [cid, agent]  -> earliest COMMIT
-      causal-win (elect-causal db live)]        ; [observed, cid, agent] -> earliest DECISION
+      cid-win    (elect! db live)                ; [cid, agent]  -> earliest COMMIT
+      causal-win (elect-causal! db live)]        ; [observed, cid, agent] -> earliest DECISION
   (chk "(a) both rival multi writes COMMITTED — no block, no reject" (and (:ok rA) (:ok rB)))
   (chk "(a) BOTH coexist live (no supersede)" (= 2 (count live)))
   (chk "(a) cid-election picks the earliest COMMITTER (agentA)" (= cid-win cA))
   (chk "(a) causal-election picks the earliest DECIDER (agentB, observed 5)" (= causal-win cB))
   (chk "(a) causal election DIFFERS from cid election here (the whole point)" (not= cid-win causal-win))
-  (chk "(a) causal election is input-order-INDEPENDENT" (= causal-win (elect-causal db (vec (reverse live)))))
-  (chk "(a) causal election is STABLE across reads" (= causal-win (elect-causal db live) (elect-causal db live)))
+  (chk "(a) causal election is input-order-INDEPENDENT" (= causal-win (elect-causal! db (vec (reverse live)))))
+  (chk "(a) causal election is STABLE across reads" (= causal-win (elect-causal! db live) (elect-causal! db live)))
   (chk "(a) the elected member's value is the earliest decider's (B)"
        (= "B" (c/literal (store db) (:r (c/fact-of (store db) causal-win))))))
 
@@ -110,17 +110,17 @@
       _   (commit! db "w" "@barrier" "done_worker" :assert "wA" nil)
       _   (commit! db "w" "@barrier" "done_worker" :assert "wB" nil)
       _   (commit! db "w" "@barrier" "done_worker" :assert "wC" nil)
-      before (count (live-members db (tid) (pid)))
+      before (count (live-members! db (tid) (pid)))
       ;; agentX WITHDRAWS wB with attribution (a "done-undo")
       rw  (retract! db "agentX" "@barrier" "done_worker" "wB" nil "mis-reported")
       ;; the withdrawn victim cid (it is now superseded but carries a tombstone)
-      victim (first (filter #(withdrawn? db %)
+      victim (first (filter #(withdrawn?! db %)
                             (get (:idx-by-lp @(store db)) [(tid) (pid)])))
       remove-live (mapv #(c/literal (store db) (:r (c/fact-of (store db) %)))
-                        (live-members db (tid) (pid) :remove-wins))
+                        (live-members! db (tid) (pid) :remove-wins))
       add-live    (sort (mapv #(c/literal (store db) (:r (c/fact-of (store db) %)))
-                              (live-members db (tid) (pid) :add-wins)))
-      wd  (withdrawal-of db victim)]
+                              (live-members! db (tid) (pid) :add-wins)))
+      wd  (withdrawal-of! db victim)]
   (chk "(c) 3 members live before the withdrawal" (= 3 before))
   (chk "(c) the retract committed" (:ok rw))
   (chk "(c) remove-wins (DEFAULT): the withdrawn member wB DROPS"
@@ -139,7 +139,7 @@
         _  (commit! db "w" "@barrier" "phase" :assert "two" (:ok r1))   ; overwrites "one" (no withdrawal)
         ppid (c/value-id (store db) "phase")
         addp (mapv #(c/literal (store db) (:r (c/fact-of (store db) %)))
-                   (live-members db (tid) ppid :add-wins))]
+                   (live-members! db (tid) ppid :add-wins))]
     (chk "(c) add-wins does NOT resurrect a genuine overwrite (no tombstone)"
          (= ["two"] addp))))
 

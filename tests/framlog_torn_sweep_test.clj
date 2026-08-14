@@ -1,8 +1,7 @@
 ;; Every byte cut and every byte flip inside a committed frame must fold to an
 ;; exact committed image or fail loudly; a third image is a durability defect.
 ;; Run from the repository root: bb -cp out tests/framlog_torn_sweep_test.clj
-(require '[fram.kernel :as kernel]
-         '[fram.store :as store]
+(require '[fram.store :as store]
          '[fram.types :as t])
 
 (load-file "database.clj")
@@ -90,7 +89,7 @@
 (step! "depth-2 recursive term" #(database/assert! db nested-2 {:actor "recorder"}))
 (step! "depth-3 recursive term" #(database/assert! db nested-3 {}))
 (def draft-occurrence
-  (kernel/occurrence-of
+  (t/operationoccurrence-coordinate
    (first (:occurrences (step! "draft assert" #(database/assert! db draft {}))))))
 (step! "retraction" #(database/retract! db (t/triple "A" :count 1) {:actor "Tom"}))
 (step! "supersession"

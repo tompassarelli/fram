@@ -15,15 +15,13 @@
 
 (def max-list-values Int 65536)
 
-(def unpaged-occurrence-limit Int limits/rpc-v1-max-unpaged-rows)
+(def unpaged-occurrence-limit Int limits/rpc-v2-max-unpaged-rows)
 (def default-query-timeout-ms Int 5000)
 (def max-query-timeout-ms Int 60000)
 (def query-step-limit Int 10000000)
 (def result-cache-snapshot-limit Int 4)
 (def result-cache-per-snapshot-limit Int 8)
 (def result-cache-byte-limit Int 67108864)
-
-(def occurrence-relations (Set String) #{d/occurrence-relation})
 
 (defrecord OptionValue [(present Bool) (value Any)])
 
@@ -395,6 +393,19 @@
                 (mapv
                  (fn [(row d/Tuple)] Any (rpc-query-row row)) rows))]))
 
+(defn rpc-occurrence [(value t/OperationOccurrence)] t/Triple
+  (rpc-record
+   :rpc/occurrence
+   [(t/operationoccurrence-coordinate value)
+    (t/operationoccurrence-action value)
+    (t/operationoccurrence-proposition value)]))
+
+(defn rpc-operation-occurrences
+  [(values (Vec t/OperationOccurrence))] (Vec t/Triple)
+  (mapv (fn [(value t/OperationOccurrence)] t/Triple
+          (rpc-occurrence value))
+        values))
+
 (defn- rpc-nonempty-occurrence-list [(values (Vec t/Triple))] t/Triple
   (let [last-position (dec (count values))]
     (loop [(position Int) (dec last-position)
@@ -414,7 +425,7 @@
                         :rpc/list-end))
             :rpc/record))
 
-(defn query-result-weight [(rows (Vec d/Tuple))] Int
+(defn query-result-weight! [(rows (Vec d/Tuple))] Int
   (loop [index 0 total (+ 32 (* 8 (count rows)))]
     (if (>= index (count rows))
       total
@@ -424,7 +435,7 @@
           (native-wire/canonical-term-byte-count!
            (rpc-query-row (nth rows index))))))))
 
-(defn triple-result-weight [(rows (Vec t/Triple))] Int
+(defn triple-result-weight! [(rows (Vec t/Triple))] Int
   (loop [index 0 total (+ 32 (* 8 (count rows)))]
     (if (>= index (count rows))
       total
@@ -441,7 +452,7 @@
   (retain-result-entry!
    session
    (schema/->OrderedResultEntry
-    key rows no-triple-result-rows (query-result-weight rows))))
+    key rows no-triple-result-rows (query-result-weight! rows))))
 
 (defn retain-triple-result!
   [(session schema/Session)
@@ -451,7 +462,7 @@
   (retain-result-entry!
    session
    (schema/->OrderedResultEntry
-    key no-query-result-rows rows (triple-result-weight rows))))
+    key no-query-result-rows rows (triple-result-weight! rows))))
 
 (defn rpc-violation [(code Keyword) (detail Any)] t/Triple
   (rpc-record :rpc/violation [code detail]))
@@ -818,7 +829,7 @@
             context (optionvalue-value limit-option) "query limit")
            nil))]
     (if (read-context-ok? context)
-      (let [(errors (Vec query/QueryError)) (query/validate-plan plan)]
+      (let [(errors (Vec query/QueryError)) (query/validate-plan! plan)]
         (if (empty? errors)
           plan
           (let [(error query/QueryError) (nth errors 0)]
@@ -1038,8 +1049,13 @@
         (d/rotation-candidate-source
          rotation (queryview-lower-exclusive view))
         (occurrence-candidate d/CandidateSource?)
-        (if (plan-uses-any-relation? plan occurrence-relations)
+        (if (plan-uses-any-relation? plan #{d/occurrence-relation})
           (d/occurrence-candidate-source
+           root (queryview-lower-exclusive view) (queryview-version view))
+          nil)
+        (withdrawal-candidate d/CandidateSource?)
+        (if (plan-uses-any-relation? plan #{d/withdrawal-relation})
+          (d/withdrawal-candidate-source
            root (queryview-lower-exclusive view) (queryview-version view))
           nil)
         (text-result d/CandidateSourcesResult)
@@ -1053,9 +1069,9 @@
                 (query/plan-text-attribute-scope plan)]
             (if (some? attributes)
               (let [(scope (Set Any)) attributes]
-                (d/build-text-candidates-for-attributes-result
+                (d/build-text-candidates-for-attributes-result!
                  propositions scope))
-              (d/build-text-candidates-result propositions)))
+              (d/build-text-candidates-result! propositions)))
           (d/->CandidateSourcesResult {} nil))
         (error-value d/QueryEvaluationError?) (d/candidatesourcesresult-error text-result)
         (control d/QueryControl) (d/query-control query-step-limit timeout-ms)]
@@ -1065,11 +1081,16 @@
             (d/candidatesourcesresult-sources text-result)
             (triple-candidates d/CandidateSources)
             (assoc text-candidates d/triple-relation triple-candidate)
-            (candidates d/CandidateSources)
+            (with-occurrences d/CandidateSources)
             (if (some? occurrence-candidate)
               (assoc triple-candidates
                      d/occurrence-relation occurrence-candidate)
-              triple-candidates)]
+              triple-candidates)
+            (candidates d/CandidateSources)
+            (if (some? withdrawal-candidate)
+              (assoc with-occurrences
+                     d/withdrawal-relation withdrawal-candidate)
+              with-occurrences)]
         (query/run-plan-projected-result!
          (query/project-with-candidates [] candidates) plan control)))))
 
@@ -1426,7 +1447,8 @@
                       (if (not (read-context-ok? context))
                         (placeholder-error-response request head)
                         (let [(rows (Vec t/Triple))
-                              (store/operation-occurrences snapshot)]
+                              (rpc-operation-occurrences
+                               (store/occurrences snapshot))]
                           (do
                             (retain-triple-result! session key rows)
                             (occurrence-rows-response!
@@ -1437,7 +1459,8 @@
                     (placeholder-error-response request head)
                     (occurrence-rows-response!
                      context request head version digest cursor
-                     (store/operation-occurrences snapshot))))))))))))
+                     (rpc-operation-occurrences
+                      (store/occurrences snapshot)))))))))))))
 
 (defn validation-payload! [(root (Atom t/TermStore))] t/Triple
   (let [(snapshot t/TermStore) (deref root)

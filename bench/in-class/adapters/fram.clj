@@ -1,4 +1,4 @@
-;; Fram adapter: speaks FRAMRPC v1 to server.clj over a real loopback
+;; Fram adapter: speaks FRAMRPC v2 to server.clj over a real loopback
 ;; socket. boot-to-serving-ms excludes JVM startup and the ServerSocket bind,
 ;; per METHODOLOGY.md. Bulk reads use paged :rpc/query, never scan/occurrences
 ;; (both fail past ~250 rows, a term-depth bound).

@@ -15,7 +15,7 @@
   (let [id (swap! request-id inc)
         request (wire/rpc-request! space operation nil nil nil payload)
         bytes
-        (wire/encode-rpc-frame-v1!
+        (wire/encode-rpc-frame-v2!
          (wire/rpc-request-frame id request))
         filename (str name ".bin")]
     (io/copy bytes (io/file output-directory filename))
@@ -45,7 +45,7 @@
   (mapv
    (fn [index]
      (wire/rpc-action-result!
-      index true [(t/occurrence-coordinate transaction index)]))
+      index true (t/occurrence-coordinate transaction index)))
    (range 247)))
 (def expected-response
   (wire/rpc-response-frame
@@ -54,7 +54,7 @@
     space :rpc/batch 1 nil nil
     (wire/rpc-mutation-result! expected-results))))
 
-(io/copy (wire/encode-rpc-frame-v1! expected-response)
+(io/copy (wire/encode-rpc-frame-v2! expected-response)
          (io/file output-directory "expected-03-batch-247-response.bin"))
 (spit (io/file output-directory "manifest.txt")
       (str (str/join "\n" @manifest) "\n"))

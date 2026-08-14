@@ -35,11 +35,11 @@
 (defn operation-count [image]
   (fp/operation-count image))
 
-(defn semantic-history [image]
-  (fp/semantic-history image))
+(defn occurrences [image]
+  (fp/occurrences image))
 
-(defn operation-occurrences [image]
-  (fp/operation-occurrences image))
+(defn withdrawals [image]
+  (fp/withdrawals image))
 
 (defn live-occurrences [image]
   (fp/live-occurrences image))

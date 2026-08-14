@@ -83,7 +83,7 @@ export function client(DATA_PLANE) {
 }
 ```
 
-The raw storage-owning object takes a canonical FRAMRPC v1 request frame and
+The raw storage-owning object takes a canonical FRAMRPC v2 request frame and
 answers with one response frame only after any write is durable:
 
 | method | validates | dispatches |

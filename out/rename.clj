@@ -82,7 +82,8 @@
   (let [parts (str/split src (re-pattern "/"))]
   (str "/tmp/mutated-" (nth parts (dec (count parts))) ".edn")))
 
-(defn -main [& args]
+(defn -main [& $beagle$rest$host]
+  (let [args (vec $beagle$rest$host)]
   (let [argv (vec args)
    old-name (str (nth argv 0))
    new-name (str (nth argv 1))
@@ -120,4 +121,4 @@
   (println (str "superseded assertions (recoverable, nothing deleted): " renamed))
   (println (str "live propositions in store: " (count (c/live-propositions ctx))))
   (doseq [i (range (count srcs))]
-  (println (str "projected -> " (nth outs i) "   <- " (nth srcs i))))))))
+  (println (str "projected -> " (nth outs i) "   <- " (nth srcs i)))))))))

@@ -5,13 +5,13 @@
          '[framrpc :as wire])
 
 (def output-directory (io/file (or (first *command-line-args*) ".")))
-(def space (apply str (repeat wire/rpc-v1-max-space-bytes "s")))
+(def space (apply str (repeat wire/rpc-v2-max-space-bytes "s")))
 (def request-id (atom 0))
 (def manifest (atom []))
 
 (.mkdirs output-directory)
 
-(when-not (= wire/rpc-v1-max-space-bytes
+(when-not (= wire/rpc-v2-max-space-bytes
              (alength (.getBytes space java.nio.charset.StandardCharsets/UTF_8)))
   (throw (ex-info "long SpaceId fixture is not the wire maximum" {})))
 
@@ -19,7 +19,7 @@
   (let [id (swap! request-id inc)
         request (wire/rpc-request! space operation nil nil nil payload)
         bytes
-        (wire/encode-rpc-frame-v1!
+        (wire/encode-rpc-frame-v2!
          (wire/rpc-request-frame id request))
         filename (str name ".bin")]
     (io/copy bytes (io/file output-directory filename))
@@ -35,12 +35,12 @@
 (emit! "01-version-before" "q" :rpc/version wire/rpc-unit)
 (emit! "02-scan-before" "q" :rpc/scan pattern)
 (def accepted-request-id
-  (emit! "03-batch-241" "t" :rpc/batch
-         (wire/rpc-batch! (vec (repeat 241 action)) nil)))
+  (emit! "03-batch-243" "t" :rpc/batch
+         (wire/rpc-batch! (vec (repeat 243 action)) nil)))
 (emit! "04-version-after-success" "q" :rpc/version wire/rpc-unit)
 (emit! "05-scan-after-success" "q" :rpc/scan pattern)
-(emit! "06-batch-242" "t" :rpc/batch
-       (wire/rpc-batch! (vec (repeat 242 action)) nil))
+(emit! "06-batch-244" "t" :rpc/batch
+       (wire/rpc-batch! (vec (repeat 244 action)) nil))
 (emit! "07-version-after-rejection" "q" :rpc/version wire/rpc-unit)
 (emit! "08-scan-after-rejection" "q" :rpc/scan pattern)
 
@@ -49,8 +49,8 @@
   (mapv
    (fn [index]
      (wire/rpc-action-result!
-      index true [(t/occurrence-coordinate transaction index)]))
-   (range 241)))
+      index true (t/occurrence-coordinate transaction index)))
+   (range 243)))
 (def expected-response
   (wire/rpc-response-frame
    accepted-request-id
@@ -58,8 +58,8 @@
     space :rpc/batch 1 nil nil
     (wire/rpc-mutation-result! expected-results))))
 
-(io/copy (wire/encode-rpc-frame-v1! expected-response)
-         (io/file output-directory "expected-03-batch-241-response.bin"))
+(io/copy (wire/encode-rpc-frame-v2! expected-response)
+         (io/file output-directory "expected-03-batch-243-response.bin"))
 
 (spit (io/file output-directory "manifest.txt")
       (str (str/join "\n" @manifest) "\n"))

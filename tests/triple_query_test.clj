@@ -34,7 +34,8 @@
 (store/commit-transaction! term-store [(store/retract-operation nested-middle)])
 
 (def live (store/live-propositions term-store))
-(def history (store/operation-occurrences term-store))
+(def occurrences (store/occurrences term-store))
+(def withdrawals (store/withdrawals term-store))
 
 (def slot-rules
   [(rule "slot-matches" [(c node-a) (v "s1") (v "s2")]
@@ -45,7 +46,7 @@
          [(rel "triple" [(v "s0") (v "s1") (c node-a)])])])
 (def slot-plan (plan "slot-matches" [slot-rules]))
 
-(let [compiled (q/compile-query slot-plan)
+(let [compiled (q/compile-query! slot-plan)
       result (q/run! (conj live nested-middle) slot-plan)
       found (rows result)]
   (check! "typed plan compiles" (and (q/compile-ok? compiled)
@@ -81,28 +82,45 @@
         [[(rule "events" [(v "where") (v "action") (v "value")]
                 [(rel "occurrence" [(v "where") (v "action") (v "value")])])]]))
 
+(def withdrawal-plan
+  (plan "withdrawals"
+        [[(rule "withdrawals" [(v "retraction") (v "assertion")]
+                [(rel "withdrawal" [(v "retraction") (v "assertion")])])]]))
+
 (let [without-history (q/run! live occurrence-plan)
+      without-withdrawals (q/run! live withdrawal-plan)
       with-history (q/run-plan-projected!
-                    (q/project-with-occurrences live history)
+                    (q/project-with-history! live occurrences withdrawals)
                     occurrence-plan)
+      withdrawal-result
+      (q/run-plan-projected!
+       (q/project-with-history! live occurrences withdrawals)
+       withdrawal-plan)
       found (rows with-history)
       tx1 (t/transaction-coordinate "msa-space" 1)
       tx2 (t/transaction-coordinate "msa-space" 2)]
   (check! "ordinary projection does not expose occurrence history"
           (and (q/result-ok? without-history)
-               (empty? (q/result-rows without-history))))
+               (empty? (q/result-rows without-history))
+               (q/result-ok? without-withdrawals)
+               (empty? (q/result-rows without-withdrawals))))
   (check! "assert occurrence has exact coordinate"
-          (contains? found [(t/occurrence-coordinate tx1 0) t/asserts edge-ab]))
+          (contains? found [(t/occurrence-coordinate tx1 0) :assert edge-ab]))
   (check! "retract occurrence has exact coordinate"
-          (contains? found [(t/occurrence-coordinate tx2 0) t/retracts nested-middle]))
+          (contains? found
+                     [(t/occurrence-coordinate tx2 0) :retract nested-middle]))
   (check! "history relation contains every operation occurrence"
-          (= (count history) (count found))))
+          (= (count occurrences) (count found)))
+  (check! "withdrawal is a separate system relation over exact occurrences"
+          (= #{[(t/occurrence-coordinate tx2 0)
+                (t/occurrence-coordinate tx1 2)]}
+             (rows withdrawal-result))))
 
 (let [legacy-relation (str "fac" "t-id")
       invalid-plan
       (plan "x" [[(rule "x" [(v "value")]
                               [(rel legacy-relation [(v "value")])])]])
-      invalid (q/compile-query invalid-plan)]
+      invalid (q/compile-query! invalid-plan)]
   (check! "legacy four-cell relation has no compatibility alias"
           (and (not (q/compile-ok? invalid))
                (= :query-unknown-relation

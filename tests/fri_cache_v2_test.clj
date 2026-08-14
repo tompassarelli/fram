@@ -96,10 +96,20 @@
    ["TermStore rows restore exactly without exposing private handles"
     (= dump (store/dump-term-store restored))]
    ["duplicate occurrences survive while one retraction withdraws only the latest"
-    (and (= 3 (fri/operation-count image))
-         (= 3 (count (fri/operation-occurrences image)))
-         (= 1 (count (fri/live-occurrences image)))
-         (= [proposition] (fri/live-propositions image)))]
+    (let [withdrawal (first (fri/withdrawals image))]
+      (and (= 3 (fri/operation-count image))
+           (= 3 (count (fri/occurrences image)))
+           (= 1 (count (fri/withdrawals image)))
+           (= (t/occurrence-coordinate
+               (t/transaction-coordinate "fri-space" 2) 0)
+              (t/operationoccurrence-coordinate
+               (t/withdrawal-retraction withdrawal)))
+           (= (t/occurrence-coordinate
+               (t/transaction-coordinate "fri-space" 1) 1)
+              (t/operationoccurrence-coordinate
+               (t/withdrawal-assertion withdrawal)))
+           (= 1 (count (fri/live-occurrences image)))
+           (= [proposition] (fri/live-propositions image))))]
    ["nested recursive Triple and typed Instant survive cache decode"
     (= proposition (first (fri/live-propositions image)))]
    ["t1/t2/t3 indexes return recursive structural Triples"

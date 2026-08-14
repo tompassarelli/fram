@@ -32,7 +32,7 @@ Boots a fresh server over a reset copy of the pristine corpus, measures cold
 query latency per workload shape (predicate scan / object scan / 2-literal
 join / subject pull / non-simple 2-rule scan — the last is the one query
 shape that bypasses the incrementally-maintained `:idx` cache and used to pay
-whole-corpus `q/project` on every call), warm latency, latency under
+whole-corpus `q/project!` on every call), warm latency, latency under
 interleaved writes, and write throughput (serial + under concurrent reads).
 
 ## Bar 3: FRAM_SNAPSHOT_BOOT boot mode

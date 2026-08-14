@@ -54,7 +54,7 @@
    r (if (nil? f) nil (:r f))]
   (if (int? r) r nil))))
 
-(defn withdrawal-of [ctx cid]
+(defn withdrawal-of! [ctx cid]
   (let [session (s/session! ctx)
    wb (s/resolve-predicate session "withdrawn_by")
    by-id (live-r-on ctx cid wb)]
@@ -62,16 +62,16 @@
    reason-id (live-r-on ctx cid (s/resolve-predicate session "withdrawn_reason"))]
   {:by (c/literal ctx by-id) :at (if (nil? at-id) nil (c/literal ctx at-id)) :reason (if (nil? reason-id) nil (c/literal ctx reason-id))}))))
 
-(defn ^Boolean withdrawn? [ctx cid]
-  (boolean (withdrawal-of ctx cid)))
+(defn ^Boolean withdrawn?! [ctx cid]
+  (boolean (withdrawal-of! ctx cid)))
 
-(defn live-members [ctx te pid policy]
+(defn live-members! [ctx te pid policy]
   (let [live (live-cids-lp ctx te pid)]
   (if (= policy :add-wins) (let [all (c/raw-by-lp ctx te pid)
-   resurrected (filterv (fn [cid] (and (not (c/live? ctx cid)) (withdrawn? ctx cid))) all)]
+   resurrected (filterv (fn [cid] (and (not (c/live? ctx cid)) (withdrawn?! ctx cid))) all)]
   (vec (distinct (concat live resurrected)))) live)))
 
-(defn view-selects [ctx ^String view]
+(defn view-selects! [ctx ^String view]
   (let [session (s/session! ctx)
    ve (s/resolve-name session view)
    sel (s/resolve-predicate session "selects")]
@@ -79,13 +79,13 @@
    r (if (nil? f) nil (:r f))]
   (if (int? r) (conj acc r) acc))) #{} (live-cids-lp ctx ve sel)))))
 
-(defn pool-of [ctx view cids]
-  (if (nil? view) cids (let [sel (view-selects ctx view)]
+(defn pool-of! [ctx view cids]
+  (if (nil? view) cids (let [sel (view-selects! ctx view)]
   (if (or (nil? sel) (empty? sel)) cids (let [in-view (filterv (fn [cid] (contains? sel cid)) cids)]
   (if (empty? in-view) cids in-view))))))
 
-(defn elect [ctx view cids]
-  (if (empty? cids) nil (first (sort-by (fn [cid] [cid (str (agent-of ctx cid))]) (pool-of ctx view cids)))))
+(defn elect! [ctx view cids]
+  (if (empty? cids) nil (first (sort-by (fn [cid] [cid (str (agent-of ctx cid))]) (pool-of! ctx view cids)))))
 
-(defn elect-causal [ctx view cids]
-  (if (empty? cids) nil (first (sort-by (fn [cid] (causal-key ctx cid)) (pool-of ctx view cids)))))
+(defn elect-causal! [ctx view cids]
+  (if (empty? cids) nil (first (sort-by (fn [cid] (causal-key ctx cid)) (pool-of! ctx view cids)))))

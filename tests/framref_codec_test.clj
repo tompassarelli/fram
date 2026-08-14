@@ -289,9 +289,9 @@
             (branch/refs-directory "/s/log")
             (branch/branches-directory "/s/log")
             (branch/segment-path "/s/log" hash-a)
-            (branch/ref-path "/s/log" "child")
-            (branch/branch-tail-path "/s/log" "child")
-            (branch/branch-tail-path "/s/log" branch/default-branch)
+            (branch/ref-path! "/s/log" "child")
+            (branch/branch-tail-path! "/s/log" "child")
+            (branch/branch-tail-path! "/s/log" branch/default-branch)
             (branch/snapshot-path "/s/log")]))
 
 (let [failures (remove second @checks)]

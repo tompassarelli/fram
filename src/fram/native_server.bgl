@@ -23,8 +23,8 @@
 (defrecord Store
   [(canonical-log-path String) (session schema/Session) (log-byte-count Int)])
 
-(defrecord Request [(frame t/RpcFrameV1)])
-(defrecord Response [(frame t/RpcFrameV1)])
+(defrecord Request [(frame t/RpcFrameV2)])
+(defrecord Response [(frame t/RpcFrameV2)])
 
 ;; Optional payloads and errors stay opaque; status and byte fields have fixed
 ;; positions because the C adapter consumes those fields directly.
@@ -166,10 +166,10 @@
                    (snapshot/bootplan-report plan)))))
 
 (defn wrap-rpc-response
-  [(request-frame t/RpcFrameV1) (rpc-response t/RpcResponse)] Response
+  [(request-frame t/RpcFrameV2) (rpc-response t/RpcResponse)] Response
   (->Response
-   (t/->RpcFrameV1 :response 0
-                   (t/rpcframev1-request-id request-frame)
+   (t/->RpcFrameV2 :response 0
+                   (t/rpcframev2-request-id request-frame)
                    nil rpc-response)))
 
 ;; A checkpoint writes an image beside the log; the log itself is untouched, so
@@ -177,7 +177,7 @@
 (defn checkpoint-response!
   [(store-result StoreResult)
    (store Store)
-   (frame t/RpcFrameV1)
+   (frame t/RpcFrameV2)
    (request t/RpcRequest)
    (now-ms Int)]
   ResponseResult
@@ -248,7 +248,7 @@
    (now-ms Int)]
   ResponseResult
   (let [frame (request-frame request-value)
-        request (t/rpcframev1-request frame)]
+        request (t/rpcframev2-request frame)]
     (if request
       (let [(present t/RpcRequest) request]
         (if (= :rpc/checkpoint (t/rpcrequest-op present))

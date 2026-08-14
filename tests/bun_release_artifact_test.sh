@@ -99,7 +99,7 @@ grep -Fxq "release-tag-object $tag_object" "${files_a[1]}" ||
   fail "receipt omitted the annotated tag object"
 grep -Fxq 'package-name @tompassarelli/framrpc' "${files_a[1]}" ||
   fail "receipt omitted the package name"
-grep -Fxq 'package-version 0.4.0' "${files_a[1]}" ||
+grep -Fxq 'package-version 0.5.0' "${files_a[1]}" ||
   fail "receipt omitted the independent package version"
 archive_sha256="$(sha256sum "${files_a[0]}" | awk '{print $1}')"
 grep -Fxq "archive-sha256 $archive_sha256" "${files_a[1]}" ||

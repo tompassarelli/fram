@@ -197,27 +197,27 @@ cmp -s "$scratch/native-long-space.framlog" \
 
 frame_too_large_hex="$(printf 'rpc-frame-too-large' | od -An -tx1 | tr -d ' \n')"
 expected_long_space_hex="$(od -An -v -tx1 \
-  "$long_frames/expected-03-batch-241-response.bin" | tr -d ' \n')"
+  "$long_frames/expected-03-batch-243-response.bin" | tr -d ' \n')"
 for transcript in "$scratch/native-long-space.transcript" \
   "$scratch/wasm-long-space.transcript"; do
-  [[ "$(frame_response_hex "$transcript" 03-batch-241.bin)" == \
+  [[ "$(frame_response_hex "$transcript" 03-batch-243.bin)" == \
      "$expected_long_space_hex" ]] ||
-    fail "241-action long-SpaceId receipt did not return coordinates 0 through 240: $transcript"
-  frame_response_hex "$transcript" 06-batch-242.bin |
+    fail "243-action long-SpaceId receipt did not return coordinates 0 through 242: $transcript"
+  frame_response_hex "$transcript" 06-batch-244.bin |
     grep -q "$frame_too_large_hex" ||
-    fail "242-action long-SpaceId receipt was not rejected before commit: $transcript"
+    fail "244-action long-SpaceId receipt was not rejected before commit: $transcript"
   [[ "$(frame_response_body_hex "$transcript" 01-version-before.bin)" != \
      "$(frame_response_body_hex "$transcript" 04-version-after-success.bin)" ]] ||
-    fail "241-action long-SpaceId receipt did not advance the version: $transcript"
+    fail "243-action long-SpaceId receipt did not advance the version: $transcript"
   [[ "$(frame_response_body_hex "$transcript" 04-version-after-success.bin)" == \
      "$(frame_response_body_hex "$transcript" 07-version-after-rejection.bin)" ]] ||
-    fail "242-action long-SpaceId rejection changed the version: $transcript"
+    fail "244-action long-SpaceId rejection changed the version: $transcript"
   [[ "$(frame_response_body_hex "$transcript" 02-scan-before.bin)" != \
      "$(frame_response_body_hex "$transcript" 05-scan-after-success.bin)" ]] ||
-    fail "241-action long-SpaceId receipt left no scan state: $transcript"
+    fail "243-action long-SpaceId receipt left no scan state: $transcript"
   [[ "$(frame_response_body_hex "$transcript" 05-scan-after-success.bin)" == \
      "$(frame_response_body_hex "$transcript" 08-scan-after-rejection.bin)" ]] ||
-    fail "242-action long-SpaceId rejection changed scan state: $transcript"
+    fail "244-action long-SpaceId rejection changed scan state: $transcript"
 done
 
 receipt_frames="$scratch/mutation-receipt-bound-frames"

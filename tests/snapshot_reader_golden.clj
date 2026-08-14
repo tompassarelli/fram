@@ -102,8 +102,8 @@
   (with-db
     (fn [db]
       (let [cid (withdrawn-corpus db)]
-        (print-case "withdrawal-of" (withdrawal-of db cid))
-        (print-case "withdrawn?" [(withdrawn? db cid) (withdrawn? db -1)])))))
+        (print-case "withdrawal-of" (withdrawal-of! db cid))
+        (print-case "withdrawn?" [(withdrawn?! db cid) (withdrawn?! db -1)])))))
 
 (defn case-live-members []
   (with-db
@@ -111,9 +111,9 @@
       (let [cid (withdrawn-corpus db)
             te (s/resolve-name (:store db) "T")
             p (c/value-id (:store db) "tag")]
-        (print-case "remove-wins" (live-members db te p :remove-wins))
-        (print-case "add-wins" (mapv #(literal-of db %) (live-members db te p :add-wins)))
-        (print-case "default-policy" (live-members db te p))
+        (print-case "remove-wins" (live-members! db te p :remove-wins))
+        (print-case "add-wins" (mapv #(literal-of db %) (live-members! db te p :add-wins)))
+        (print-case "default-policy" (live-members! db te p))
         (print-case "withdrawn-cid" cid)))))
 
 (defn view-corpus [db]
@@ -127,29 +127,29 @@
   (with-db
     (fn [db]
       (let [{:keys [b1 b2]} (view-corpus db)]
-        (print-case "b1" (= #{b1} (view-selects db "@view:b1")))
-        (print-case "b2" (= #{b2} (view-selects db "@view:b2")))
-        (print-case "unknown" (view-selects db "@view:unknown"))))))
+        (print-case "b1" (= #{b1} (view-selects! db "@view:b1")))
+        (print-case "b2" (= #{b2} (view-selects! db "@view:b2")))
+        (print-case "unknown" (view-selects! db "@view:unknown"))))))
 
 (defn case-elect-main []
   (with-db
     (fn [db]
       (let [{:keys [base live]} (view-corpus db)]
-        (print-case "main" [(= base (elect db live))
-                             (= base (elect db nil live))
-                             (= base (elect db (vec (reverse live))))])
-        (print-case "main-value" (literal-of db (elect db live)))))))
+        (print-case "main" [(= base (elect! db live))
+                             (= base (elect! db nil live))
+                             (= base (elect! db (vec (reverse live))))])
+        (print-case "main-value" (literal-of db (elect! db live)))))))
 
 (defn case-elect-views []
   (with-db
     (fn [db]
       (let [{:keys [base b1 b2 live]} (view-corpus db)]
         (print-case "views"
-                    [(= b1 (elect db "@view:b1" live))
-                     (= b2 (elect db "@view:b2" live))
-                     (= base (elect db "@view:unknown" live))])
+                    [(= b1 (elect! db "@view:b1" live))
+                     (= b2 (elect! db "@view:b2" live))
+                     (= base (elect! db "@view:unknown" live))])
         (print-case "values"
-                    (mapv #(literal-of db (elect db % live))
+                    (mapv #(literal-of db (elect! db % live))
                           ["@view:b1" "@view:b2" "@view:unknown"]))))))
 
 (defn case-elect-causal []
@@ -160,20 +160,20 @@
             live (live-group db "T" "color")]
         (set-tx-meta! db (:cid a) :observed 50)
         (set-tx-meta! db (:cid b) :observed 10)
-        (print-case "causal-winner" (literal-of db (elect-causal db live)))
-        (print-case "causal-reversed" (= (elect-causal db live)
-                                          (elect-causal db (vec (reverse live)))))
+        (print-case "causal-winner" (literal-of db (elect-causal! db live)))
+        (print-case "causal-reversed" (= (elect-causal! db live)
+                                          (elect-causal! db (vec (reverse live)))))
         (print-case "causal-keys" (mapv #(causal-key db %) live))))))
 
 (defn case-empty []
   (with-db
     (fn [db]
-      (print-case "empty-election" [(elect db []) (elect-causal db [])])
-      (print-case "empty-view-election" [(elect db "@view:x" [])
-                                          (elect-causal db "@view:x" [])])
-      (print-case "unknown-withdrawal" [(withdrawal-of db -1)
-                                         (withdrawn? db -1)])
-      (print-case "unknown-view" (view-selects db "@view:x")))))
+      (print-case "empty-election" [(elect! db []) (elect-causal! db [])])
+      (print-case "empty-view-election" [(elect! db "@view:x" [])
+                                          (elect-causal! db "@view:x" [])])
+      (print-case "unknown-withdrawal" [(withdrawal-of! db -1)
+                                         (withdrawn?! db -1)])
+      (print-case "unknown-view" (view-selects! db "@view:x")))))
 
 (let [case-name (first *command-line-args*)
       cases {"live-basics" case-live-basics

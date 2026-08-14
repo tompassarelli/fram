@@ -34,30 +34,30 @@
   (if (and (contains? opts :as-of) (not (and (integer? v) (>= v 0)))) [":as-of must be a non-negative integer"] []))]
   (vec (concat e-root e-pat e-caps e-asof))))
 
-(defn run [store-atom root pattern opts]
+(defn run! [store-atom root pattern opts]
   (let [errs (validate root pattern opts)]
   (if (seq errs) {:error errs} (let [schema (s/session! store-atom)
-   history (c/operation-occurrences store-atom)
+   occurrences (c/occurrences store-atom)
    live-now (c/live-occurrences store-atom)
-   withdrawals (c/withdrawal-triples store-atom)
+   withdrawals (c/withdrawals store-atom)
    asof (let [candidate (:as-of opts)]
   (if (integer? candidate) candidate nil))
    prov? (boolean (:provenance opts))
    max-depth (clamp (:max-depth opts) default-max-depth)
    max-nodes (clamp (:max-nodes opts) default-max-nodes)
    state (atom 0)]
-  (letfn [(event-occurrence [event] (t/triple-t1 event))
-          (event-proposition [event] (t/triple-t3 event))
+  (letfn [(event-occurrence [event] (t/operationoccurrence-coordinate event))
+          (event-proposition [event] (t/operationoccurrence-proposition event))
           (event-sequence [event] (let [occurrence (event-occurrence event)
    transaction (t/triple-t1 occurrence)]
   (t/triple-t3 transaction)))
-          (assertion-event? [event] (= t/asserts (t/triple-t2 event)))
+          (assertion-event? [event] (t/assertion-occurrence? event))
           (events-at [cutoff] (reduce (fn [active event] (if (> (event-sequence event) cutoff) active (if (assertion-event? event) (conj active event) (let [proposition (event-proposition event)
    target (last (filterv (fn [candidate] (= proposition (event-proposition candidate))) active))]
-  (if (nil? target) active (filterv (fn [candidate] (not= (event-occurrence target) (event-occurrence candidate))) active)))))) [] history))
+  (if (nil? target) active (filterv (fn [candidate] (not= (event-occurrence target) (event-occurrence candidate))) active)))))) [] occurrences))
           (snapshot-events [] (if (some? asof) (events-at asof) live-now))
           (live-event? [event] (boolean (some (fn [candidate] (= (event-occurrence event) (event-occurrence candidate))) live-now)))
-          (withdrawal-for [occurrence] (let [withdrawal (first (filterv (fn [candidate] (and (= t/withdraws (t/triple-t2 candidate)) (= occurrence (t/triple-t3 candidate)))) withdrawals))]
+          (withdrawal-for [occurrence] (let [withdrawal (first (filterv (fn [candidate] (= occurrence (t/operationoccurrence-coordinate (t/withdrawal-assertion candidate)))) withdrawals))]
   withdrawal))
           (metadata-value [owner predicate] (let [event (last (filterv (fn [candidate] (if (assertion-event? candidate) (let [proposition (event-proposition candidate)]
   (and (= owner (t/triple-t1 proposition)) (= predicate (t/triple-t2 proposition)) (or (nil? asof) (<= (event-sequence candidate) asof)))) false)) (snapshot-events)))]
@@ -68,7 +68,7 @@
           (nm-of [term] (or (s/name-of schema term) term))
           (fwd-events [left predicate] (let [candidates (cond
   (some? asof) (snapshot-events)
-  prov? (filterv (fn [event] (and (assertion-event? event) (or (live-event? event) (some? (withdrawal-for (event-occurrence event)))))) history)
+  prov? (filterv (fn [event] (and (assertion-event? event) (or (live-event? event) (some? (withdrawal-for (event-occurrence event)))))) occurrences)
   :else live-now)]
   (filterv (fn [event] (if (assertion-event? event) (let [proposition (event-proposition event)]
   (and (= left (t/triple-t1 proposition)) (= predicate (t/triple-t2 proposition)))) false)) candidates)))
@@ -82,7 +82,7 @@
    withdrawal (if (some? asof) nil (withdrawal-for occurrence))
    recorded-at (recorded-at-of occurrence)
    base (cond-> {:val value :cid occurrence :by (agent-of occurrence) :seq (event-sequence event) :withdrawn (boolean withdrawal)} (some? recorded-at) (assoc :ts recorded-at))]
-  (if (nil? withdrawal) base (let [retraction (t/triple-t1 withdrawal)]
+  (if (nil? withdrawal) base (let [retraction (t/operationoccurrence-coordinate (t/withdrawal-retraction withdrawal))]
   (assoc base :withdrawn_by (agent-of retraction) :withdrawn_at retraction)))) value)))
           (values [pname predicate left] (let [events (fwd-events left predicate)]
   (if (seq events) (do

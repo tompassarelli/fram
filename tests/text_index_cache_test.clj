@@ -19,8 +19,8 @@
 ((var server/drop-query-caches!))
 
 (def build-count (atom 0))
-(with-redefs [text-index/build-source
-              (let [original text-index/build-source]
+(with-redefs [text-index/build-source!
+              (let [original text-index/build-source!]
                 (fn [rows maximum]
                   (swap! build-count inc)
                   (original rows maximum)))]
@@ -76,9 +76,9 @@
 
 (let [entered (promise)
       release (promise)
-      original text-index/build-source
+      original text-index/build-source!
       future-source
-      (with-redefs [text-index/build-source
+      (with-redefs [text-index/build-source!
                     (fn [rows maximum]
                       (deliver entered true)
                       @release
@@ -98,7 +98,7 @@
             (empty? (:entries @server/text-index-cache)))))
 
 (let [problem (try
-                (text-search/build-source propositions 1)
+                (text-search/build-source! propositions 1)
                 nil
                 (catch clojure.lang.ExceptionInfo error error))]
   (chk "oversize combined search build fails with typed query-text-index-limit"
@@ -107,7 +107,7 @@
 (let [mixed (conj propositions
                   (t/triple "@ignored" "private-note"
                             (apply str (repeat 10000 "unrelated "))))
-      scoped (text-search/build-source-for-attributes mixed #{"body"}
+      scoped (text-search/build-source-for-attributes! mixed #{"body"}
                                                        text-index/text-index-max-bytes)]
   (chk "attribute-scoped source excludes unrelated live strings"
        (= (count propositions)

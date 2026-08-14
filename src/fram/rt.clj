@@ -1186,7 +1186,7 @@
             (try (.close s) (catch Throwable _ nil))
             (throw error)))))))
 
-;; --- FRAMRPC v1 client -------------------------------------------------------
+;; --- FRAMRPC v2 client -------------------------------------------------------
 ;; Data clients share this one bounded binary implementation. Human-facing
 ;; commands may parse EDN before this boundary, but only recursive Terms and
 ;; closed RpcRequest records reach the socket.
@@ -1220,7 +1220,7 @@
 (defn- rpc-stream-body-length! [header]
   (dotimes [index 8]
     (when-not (= (bit-and 255 (int (aget header index)))
-                 (bit-and 255 (int (aget framrpc/rpc-v1-magic index))))
+                 (bit-and 255 (int (aget framrpc/rpc-v2-magic index))))
       (throw (ex-info "FRAMRPC response magic does not match"
                       {:type :rpc-invalid-magic}))))
   (let [buffer (doto (java.nio.ByteBuffer/wrap header)
@@ -1231,8 +1231,8 @@
           kind (bit-and 255 (int (.get buffer)))
           flags (bit-and 255 (int (.get buffer)))
           body-length (Integer/toUnsignedLong (.getInt buffer))]
-      (when-not (and (= major framrpc/rpc-v1-major)
-                     (= minor framrpc/rpc-v1-minor))
+      (when-not (and (= major framrpc/rpc-v2-major)
+                     (= minor framrpc/rpc-v2-minor))
         (throw (ex-info "FRAMRPC response version is unsupported"
                         {:type :rpc-unsupported-version
                          :major major :minor minor})))
@@ -1240,28 +1240,28 @@
         (throw (ex-info "FRAMRPC client expected a response or event frame"
                         {:type :rpc-invalid-kind :kind kind})))
       (when-not (zero? flags)
-        (throw (ex-info "FRAMRPC v1 response flags must be zero"
+        (throw (ex-info "FRAMRPC v2 response flags must be zero"
                         {:type :rpc-invalid-flags :flags flags})))
-      (when (> body-length framrpc/rpc-v1-max-body-bytes)
+      (when (> body-length framrpc/rpc-v2-max-body-bytes)
         (throw (ex-info "FRAMRPC response body exceeds the 1 MiB limit"
                         {:type :rpc-frame-too-large
                          :body-length body-length})))
       (int body-length))))
 
 (defn read-rpc-frame! [input]
-  (let [header (byte-array framrpc/rpc-v1-header-bytes)]
-    (when-not (read-rpc-exact! input header 0 framrpc/rpc-v1-header-bytes)
+  (let [header (byte-array framrpc/rpc-v2-header-bytes)]
+    (when-not (read-rpc-exact! input header 0 framrpc/rpc-v2-header-bytes)
       (throw (ex-info "FRAMRPC response ended inside its header"
                       {:type :rpc-truncated})))
     (let [body-length (rpc-stream-body-length! header)
           body (byte-array body-length)
-          frame (byte-array (+ framrpc/rpc-v1-header-bytes body-length))]
+          frame (byte-array (+ framrpc/rpc-v2-header-bytes body-length))]
       (when-not (read-rpc-exact! input body 0 body-length)
         (throw (ex-info "FRAMRPC response ended inside its body"
                         {:type :rpc-truncated})))
-      (System/arraycopy header 0 frame 0 framrpc/rpc-v1-header-bytes)
-      (System/arraycopy body 0 frame framrpc/rpc-v1-header-bytes body-length)
-      (framrpc/decode-rpc-frame-v1! frame))))
+      (System/arraycopy header 0 frame 0 framrpc/rpc-v2-header-bytes)
+      (System/arraycopy body 0 frame framrpc/rpc-v2-header-bytes body-length)
+      (framrpc/decode-rpc-frame-v2! frame))))
 
 (defn native-request-to!
   "Send one closed FRAMRPC request to host/port and return its RpcResponse.
@@ -1274,15 +1274,15 @@
             output (.getOutputStream socket)]
         (.setSoTimeout socket timeout)
         (.write output
-                (framrpc/encode-rpc-frame-v1!
+                (framrpc/encode-rpc-frame-v2!
                  (framrpc/rpc-request-frame request-id request)))
         (.flush output)
         (let [frame (read-rpc-frame! (.getInputStream socket))
-              response (terms/rpcframev1-response frame)]
-          (when-not (= :response (terms/rpcframev1-kind frame))
+              response (terms/rpcframev2-response frame)]
+          (when-not (= :response (terms/rpcframev2-kind frame))
             (throw (ex-info "FRAMRPC request received a non-response frame"
                             {:type :rpc-invalid-kind})))
-          (when-not (= request-id (terms/rpcframev1-request-id frame))
+          (when-not (= request-id (terms/rpcframev2-request-id frame))
             (throw (ex-info "FRAMRPC response request-id does not match"
                             {:type :rpc-request-id-mismatch})))
           (when-not (and (= (terms/rpcrequest-space request)

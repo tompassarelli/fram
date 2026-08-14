@@ -5,8 +5,10 @@ import {
   FramProtocolError,
   FramRpcError,
   FramTransportError,
+  booleanTerm,
   float64Term,
   framClient,
+  integerTerm,
   keywordTerm,
   stringTerm,
   tripleQuery,
@@ -42,6 +44,56 @@ function textTerm(tag, text) {
   return concat([u8(tag), u32(bytes.length), bytes]);
 }
 
+function wireTerm(value) {
+  switch (value[0]) {
+    case 'string':
+      return textTerm(1, value[1]);
+    case 'integer':
+      return concat([u8(2), i64(BigInt(value[1]))]);
+    case 'boolean':
+      return u8(value[1] ? 5 : 4);
+    case 'keyword':
+      return textTerm(6, value[1]);
+    case 'triple':
+      return concat([u8(7), wireTerm(value[1]), wireTerm(value[2]), wireTerm(value[3])]);
+    default:
+      throw new Error(`unsupported response fixture Term ${value[0]}`);
+  }
+}
+
+function rpcList(values) {
+  return values.reduceRight(
+    (tail, value) => tripleTerm(keywordTerm('rpc/list'), value, tail),
+    keywordTerm('rpc/list-end'),
+  );
+}
+
+function rpcRecord(tag, fields) {
+  return tripleTerm(keywordTerm(tag), rpcList(fields), keywordTerm('rpc/record'));
+}
+
+function successResponse(request, payload, { major = 2, minor = 0 } = {}) {
+  const body = concat([
+    textTerm(1, request.space),
+    textTerm(6, request.operation),
+    i64(1n),
+    u8(0), // no page
+    u8(0), // no error
+    u8(1), // payload present
+    wireTerm(payload),
+  ]);
+  return concat([
+    MAGIC,
+    u16(major),
+    u16(minor),
+    u8(2),
+    u8(0),
+    u32(body.length),
+    i64(request.requestId),
+    body,
+  ]);
+}
+
 function rejectedResponse(request, requestId = request.requestId) {
   const body = concat([
     textTerm(1, request.space),
@@ -57,7 +109,7 @@ function rejectedResponse(request, requestId = request.requestId) {
   ]);
   return concat([
     MAGIC,
-    u16(1),
+    u16(2),
     u16(0),
     u8(2),
     u8(0),
@@ -128,6 +180,96 @@ test('transport responses retain exact protocol identity checks', async () => {
     error => error instanceof FramProtocolError
       && error.code === 'client/identity-mismatch',
   );
+});
+
+test('FRAMRPC v1 response frames are rejected at the v2 client boundary', async () => {
+  const fram = framClient({
+    space: 'worker-space',
+    transport: request => successResponse(request, keywordTerm('rpc/unit'), { major: 1 }),
+  });
+  await assert.rejects(
+    fram.version(),
+    error => error instanceof FramProtocolError
+      && error.code === 'client/unsupported-version',
+  );
+});
+
+test('occurrence and mutation records decode to strict typed objects', async () => {
+  const coordinate = tripleTerm(
+    tripleTerm('worker-space', keywordTerm('kernel/tx-sequence'), integerTerm(1)),
+    keywordTerm('kernel/op-ordinal'),
+    integerTerm(0),
+  );
+  const proposition = tripleTerm('subject', keywordTerm('predicate'), 'object');
+  const occurrenceRecord = rpcRecord('rpc/occurrence', [
+    coordinate,
+    keywordTerm('assert'),
+    proposition,
+  ]);
+  const occurrences = framClient({
+    space: 'worker-space',
+    transport: request => successResponse(
+      request,
+      rpcRecord('rpc/occurrences', [rpcList([occurrenceRecord])]),
+    ),
+  });
+  assert.deepEqual((await occurrences.occurrences()).result, [{
+    coordinate,
+    action: 'assert',
+    proposition,
+  }]);
+
+  const mutation = framClient({
+    space: 'worker-space',
+    transport: request => successResponse(
+      request,
+      rpcRecord('rpc/mutation-result', [rpcList([
+        rpcRecord('rpc/action-result', [integerTerm(0), booleanTerm(false), coordinate]),
+      ])]),
+    ),
+  });
+  assert.deepEqual((await mutation.retract('missing', 'predicate', 'object')).result, [{
+    inputIndex: 0,
+    stateChanged: false,
+    occurrence: coordinate,
+  }]);
+});
+
+test('occurrence decoding rejects malformed coordinates, actions, and propositions', async () => {
+  const coordinate = tripleTerm(
+    tripleTerm('worker-space', keywordTerm('kernel/tx-sequence'), integerTerm(1)),
+    keywordTerm('kernel/op-ordinal'),
+    integerTerm(0),
+  );
+  const proposition = tripleTerm('subject', keywordTerm('predicate'), 'object');
+  const invalidFields = [
+    [
+      tripleTerm(
+        tripleTerm('worker-space', keywordTerm('kernel/wrong'), integerTerm(1)),
+        keywordTerm('kernel/op-ordinal'),
+        integerTerm(0),
+      ),
+      keywordTerm('assert'),
+      proposition,
+    ],
+    [coordinate, keywordTerm('replace'), proposition],
+    [coordinate, keywordTerm('retract'), stringTerm('not-a-proposition')],
+  ];
+
+  for (const fields of invalidFields) {
+    const fram = framClient({
+      space: 'worker-space',
+      transport: request => successResponse(
+        request,
+        rpcRecord('rpc/occurrences', [rpcList([rpcRecord('rpc/occurrence', fields)])]),
+      ),
+    });
+    await assert.rejects(
+      fram.occurrences(),
+      error => error instanceof FramProtocolError
+        && error.code === 'client/invalid-occurrence',
+    );
+  }
 });
 
 test('transport timeout and caller abort are bounded', async () => {

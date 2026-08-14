@@ -23,7 +23,7 @@ jobs:
         with:
           repository: Autonymy/beagle
           # Pin matches flake.nix's beagle.url rev; keep them in sync.
-          ref: 073f23a67b7fc93d86fbf60dcc1a821343dbb137
+          ref: d7e60c00c1006018e6394cab8a5e3ce449ee972a
           path: .beagle
 
       - name: Install Racket (Beagle graph-authoring runtime)

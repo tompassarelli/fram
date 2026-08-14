@@ -58,6 +58,21 @@ function conflict(version) {
   });
 }
 
+function occurrenceCoordinateFixture(sequence, ordinal) {
+  return ['triple',
+    ['triple', ['string', 'schema-test'], ['keyword', 'kernel/tx-sequence'], ['integer', String(sequence)]],
+    ['keyword', 'kernel/op-ordinal'],
+    ['integer', String(ordinal)]];
+}
+
+function mutationResultsFixture(actions, sequence) {
+  return actions.map((_, inputIndex) => ({
+    inputIndex,
+    stateChanged: true,
+    occurrence: occurrenceCoordinateFixture(sequence, inputIndex),
+  }));
+}
+
 function mockFram({
   versions = [0n],
   queryResults = [],
@@ -131,9 +146,10 @@ function mockFram({
         const outcome = batchOutcomes[batchIndex];
         batchIndex += 1;
         if (outcome instanceof Error) throw outcome;
+        const servedVersion = BigInt(options.expectedVersion) + 1n;
         return outcome ?? {
-          servedVersion: BigInt(options.expectedVersion) + 1n,
-          result: actions.map((_, inputIndex) => ({ inputIndex, changed: true, occurrences: [] })),
+          servedVersion,
+          result: mutationResultsFixture(actions, servedVersion),
         };
       },
     },
@@ -1243,11 +1259,7 @@ check('requireUnique resolution keeps query concurrency bounded', async () => {
       calls.batch += 1;
       return {
         servedVersion: options.expectedVersion + 1n,
-        result: actions.map((_, inputIndex) => ({
-          inputIndex,
-          changed: true,
-          occurrences: [],
-        })),
+        result: mutationResultsFixture(actions, options.expectedVersion + 1n),
       };
     },
   };
@@ -1324,11 +1336,7 @@ check('upsertUnique keeps single-field scan concurrency bounded', async () => {
       calls.batch += 1;
       return {
         servedVersion: options.expectedVersion + 1n,
-        result: actions.map((_, inputIndex) => ({
-          inputIndex,
-          changed: true,
-          occurrences: [],
-        })),
+        result: mutationResultsFixture(actions, options.expectedVersion + 1n),
       };
     },
   };

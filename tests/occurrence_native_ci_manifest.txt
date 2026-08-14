@@ -21,7 +21,7 @@ run-bb	current-model	tests/framlog_chain_boot_test.clj	-
 run-bb	current-model	tests/framlog_deflate_test.clj	-
 run-bb	current-model	tests/framlog_fork_test.clj	-
 run-bb	current-model	tests/fram_promotion_test.clj	-
-run-bb	current-model	tests/fram_rpc_v1_test.clj	-
+run-bb	current-model	tests/fram_rpc_v2_test.clj	-
 run-bb	current-model	tests/framlog_torn_sweep_test.clj	-
 run-bb	current-model	tests/framref_codec_test.clj	-
 run-bb	current-model	tests/framrpc_latency_convoy_test.clj	-
@@ -163,7 +163,7 @@ run-bb	current-model	tests/text_match_test.clj	-
 run-clojure	current-model	tests/text_index_cache_test.clj	-
 exclude	shared-runner-timing	tests/text_index_perf_test.clj	tests/text_index_perf_test.clj#p95
 run-clojure	current-model	tests/s1_schema_foundation_test.clj	-
-exclude	s2-frontier	tests/s2_authoring_test.clj	tests/s2_authoring_test.clj#rr/context
+exclude	s2-frontier	tests/s2_authoring_test.clj	tests/s2_authoring_test.clj#rr/context!
 run-bb	current-model	tests/candidate_transformer_test.clj	-
 run-bb	current-model	tests/native_code_reader_test.clj	-
 run-bb	current-model	tests/projection_lifecycle_test.clj	-

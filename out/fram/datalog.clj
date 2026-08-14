@@ -1,6 +1,5 @@
 (ns fram.datalog
-  (:require [fram.kernel :as kernel]
-            [fram.rotation :as rot]
+  (:require [fram.rotation :as rot]
             [fram.store :as store]
             [fram.types :as t]
             [fram.text-index :as text-index]
@@ -132,6 +131,8 @@
 
 (def ^String occurrence-relation "occurrence")
 
+(def ^String withdrawal-relation "withdrawal")
+
 (def ^String text-match-relation "text-match")
 
 (def ^String text-phrase-relation "text-phrase")
@@ -144,7 +145,7 @@
 
 (def text-relations #{text-match-relation text-phrase-relation text-substring-relation text-stem-relation text-search-relation})
 
-(def base-relations (conj text-relations triple-relation occurrence-relation))
+(def base-relations (conj text-relations triple-relation occurrence-relation withdrawal-relation))
 
 (def comparison-operators #{:eq :ne :lt :le :gt :ge})
 
@@ -288,12 +289,23 @@
 (defn- rows [triples]
   (reduce (fn [acc value] (conj acc (triple-row value))) #{} triples))
 
+(defn- occurrence-row [value]
+  [(t/operationoccurrence-coordinate value) (t/operationoccurrence-action value) (t/operationoccurrence-proposition value)])
+
+(defn- occurrence-rows [occurrences]
+  (reduce (fn [acc value] (conj acc (occurrence-row value))) #{} occurrences))
+
+(defn- withdrawal-row [value]
+  [(t/operationoccurrence-coordinate (t/withdrawal-retraction value)) (t/operationoccurrence-coordinate (t/withdrawal-assertion value))])
+
+(defn- withdrawal-rows [withdrawals]
+  (reduce (fn [acc value] (conj acc (withdrawal-row value))) #{} withdrawals))
+
 (defn edb [propositions]
   {triple-relation (rows propositions)})
 
-(defn edb-with-occurrences [propositions occurrences]
-  (let [checked (reduce (fn [acc value] (if (kernel/operation-occurrence? value) (conj acc value) (throw (ex-info "fram: occurrence relation accepts only operation occurrences" {:type :invalid-operation-occurrence})))) [] occurrences)]
-  {triple-relation (rows propositions) occurrence-relation (rows checked)}))
+(defn edb-with-history [propositions occurrences withdrawals]
+  {triple-relation (rows propositions) occurrence-relation (occurrence-rows occurrences) withdrawal-relation (withdrawal-rows withdrawals)})
 
 (defn- term-value [^QueryTerm term subst]
   (let [name (queryterm-variable term)]
@@ -414,7 +426,7 @@
    source (virtualcandidatesource-source candidate)
    needle (bound-term-value (nth arguments 2) subst)]
   (cond
-  (= relation text-match-relation) (if indexed (text-search/exact-indexed-rows-result source needle) (text-search/exact-scan-rows-result source needle))
+  (= relation text-match-relation) (if indexed (text-search/exact-indexed-rows-result! source needle) (text-search/exact-scan-rows-result! source needle))
   (= relation text-phrase-relation) (if indexed (text-search/phrase-indexed-rows-result! source needle) (text-search/phrase-scan-rows-result! source needle))
   (= relation text-substring-relation) (if indexed (text-search/substring-indexed-rows-result! source needle) (text-search/substring-scan-rows-result! source needle))
   (= relation text-stem-relation) (if indexed (text-search/stem-indexed-rows-result! source needle) (text-search/stem-scan-rows-result! source needle))
@@ -543,7 +555,7 @@
   (->CandidateSource [] {} {} {} {} nil (->RotationCandidateSource rotation lower-exclusive)))
 
 (defn- ^Boolean event-after-sequence? [event lower-exclusive]
-  (if (< lower-exclusive 0) true (let [occurrence (rot/occurrence-of event)]
+  (if (< lower-exclusive 0) true (let [occurrence (t/operationoccurrence-coordinate event)]
   (if (t/occurrence-coordinate? occurrence) (let [transaction (t/triple-t1 occurrence)
    sequence (t/triple-t3 transaction)]
   (> sequence lower-exclusive)) false))))
@@ -559,6 +571,9 @@
 (defn- ^CandidateSource candidate-source-add-rows [^String relation ^CandidateSource source tuples]
   (reduce (fn [current tuple] (candidate-source-add relation current tuple)) source tuples))
 
+(defn ^CandidateSource withdrawal-candidate-source [root lower-exclusive upper-inclusive]
+  (candidate-source-add-rows withdrawal-relation (empty-candidate-source) (set (store/withdrawal-tuples-between root lower-exclusive upper-inclusive))))
+
 (defn- build-candidate-sources [db relations seed]
   (reduce (fn [sources relation] (if (contains? sources relation) sources (assoc sources relation (candidate-source-add-rows relation (empty-candidate-source) (get db relation #{}))))) seed relations))
 
@@ -568,9 +583,9 @@
    base (if (instance? CandidateSource existing) existing (empty-candidate-source))]
   (if (empty? tuples) current (assoc current relation (candidate-source-add-rows relation base tuples))))) sources relations))
 
-(defn ^Boolean text-relation-needle-valid? [^String relation needle]
+(defn ^Boolean text-relation-needle-valid?! [^String relation needle]
   (cond
-  (= relation text-match-relation) (text-index/text-needle-valid? needle)
+  (= relation text-match-relation) (text-index/text-needle-valid?! needle)
   (or (= relation text-phrase-relation) (= relation text-stem-relation)) (text-search/word-needle-valid? needle)
   (or (= relation text-substring-relation) (= relation text-search-relation)) (text-search/substring-needle-valid? needle)
   :else false))
@@ -578,18 +593,18 @@
 (defn text-candidate-sources [source]
   {text-match-relation (->VirtualCandidateSource text-match-relation source) text-phrase-relation (->VirtualCandidateSource text-phrase-relation source) text-substring-relation (->VirtualCandidateSource text-substring-relation source) text-stem-relation (->VirtualCandidateSource text-stem-relation source) text-search-relation (->VirtualCandidateSource text-search-relation source)})
 
-(defn ^CandidateSourcesResult build-text-candidates-result [propositions]
-  (let [result (text-search/build-source-result propositions text-index/text-index-max-bytes)
+(defn ^CandidateSourcesResult build-text-candidates-result! [propositions]
+  (let [result (text-search/build-source-result! propositions text-index/text-index-max-bytes)
    source (text-search/source-result-source result)]
   (if (some? source) (->CandidateSourcesResult (text-candidate-sources source) nil) (->CandidateSourcesResult {} (query-evaluation-error-from-text-error (text-search/source-result-error result))))))
 
-(defn ^CandidateSourcesResult build-text-candidates-for-attributes-result [propositions attributes]
-  (let [result (text-search/build-source-for-attributes-result propositions attributes text-index/text-index-max-bytes)
+(defn ^CandidateSourcesResult build-text-candidates-for-attributes-result! [propositions attributes]
+  (let [result (text-search/build-source-for-attributes-result! propositions attributes text-index/text-index-max-bytes)
    source (text-search/source-result-source result)]
   (if (some? source) (->CandidateSourcesResult (text-candidate-sources source) nil) (->CandidateSourcesResult {} (query-evaluation-error-from-text-error (text-search/source-result-error result))))))
 
-(defn build-text-candidates [propositions]
-  (text-candidate-sources (text-search/build-source propositions text-index/text-index-max-bytes)))
+(defn build-text-candidates! [propositions]
+  (text-candidate-sources (text-search/build-source! propositions text-index/text-index-max-bytes)))
 
 (defn- bound-prefix [arguments order subst]
   (loop [remaining order
@@ -640,7 +655,7 @@
   (loop [remaining events
    seen #{}
    results []]
-  (if (or (empty? remaining) (not (query-evaluation-context-open? context))) results (let [proposition (rot/proposition-of (first remaining))]
+  (if (or (empty? remaining) (not (query-evaluation-context-open? context))) results (let [proposition (t/operationoccurrence-proposition (first remaining))]
   (if (contains? seen proposition) (recur (rest remaining) seen results) (let [matched (unify-arguments-controlled! arguments (triple-row proposition) subst context)]
   (if (query-evaluation-context-open? context) (recur (rest remaining) (conj seen proposition) (if (some? matched) (conj results matched) results)) results))))))))
 

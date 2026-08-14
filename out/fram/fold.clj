@@ -2,11 +2,13 @@
   (:require [fram.store :as store]
             [fram.types :as t]))
 
-(defrecord Fold [space-id history live-occurrences live-propositions version dump])
+(defrecord Fold [space-id occurrences withdrawals live-occurrences live-propositions version dump])
 
 (defn fold-space-id [r] (:space-id r))
 
-(defn fold-history [r] (:history r))
+(defn fold-occurrences [r] (:occurrences r))
+
+(defn fold-withdrawals [r] (:withdrawals r))
 
 (defn fold-live-occurrences [r] (:live-occurrences r))
 
@@ -24,7 +26,7 @@
   (if (> sequence maximum) sequence maximum))) 0 frames))
 
 (defn- ^Fold project [ctx]
-  (->Fold (store/space-id ctx) (store/semantic-history ctx) (store/live-occurrences ctx) (store/live-propositions ctx) (store/current-sequence ctx) (store/dump-term-store ctx)))
+  (->Fold (store/space-id ctx) (store/occurrences ctx) (store/withdrawals ctx) (store/live-occurrences ctx) (store/live-propositions ctx) (store/current-sequence ctx) (store/dump-term-store ctx)))
 
 (defn ^Fold fold! [^String space-id frames]
   (let [ctx (store/new-term-store space-id)]

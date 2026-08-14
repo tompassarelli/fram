@@ -11,6 +11,26 @@ export type Term = StringTerm | IntegerTerm | Float64Term | BooleanTerm
   | KeywordTerm | InstantTerm | TripleTerm;
 export type TermInput = Term | string | bigint | number | boolean | Date;
 
+export type TransactionCoordinateTerm = [
+  'triple',
+  StringTerm,
+  ['keyword', 'kernel/tx-sequence'],
+  IntegerTerm,
+];
+export type OccurrenceCoordinateTerm = [
+  'triple',
+  TransactionCoordinateTerm,
+  ['keyword', 'kernel/op-ordinal'],
+  IntegerTerm,
+];
+export type OccurrenceAction = 'assert' | 'retract';
+
+export interface Occurrence {
+  coordinate: OccurrenceCoordinateTerm;
+  action: OccurrenceAction;
+  proposition: TripleTerm;
+}
+
 export interface QueryVariable {
   var: string;
 }
@@ -167,8 +187,8 @@ export interface FramResponse<Result> {
 
 export interface MutationActionResult {
   inputIndex: number;
-  changed: boolean;
-  occurrences: TripleTerm[];
+  stateChanged: boolean;
+  occurrence: OccurrenceCoordinateTerm;
 }
 
 export interface StatusResult {
@@ -207,7 +227,7 @@ export interface FramClient {
   version(options?: RequestOptions): Promise<FramResponse<null>>;
   status(options?: RequestOptions): Promise<FramResponse<StatusResult>>;
   validate(options?: RequestOptions): Promise<FramResponse<ValidationResult>>;
-  occurrences(options?: PagedRequestOptions): Promise<FramResponse<TripleTerm[]>>;
+  occurrences(options?: PagedRequestOptions): Promise<FramResponse<Occurrence[]>>;
   scan(pattern?: TriplePattern, options?: PagedRequestOptions): Promise<FramResponse<TripleTerm[]>>;
   query(query: StructuredQuery | Term, options?: QueryOptions): Promise<FramResponse<Term[][]>>;
   assert(t1: TermInput, t2: TermInput, t3: TermInput,
@@ -265,7 +285,7 @@ export interface FramNativeCheckpointResult {
   readonly snapshotBytes: bigint;
 }
 
-export const FRAMRPC_VERSION: Readonly<{ major: 1; minor: 0 }>;
+export const FRAMRPC_VERSION: Readonly<{ major: 2; minor: 0 }>;
 export const FRAMRPC_MAX_BATCH_ACTIONS: 247;
 export const FRAMRPC_MAX_FRAME_BYTES: 1048602;
 

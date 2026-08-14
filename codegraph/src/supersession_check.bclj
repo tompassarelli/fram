@@ -55,17 +55,26 @@
 
 (defn assertion-occurrence-of [(events (Vec Any)) (proposition Any)] Any
   (let [hits (filterv (fn [(e Any)] Bool
-                        (and (= t/asserts (t/triple-t2 e)) (= proposition (t/triple-t3 e))))
+                        (and (t/assertion-occurrence? e)
+                          (= proposition
+                            (t/operationoccurrence-proposition e))))
                events)]
-    (if (empty? hits) nil (t/triple-t1 (nth hits 0)))))
+    (if (empty? hits)
+      nil
+      (t/operationoccurrence-coordinate (nth hits 0)))))
 
 (defn withdrawal-of [(ctx Any) (occurrence Any)] Any
-  (let [hits (filterv (fn [(w Any)] Bool (= occurrence (t/triple-t3 w)))
-               (c/withdrawal-triples ctx))]
+  (let [hits (filterv (fn [(w Any)] Bool
+                        (= occurrence
+                          (t/operationoccurrence-coordinate
+                            (t/withdrawal-assertion w))))
+               (c/withdrawals ctx))]
     (if (empty? hits) nil (nth hits 0))))
 
 (defn live-occurrence? [(ctx Any) (occurrence Any)] Bool
-  (pos? (count (filterv (fn [(e Any)] Bool (= occurrence (t/triple-t1 e)))
+  (pos? (count (filterv (fn [(e Any)] Bool
+                          (= occurrence
+                            (t/operationoccurrence-coordinate e)))
                  (c/live-occurrences ctx)))))
 
 (defn -main [& args] Nil
@@ -78,12 +87,13 @@
         (old-proposition Any) (first-sym-value-proposition ctx "red")
         (node Any) (t/triple-t1 old-proposition)
         (new-proposition Any) (t/triple node "v" "crimson")
-        (history-before (Vec Any)) (c/semantic-history ctx)
-        (old-occurrence Any) (assertion-occurrence-of history-before old-proposition)
+        (occurrences-before (Vec Any)) (c/occurrences ctx)
+        (old-occurrence Any)
+        (assertion-occurrence-of occurrences-before old-proposition)
         (_edit Any) (c/commit-transaction! ctx [(c/retract-operation old-proposition)
                                                (c/assert-operation new-proposition)])
-        (history (Vec Any)) (c/semantic-history ctx)
-        (new-occurrence Any) (assertion-occurrence-of history new-proposition)
+        (occurrences (Vec Any)) (c/occurrences ctx)
+        (new-occurrence Any) (assertion-occurrence-of occurrences new-proposition)
         (withdrawal Any) (withdrawal-of ctx old-occurrence)]
     (println "node (the symbol node):" node)
     (println)
@@ -104,21 +114,25 @@
       "  LIVE?="
       (live-occurrence? ctx new-occurrence))
     (println "WITHDRAWAL           at="
-      (occurrence-label (t/triple-t1 withdrawal))
+      (occurrence-label
+        (t/operationoccurrence-coordinate
+          (t/withdrawal-retraction withdrawal)))
       " withdraws="
-      (occurrence-label (t/triple-t3 withdrawal))
+      (occurrence-label
+        (t/operationoccurrence-coordinate
+          (t/withdrawal-assertion withdrawal)))
       "  (the retraction that supersedes the old assertion)")
     (println)
     (println "same node for old & new?   "
       (= (t/triple-t1 old-proposition) (t/triple-t1 new-proposition)))
     (println "old still retrievable (history preserved)? "
-      (some? (assertion-occurrence-of history old-proposition)))
+      (some? (assertion-occurrence-of occurrences old-proposition)))
     (println "live view of the node's v-propositions (live-propositions is live-only):"
       (mapv (fn [(p Any)] String (pr-str (t/triple-t3 p)))
         (filterv (fn [(p Any)] Bool (= "v" (t/triple-t2 p)))
           (propositions-of ctx node))))
     (println "=> old red assertion EXISTS, marked not-live; new crimson assertion is live; same node. Supersession is real:"
-      (and (some? (assertion-occurrence-of history old-proposition))
+      (and (some? (assertion-occurrence-of occurrences old-proposition))
         (not (live-occurrence? ctx old-occurrence))
         (live-occurrence? ctx new-occurrence)
         (= (t/triple-t1 old-proposition) (t/triple-t1 new-proposition))))))

@@ -50,6 +50,7 @@
 (def base-rel-arities (Map String Int)
   {d/triple-relation 3
    d/occurrence-relation 3
+   d/withdrawal-relation 2
    d/text-match-relation 3
    d/text-phrase-relation 3
    d/text-substring-relation 3
@@ -215,16 +216,20 @@
       (->ProjectionResult
        (->Projection database (d/candidatesourcesresult-sources result)) nil))))
 
-(defn project-result [(propositions (Vec t/Triple))] ProjectionResult
+(defn project-result! [(propositions (Vec t/Triple))] ProjectionResult
   (projection-from-candidates-result
    (d/edb propositions)
-   (d/build-text-candidates-result propositions)))
+   (d/build-text-candidates-result! propositions)))
 
-(defn project-with-occurrences-result
-  [(propositions (Vec t/Triple)) (occurrences (Vec t/Triple))] ProjectionResult
-  (let [(database d/Db) (d/edb-with-occurrences propositions occurrences)]
+(defn project-with-history-result!
+  [(propositions (Vec t/Triple))
+   (occurrences (Vec t/OperationOccurrence))
+   (withdrawals (Vec t/Withdrawal))]
+  ProjectionResult
+  (let [(database d/Db)
+        (d/edb-with-history propositions occurrences withdrawals)]
     (projection-from-candidates-result
-     database (d/build-text-candidates-result propositions))))
+     database (d/build-text-candidates-result! propositions))))
 
 (defn- projection-or-raise [(result ProjectionResult)] Projection
   (let [projection-value (projectionresult-projection result)
@@ -236,13 +241,16 @@
         (throw (ex-info "query projection produced no result"
                         {:type :query-projection-missing-result}))))))
 
-(defn project [(propositions (Vec t/Triple))] Projection
-  (projection-or-raise (project-result propositions)))
+(defn project! [(propositions (Vec t/Triple))] Projection
+  (projection-or-raise (project-result! propositions)))
 
-(defn project-with-occurrences
-  [(propositions (Vec t/Triple)) (occurrences (Vec t/Triple))] Projection
+(defn project-with-history!
+  [(propositions (Vec t/Triple))
+   (occurrences (Vec t/OperationOccurrence))
+   (withdrawals (Vec t/Withdrawal))]
+  Projection
   (projection-or-raise
-   (project-with-occurrences-result propositions occurrences)))
+   (project-with-history-result! propositions occurrences withdrawals)))
 
 (defn- set-union [(left (Set String)) (right (Set String))] (Set String)
   (reduce (fn [(acc (Set String)) (value String)] (Set String) (conj acc value))
@@ -373,7 +381,7 @@
     [(= :builtin (d/literal-kind literal)) #{(d/literal-binding literal)}]
     [:else #{}]))
 
-(defn- text-literal-errors
+(defn- text-literal-errors!
   [(literal d/Literal) (bound (Set String))] (Vec QueryError)
   (if (and (= :relation (d/literal-kind literal))
            (contains? d/text-relations (d/literal-relation literal)))
@@ -395,14 +403,14 @@
                 [(query-error :query-text-unbound-needle
                               (str relation
                                    " query must be constant or already bound"))])]
-             [(d/text-relation-needle-valid?
+             [(d/text-relation-needle-valid?!
                relation (d/queryterm-value needle)) (empty-query-errors)]
              [:else
               [(query-error :query-text-invalid-needle
                             (str relation " query is empty or invalid"))]]))]))
     (empty-query-errors)))
 
-(defn- rule-errors
+(defn- rule-errors!
   [(rule d/Rule)
    (known (Set String))
    (arities (Map String Int))]
@@ -433,7 +441,7 @@
                    (vec
                     (concat errors
                             (concat (literal-errors literal known arities bound)
-                                    (text-literal-errors literal bound)))))))))))
+                                    (text-literal-errors! literal bound)))))))))))
 
 (defn- arity-errors [(rules (Vec d/Rule))] (Vec QueryError)
   (let [arities (head-arities rules)]
@@ -663,7 +671,7 @@
           [])]
     (vec (concat clause-errors limit-errors))))
 
-(defn validate-plan [(plan QueryPlan)] (Vec QueryError)
+(defn validate-plan! [(plan QueryPlan)] (Vec QueryError)
   (let [strata (queryplan-strata plan)
         rules (reduce (fn
                         [(acc (Vec d/Rule)) (stratum (Vec d/Rule))] (Vec d/Rule)
@@ -678,7 +686,7 @@
           (empty-query-errors))
         rules-errors
         (reduce (fn [(acc (Vec QueryError)) (rule d/Rule)] (Vec QueryError)
-                  (vec (concat acc (rule-errors rule known arities))))
+                  (vec (concat acc (rule-errors! rule known arities))))
                 (empty-query-errors) rules)
         strata-errors
         (reduce (fn [(acc (Vec QueryError)) (message String)] (Vec QueryError)
@@ -904,9 +912,9 @@
              (having-clause (:op clause) (:agg clause) (:val clause)))
            (or (:having find) [])))))
 
-(defn compile-query [(form Any)] CompileResult
+(defn compile-query! [(form Any)] CompileResult
   (if (query-plan? form)
-    (let [errors (validate-plan form)]
+    (let [errors (validate-plan! form)]
       (if (empty? errors) (->CompileResult form []) (->CompileResult nil errors)))
     (let [errors (syntax-errors form)]
       (if (not (empty? errors))
@@ -923,7 +931,7 @@
                        (order-clause (:column clause) (:direction clause)))
                      (or (:order-by form) []))
                (:limit form))
-              validation-errors (validate-plan plan)]
+              validation-errors (validate-plan! plan)]
           (if (empty? validation-errors)
             (->CompileResult plan [])
             (->CompileResult nil validation-errors)))))))
@@ -1362,7 +1370,7 @@
    (plan QueryPlan)
    (control d/QueryControl?)]
   QueryExecutionResult
-  (let [errors (validate-plan plan)]
+  (let [errors (validate-plan! plan)]
     (if (not (empty? errors))
       (->QueryExecutionResult (failure-result errors) nil)
       (let [evaluation (evaluate-plan-result! projection plan control)
@@ -1386,14 +1394,15 @@
                 (success-result (ordered-plan-rows plan (vec rows))))))]
             (->QueryExecutionResult result nil)))))))
 
-(defn run-plan-with-occurrences-result!
+(defn run-plan-with-history-result!
   [(propositions (Vec t/Triple))
-   (occurrences (Vec t/Triple))
+   (occurrences (Vec t/OperationOccurrence))
+   (withdrawals (Vec t/Withdrawal))
    (plan QueryPlan)
    (control d/QueryControl?)]
   QueryExecutionResult
   (let [(projection-result ProjectionResult)
-        (project-with-occurrences-result propositions occurrences)
+        (project-with-history-result! propositions occurrences withdrawals)
         (projection-value Projection?) (projection-result-projection projection-result)
         (error-value d/QueryEvaluationError?) (projection-result-error projection-result)]
     (cond
@@ -1442,10 +1451,10 @@
   (run-plan-projected! projection plan))
 
 (defn run! [(propositions (Vec t/Triple)) (plan QueryPlan)] QueryResult
-  (run-plan-projected! (project propositions) plan))
+  (run-plan-projected! (project! propositions) plan))
 
 (defn run-syntax! [(propositions (Vec t/Triple)) (form Any)] QueryResult
-  (let [compiled (compile-query form)
+  (let [compiled (compile-query! form)
         plan (compileresult-plan compiled)]
     (if (some? plan)
       (run! propositions plan)
@@ -1530,7 +1539,7 @@
 
 (defn run-page-plan-projected!
   [(projection Projection) (plan QueryPlan) (limit Any) (after Any)] QueryPage
-  (let [validation-errors (validate-plan plan)]
+  (let [validation-errors (validate-plan! plan)]
     (cond
       [(not (empty? validation-errors)) (failure-page validation-errors)]
       [(aggregate-find? (queryplan-find plan))
@@ -1588,4 +1597,4 @@
    (limit Any)
    (after Any)]
   QueryPage
-  (run-page-plan-projected! (project propositions) plan limit after))
+  (run-page-plan-projected! (project! propositions) plan limit after))

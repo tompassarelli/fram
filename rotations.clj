@@ -2,10 +2,9 @@
 ;;
 ;; FRI2 owns the persisted, source-bound Term/Triple tables and slot indexes.
 ;; This namespace is a disposable in-memory projection rebuilt from those
-;; occurrence triples. It never assigns another identity or owns log history.
+;; occurrence records. It never assigns another identity or owns log history.
 (ns rotations
-  (:require [fram.kernel :as kernel]
-            [fram.types :as t]
+  (:require [fram.types :as t]
             [fri :as fri]))
 
 (defrecord RotationSet [image index])
@@ -21,12 +20,13 @@
    :watermark -1})
 
 (defn- assertion! [event]
-  (if (kernel/assertion-occurrence? event)
+  (if (t/assertion-occurrence? event)
     event
-    (throw (ex-info "rotations: expected an assertion occurrence Triple"
+    (throw (ex-info "rotations: expected an assertion occurrence"
                     {:type :invalid-rotation-occurrence}))))
 
-(defn- proposition [event] (kernel/proposition-of (assertion! event)))
+(defn- proposition [event]
+  (t/operationoccurrence-proposition (assertion! event)))
 
 (defn- bucket-add [buckets key event]
   (assoc buckets key (conj (get buckets key []) event)))
@@ -81,7 +81,7 @@
           (update :t13 bucket-del [t1 t3] event)))))
 
 (defn build
-  "Build a covering index from live assertion occurrence Triples."
+  "Build a covering index from live assertion occurrences."
   [events]
   (reduce add empty-index events))
 

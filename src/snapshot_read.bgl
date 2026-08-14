@@ -1,7 +1,7 @@
 #lang beagle
 
 ;; ============================================================================
-;; snapshot-read — pure database snapshot readers.
+;; snapshot-read — database snapshot readers.
 ;; ============================================================================
 ;; OCC, leases, locks, queues, promises, fsync, and group commit remain in the
 ;; server runtime. This module owns only read-time derivations over database state.
@@ -67,7 +67,7 @@
     (let [(fcid Int?) (first (live-cids-lp ctx cid pid)) (f Any) (if (nil? fcid) nil (c/fact-of ctx fcid)) (r Any) (if (nil? f) nil (get f :r))]
       (if (int? r) r nil))))
 
-(defn withdrawal-of [(ctx (Atom fram.types/TermStore)) (cid Int)] Any
+(defn withdrawal-of! [(ctx (Atom fram.types/TermStore)) (cid Int)] Any
   (let [session (s/session! ctx)
         wb (s/resolve-predicate session "withdrawn_by")
         by-id (live-r-on ctx cid wb)]
@@ -84,10 +84,10 @@
          :reason
          (if (nil? reason-id) nil (c/literal ctx reason-id))}))))
 
-(defn withdrawn? [(ctx (Atom fram.types/TermStore)) (cid Int)] Bool
-  (boolean (withdrawal-of ctx cid)))
+(defn withdrawn?! [(ctx (Atom fram.types/TermStore)) (cid Int)] Bool
+  (boolean (withdrawal-of! ctx cid)))
 
-(defn live-members
+(defn live-members!
   [(ctx (Atom fram.types/TermStore))
    (te Int)
    (pid Int)
@@ -96,11 +96,11 @@
   (let [live (live-cids-lp ctx te pid)]
     (if (= policy :add-wins)
       (let [all (c/raw-by-lp ctx te pid) resurrected (filterv (fn
-                                                                [(cid Int)] Bool (and (not (c/live? ctx cid)) (withdrawn? ctx cid))) all)]
+                                                                [(cid Int)] Bool (and (not (c/live? ctx cid)) (withdrawn?! ctx cid))) all)]
         (vec (distinct (concat live resurrected))))
       live)))
 
-(defn view-selects
+(defn view-selects!
   [(ctx (Atom fram.types/TermStore)) (view String)] (U (Set Int) Nil)
   (let [session (s/session! ctx)
         ve (s/resolve-name session view)
@@ -111,24 +111,24 @@
         #{}
         (live-cids-lp ctx ve sel)))))
 
-(defn pool-of
+(defn pool-of!
   [(ctx (Atom fram.types/TermStore)) (view String?) (cids (Vec Int))] (Vec Int)
   (if (nil? view)
     cids
-    (let [sel (view-selects ctx view)]
+    (let [sel (view-selects! ctx view)]
       (if (or (nil? sel) (empty? sel))
         cids
         (let [in-view (filterv (fn [(cid Int)] Bool (contains? sel cid)) cids)]
           (if (empty? in-view) cids in-view))))))
 
-(defn elect
+(defn elect!
   [(ctx (Atom fram.types/TermStore)) (view String?) (cids (Vec Int))] Int?
   (if (empty? cids)
     nil
-    (first (sort-by (fn [(cid Int)] (Vec Any) [cid (str (agent-of ctx cid))]) (pool-of ctx view cids)))))
+    (first (sort-by (fn [(cid Int)] (Vec Any) [cid (str (agent-of ctx cid))]) (pool-of! ctx view cids)))))
 
-(defn elect-causal
+(defn elect-causal!
   [(ctx (Atom fram.types/TermStore)) (view String?) (cids (Vec Int))] Int?
   (if (empty? cids)
     nil
-    (first (sort-by (fn [(cid Int)] (Vec Any) (causal-key ctx cid)) (pool-of ctx view cids)))))
+    (first (sort-by (fn [(cid Int)] (Vec Any) (causal-key ctx cid)) (pool-of! ctx view cids)))))

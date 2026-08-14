@@ -13,7 +13,7 @@
     # Graph-edit authoring is sealed against one published Beagle source. Its
     # nixpkgs follows this flake so the packaged .zo files and the Racket that
     # loads them are built from the exact same package set.
-    beagle.url = "github:tompassarelli/beagle/073f23a67b7fc93d86fbf60dcc1a821343dbb137";
+    beagle.url = "github:tompassarelli/beagle/d7e60c00c1006018e6394cab8a5e3ce449ee972a";
     beagle.inputs.clj-nix.follows = "clj-nix";
     beagle.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -146,6 +146,7 @@
               $out/libexec/fram/
             cp tests/fram_mcp.clj $out/libexec/fram/tests/
             cp clients/bun/backup.mjs clients/bun/framrpc.mjs \
+              clients/bun/framrpc-core.mjs \
               $out/libexec/fram/clients/bun/
             # Only codegraph's source is executable runtime input. build/ is a
             # generated analysis corpus with checkout-local paths; docs/tests are

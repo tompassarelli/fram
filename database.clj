@@ -1,14 +1,14 @@
 ;; database.clj — authoritative TermStore v2 database.
 ;;
-;; This file deliberately depends only on the recursive-Term kernel. Schema,
-;; query, pull, and codegraph remain downstream projections; none may
-;; restore the removed fact-object store beneath this boundary.
+;; Semantic values use the recursive-Term kernel; occurrence and withdrawal
+;; history uses the store's structural records. Schema, query, pull, and
+;; codegraph remain downstream projections; none may restore the removed
+;; fact-object store beneath this boundary.
 (ns database
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [framrpc :as framrpc]
             [fram.branch :as branch]
-            [fram.kernel :as kernel]
             [fram.store :as term-store]
             [fram.types :as t]))
 
@@ -547,7 +547,7 @@
 (defn read-branch-ref
   "Read a branch ref, or nil when the branch has no sealed chain on disk."
   [store-path branch]
-  (let [file (java.io.File. (str (branch/ref-path (str store-path) branch)))]
+  (let [file (java.io.File. (str (branch/ref-path! (str store-path) branch)))]
     (when (.isFile file)
       (branch/parse-ref
        (strict-utf8-string (java.nio.file.Files/readAllBytes (.toPath file))
@@ -584,10 +584,10 @@
 
        (nil? document)
        (fail! :branch-missing "branch has no ref"
-              {:branch branch :path (branch/ref-path store branch)})
+              {:branch branch :path (branch/ref-path! store branch)})
 
        :else
-       (let [tail-path (branch/branch-tail-path store branch)
+       (let [tail-path (branch/branch-tail-path! store branch)
              space-id (branch/refdocument-space-id document)
              sealed (mapv (fn [segment]
                             (read-chain-member!
@@ -602,7 +602,7 @@
          (when fault
            (fail! :invalid-branch-chain fault
                   {:branch branch :path tail-path
-                   :ref (branch/ref-path store branch)}))
+                   :ref (branch/ref-path! store branch)}))
          (let [context (term-store/new-term-store space-id)]
            (doseq [[parsed _] sealed]
              (replay-frames! context (:frames parsed)))
@@ -634,10 +634,10 @@
 (defn- complete-fork! [store marker]
   (let [parent (branch/forkmarker-parent marker)
         child (branch/forkmarker-child marker)
-        parent-tail (branch/branch-tail-path store parent)
-        child-tail (branch/branch-tail-path store child)
-        parent-ref (branch/ref-path store parent)
-        child-ref (branch/ref-path store child)
+        parent-tail (branch/branch-tail-path! store parent)
+        child-tail (branch/branch-tail-path! store child)
+        parent-ref (branch/ref-path! store parent)
+        child-ref (branch/ref-path! store child)
         sealed (branch/segment-path store (branch/forkmarker-segment marker))]
     (when-not (.exists (java.io.File. (str sealed)))
       (move-atomically! parent-tail sealed))
@@ -674,8 +674,8 @@
    (let [store (.getPath (.getCanonicalFile (java.io.File. (str store-path))))
          parent (branch/require-branch-name! parent-branch)
          child (branch/require-branch-name! child-branch)
-         parent-tail (branch/branch-tail-path store parent)
-         child-tail (branch/branch-tail-path store child)]
+         parent-tail (branch/branch-tail-path! store parent)
+         child-tail (branch/branch-tail-path! store child)]
      (when (= parent child)
        (fail! :invalid-branch-name "fork requires two different branch names"
               {:branch parent}))
@@ -684,14 +684,14 @@
        (try
          (when-let [pending (read-fork-marker store)]
            (complete-fork! store pending))
-         (doseq [path [child-tail (branch/ref-path store child)]]
+         (doseq [path [child-tail (branch/ref-path! store child)]]
            (when (.exists (java.io.File. (str path)))
              (fail! :branch-exists "fork child branch already exists"
                     {:branch child :path path})))
          (let [document (read-branch-ref store parent)]
            (when (and (nil? document) (not= parent branch/default-branch))
              (fail! :branch-missing "branch has no ref"
-                    {:branch parent :path (branch/ref-path store parent)}))
+                    {:branch parent :path (branch/ref-path! store parent)}))
            (let [parsed (read-triple-log! parent-tail true)
                  space-id (:space-id parsed)
                  frames (:frames parsed)
@@ -728,8 +728,8 @@
                    text (branch/print-ref chain)
                    marker (branch/->ForkMarker
                            parent child (branch/segmentrecord-sha256 record))
-                   parent-ref (branch/ref-path store parent)
-                   child-ref (branch/ref-path store child)]
+                   parent-ref (branch/ref-path! store parent)
+                   child-ref (branch/ref-path! store child)]
                (ensure-directory! (branch/segments-directory store))
                (ensure-directory! (branch/refs-directory store))
                (when (not= child-tail store)
@@ -842,23 +842,22 @@
   (let [now (java.time.Instant/now)]
     (t/instant (.getEpochSecond now) (.getNano now))))
 
-(defn- occurrence-events [db]
-  (term-store/operation-occurrences (database-store db)))
+(defn occurrences [db]
+  (term-store/occurrences (database-store db)))
 
-;; Ranged: the whole-history operation-occurrences scan costs O(all operations)
+;; Ranged: the whole-history occurrences scan costs O(all operations)
 ;; per commit, making a corpus fold O(n^2) in propositions.
-(defn- occurrence-events-range [db from to]
+(defn- occurrences-range [db from to]
   (let [store @(database-store db)]
     (mapv (fn [position]
             (let [slots (term-store/occurrence-tuple-at store position)]
-              (t/triple (nth slots 0) (nth slots 1) (nth slots 2))))
+              (t/operation-occurrence
+               (nth slots 0) (nth slots 1) (nth slots 2))))
           (range from to))))
 
-(defn history [db]
-  (term-store/semantic-history (database-store db)))
-
 (defn occurrence [db coordinate]
-  (some #(when (= coordinate (kernel/occurrence-of %)) %) (occurrence-events db)))
+  (some #(when (= coordinate (t/operationoccurrence-coordinate %)) %)
+        (occurrences db)))
 
 (defn- relation-proposition? [predicate value]
   (and (t/triple? value)
@@ -870,41 +869,22 @@
   (filterv #(relation-proposition? :kernel/supersedes %)
            (term-store/live-propositions (database-store db))))
 
-(defn withdrawal-triples [db]
-  (vec
-   (distinct
-    (concat
-     (term-store/withdrawal-triples (database-store db))
-     (filter #(relation-proposition? :kernel/withdraws %)
-             (term-store/live-propositions (database-store db)))))))
-
-;; Only the frame just appended can name the occurrence coordinates it minted,
-;; so withdrawal-triples' store-wide live-proposition scan cannot match here.
-(defn- frame-withdrawal-triples [db frame-operations]
-  (vec
-   (distinct
-    (concat
-     (term-store/withdrawal-triples (database-store db))
-     (->> frame-operations
-          (filter #(= t/assert-action (t/commitoperation-action %)))
-          (map t/commitoperation-proposition)
-          (filter #(relation-proposition? :kernel/withdraws %)))))))
+(defn withdrawals [db]
+  (term-store/withdrawals (database-store db)))
 
 (defn- suppressed-occurrences [db]
   (into #{}
         (map t/triple-t3)
-        (concat (supersession-triples db)
-                (filter #(relation-proposition? :kernel/withdraws %)
-                        (term-store/live-propositions
-                         (database-store db))))))
+        (supersession-triples db)))
 
 (defn live-occurrences [db]
   (let [suppressed (suppressed-occurrences db)]
-    (filterv #(not (contains? suppressed (kernel/occurrence-of %)))
+    (filterv #(not (contains? suppressed
+                              (t/operationoccurrence-coordinate %)))
              (term-store/live-occurrences (database-store db)))))
 
 (defn live-propositions [db]
-  (mapv kernel/proposition-of (live-occurrences db)))
+  (mapv t/operationoccurrence-proposition (live-occurrences db)))
 
 (defn- validate-base [db base]
   (when base
@@ -918,7 +898,7 @@
 
 (def ^:private occurrence-metadata-order
   [:kernel/recorded-at :kernel/asserted-by :kernel/source-frame
-   :kernel/withdraws :kernel/supersedes])
+   :kernel/supersedes])
 
 (defn- canonical-term! [value]
   (cond
@@ -973,9 +953,7 @@
                                                     canonical-term!)
                          :kernel/source-frame (some-> (:source-frame operation)
                                                      canonical-term!)
-                         :kernel/withdraws (:withdraws operation)
                          :kernel/supersedes (:supersedes operation)}]
-             (validate-occurrence-reference! db (:withdraws operation) :withdraws)
              (validate-occurrence-reference! db (:supersedes operation) :supersedes)
              (when (and (:recorded-at operation)
                         (not (t/instant? (:recorded-at operation))))
@@ -1110,13 +1088,17 @@
                 before-store (term-store/fork-state @context)]
             (try
               (let [committed (append-and-replay! db sequence all-operations)
-                    events (occurrence-events-range
+                    events (occurrences-range
                             db before (+ before (count source-operations)))
-                    event-coordinates (into #{} (map kernel/occurrence-of) events)
-                    withdrawals (filterv #(contains? event-coordinates
-                                                      (t/triple-t1 %))
-                                         (frame-withdrawal-triples
-                                          db all-operations))]
+                    event-coordinates
+                    (into #{} (map t/operationoccurrence-coordinate) events)
+                    withdrawals
+                    (filterv
+                     #(contains?
+                       event-coordinates
+                       (t/operationoccurrence-coordinate
+                        (t/withdrawal-retraction %)))
+                     (withdrawals db))]
                 {:ok committed
                  :occurrences events
                  :withdrawals withdrawals
@@ -1181,7 +1163,6 @@
   ([db proposition options]
    (commit! db (assoc options :operations
                       [{:action :retract :proposition proposition
-                        :withdraws (:withdraws options)
                         :source-frame (:source-frame options)}]))))
 
 (defn withdraw-occurrence!
@@ -1191,29 +1172,33 @@
   [db target options]
   (locking (:lock db)
     (let [event (occurrence db target)
-          effective (into #{} (map kernel/occurrence-of) (live-occurrences db))]
+          effective (into #{} (map t/operationoccurrence-coordinate)
+                          (live-occurrences db))]
       (cond
         (nil? event) {:reject :unknown-occurrence :occurrence target}
-        (not (kernel/assertion-occurrence? event))
+        (not (t/assertion-occurrence? event))
         {:reject :not-assertion-occurrence :occurrence target}
         (not (contains? effective target))
         {:reject :occurrence-not-live :occurrence target}
         :else
-        (let [proposition (kernel/proposition-of event)
-              matching (filterv #(= proposition (kernel/proposition-of %))
+        (let [proposition (t/operationoccurrence-proposition event)
+              matching (filterv #(= proposition
+                                    (t/operationoccurrence-proposition %))
                                 (term-store/live-occurrences
                                  (database-store db)))
-              current (some-> matching peek kernel/occurrence-of)]
+              current (some-> matching peek
+                              t/operationoccurrence-coordinate)]
           (if (not= target current)
             {:reject :withdrawal-target-not-current
              :occurrence target :current current}
-            (retract! db proposition (assoc options :withdraws target))))))))
+            (retract! db proposition options)))))))
 
 (defn supersede!
   "Assert REPLACEMENT while relating its new occurrence to exact TARGET."
   [db target replacement options]
   (locking (:lock db)
-    (if-not (some #{target} (map kernel/occurrence-of (live-occurrences db)))
+    (if-not (some #{target} (map t/operationoccurrence-coordinate
+                                 (live-occurrences db)))
       {:reject :occurrence-not-live :occurrence target}
       (assert! db replacement (assoc options :supersedes target)))))
 
@@ -1230,9 +1215,11 @@
 
 (defn view-occurrences [db view]
   (let [effective (live-occurrences db)
-        by-coordinate (into {} (map (juxt kernel/occurrence-of identity)) effective)
+        by-coordinate
+        (into {} (map (juxt t/operationoccurrence-coordinate identity)) effective)
         selected (for [event effective
-                       :let [proposition (kernel/proposition-of event)]
+                       :let [proposition
+                             (t/operationoccurrence-proposition event)]
                        :when (and (= view (t/triple-t1 proposition))
                                   (= :kernel/selects (t/triple-t2 proposition))
                                   (t/occurrence-coordinate?
@@ -1244,7 +1231,7 @@
   (t/triple holder :kernel/expires-at expires-ms))
 
 (defn- lease-record [event]
-  (let [proposition (kernel/proposition-of event)
+  (let [proposition (t/operationoccurrence-proposition event)
         value (t/triple-t3 proposition)]
     (when (and (= :kernel/lease (t/triple-t2 proposition))
                (t/triple? value)
@@ -1253,7 +1240,7 @@
       {:resource (t/triple-t1 proposition)
        :holder (t/triple-t1 value)
        :expires-ms (t/triple-t3 value)
-       :occurrence (kernel/occurrence-of event)
+       :occurrence (t/operationoccurrence-coordinate event)
        :proposition proposition})))
 
 (defn current-lease [db resource]
@@ -1278,7 +1265,8 @@
                                         (lease-value holder (+ now-ms ttl-ms)))
                               (cond-> {:actor holder}
                                 prior (assoc :supersedes (:occurrence prior))))
-              epoch (some-> result :occurrences first kernel/occurrence-of)]
+              epoch (some-> result :occurrences first
+                            t/operationoccurrence-coordinate)]
           {:ok epoch :expires-ms (+ now-ms ttl-ms)
            :transaction (:ok result)})))))
 
@@ -1293,7 +1281,8 @@
                               (t/triple resource :kernel/lease
                                         (lease-value holder (+ now-ms ttl-ms)))
                               {:actor holder :supersedes epoch})
-              next-epoch (some-> result :occurrences first kernel/occurrence-of)]
+              next-epoch (some-> result :occurrences first
+                                 t/operationoccurrence-coordinate)]
           {:ok next-epoch :expires-ms (+ now-ms ttl-ms)
            :transaction (:ok result)})))))
 
@@ -1316,10 +1305,9 @@
 ;; ---------------------------------------------------------------------------
 ;; Sealed one-shot legacy flat-log migration
 ;; ---------------------------------------------------------------------------
-;; "Turtles all the way down" is the architectural prior: semantic identity,
-;; history, and metadata return as ordinary recursive Triple values. Turtle is
-;; not a record, identifier, or log format; the physical frame fields below are
-;; only the finite representation of TermStore transaction order.
+;; Semantic proposition identity remains recursive Triple structure. Operation
+;; occurrences and withdrawals are system records reconstructed from the
+;; physical frame order; they are not manufactured semantic propositions.
 
 (defn- sha256-bytes [^bytes bytes]
   (let [digest (java.security.MessageDigest/getInstance "SHA-256")]
@@ -1633,13 +1621,15 @@
                                       :line (:source-line row)
                                       :value value})]))))))
 
-(defn- migration-source-operation [ordinal row relation-target]
+(defn- migration-source-operation
+  [ordinal row proposition supersession-target withdrawal-target]
   {:ordinal ordinal
    :action (if (= "assert" (:op row)) 1 2)
-   :triple (t/triple (:l row) (:p row) (:r row))
+   :triple proposition
    :source-line (:source-line row)
    :source-byte-offset (:source-byte-offset row)
-   :relation-target relation-target
+   :supersession-target supersession-target
+   :withdrawal-target withdrawal-target
    :source row})
 
 (defn- migration-transaction-plan
@@ -1651,19 +1641,28 @@
             (let [row (first remaining)
                   key (active-key classification row)
                   prior (get active-now key)
+                  row-proposition (t/triple (:l row) (:p row) (:r row))
                   occurrence (t/occurrence-coordinate
                               (t/transaction-coordinate space-id tx-sequence)
                               ordinal)
                   assertion? (= "assert" (:op row))
-                  relation (when prior
-                             [(if assertion? :kernel/supersedes :kernel/withdraws)
-                              prior])
+                  proposition (if (and (not assertion?) prior)
+                                (:proposition prior)
+                                row-proposition)
+                  supersession-target (when (and assertion? prior)
+                                        (:occurrence prior))
+                  withdrawal-target (when (and (not assertion?) prior)
+                                      (:occurrence prior))
                   next-active (if assertion?
-                                (assoc active-now key occurrence)
+                                (assoc active-now key
+                                       {:occurrence occurrence
+                                        :proposition proposition})
                                 (dissoc active-now key))]
               (recur (rest remaining) (inc ordinal)
                      (conj operations
-                           (migration-source-operation ordinal row relation))
+                           (migration-source-operation
+                            ordinal row proposition supersession-target
+                            withdrawal-target))
                      next-active))))
         source-count (count sources)
         [synthetic final-diagnostics]
@@ -1679,14 +1678,10 @@
                    (:ordinal source))
                   [recorded-at next-diagnostics]
                   (parsed-recorded-at row current-diagnostics)
-                  relation (:relation-target source)
                   values {:kernel/recorded-at recorded-at
                           :kernel/asserted-by (when (contains? row :by) (:by row))
                           :kernel/source-frame (when (contains? row :frame) (:frame row))
-                          :kernel/withdraws (when (= :kernel/withdraws (first relation))
-                                              (second relation))
-                          :kernel/supersedes (when (= :kernel/supersedes (first relation))
-                                               (second relation))}
+                          :kernel/supersedes (:supersession-target source)}
                   additions
                   (reduce
                    (fn [result predicate]
@@ -1750,13 +1745,13 @@
      :diagnostic-count (count diagnostics)
      :legacy-cid-count 0
      :noop-retractions (count (filter #(and (= 2 (:action %))
-                                            (nil? (:relation-target %))) sources))
+                                            (nil? (:withdrawal-target %))) sources))
      :retractions (count (filter #(= 2 (:action %)) sources))
      :source-operations (count sources)
      :synthetic-operations (count synthetic)
      :targeted-retractions
      (count (filter #(and (= 2 (:action %))
-                          (= :kernel/withdraws (first (:relation-target %)))) sources))
+                          (some? (:withdrawal-target %))) sources))
      :transactions (count transactions)
      :unparseable-recorded-at
      (count (filter #(= :unparseable-recorded-at (:code %)) diagnostics)))))

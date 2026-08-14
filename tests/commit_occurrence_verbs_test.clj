@@ -12,7 +12,7 @@
 ;;       is ACCEPTED (the intended LWW: callers who want conflict-detection use swap!).
 ;;   bb -cp out tests/commit_occurrence_verbs_test.clj
 (require '[fram.store :as c] '[fram.schema :as s])
-(load-file "database.clj")   ; new-database/commit!/live-cids-lp/register-pred!/store/elect
+(load-file "database.clj")   ; new-database/commit!/live-cids-lp/register-pred!/store/elect!
 
 (let [log "/tmp/store-occ-verbs-test.log"
       db (new-database log)

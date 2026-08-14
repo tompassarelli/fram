@@ -146,7 +146,8 @@
   (let [k (nth hidden 0)]
   (println (format "KEYSTONE HIDDEN BY ONE-HOP: %s (blast=%d, direct=%d) is top-5 transitive but NOT top-10 direct ✅" (name-of defns k) (get blast k 0) (get direct k 0))))))))
 
-(defn -main [& args]
+(defn -main [& $beagle$rest$host]
+  (let [args (vec $beagle$rest$host)]
   (let [corpus-path (if (empty? (vec args)) "build/gjoa.facts" (str (nth (vec args) 0)))
    blocks (cg/parse-corpus! corpus-path)
    graph (cg/build-graph blocks)
@@ -164,4 +165,4 @@
   (closure-line! edges defn-keys fadj)
   (bench-a! by-name radj)
   (bench-b! defns defn-keys direct blast)
-  (println "\n====================================================================")))
+  (println "\n===================================================================="))))

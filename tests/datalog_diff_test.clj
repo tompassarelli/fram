@@ -194,10 +194,10 @@
 (def temporal-arms
   [[-1 1 (temporal-rule nil nil nil)]
    [-1 2 (temporal-rule nil nil (d/constant temporal-p))]
-   [-1 4 (temporal-rule nil (d/constant :kernel/asserts) nil)]
+   [-1 4 (temporal-rule nil (d/constant :assert) nil)]
    [1 4 (temporal-rule nil nil nil)]
    [2 4 (temporal-rule nil nil (d/constant temporal-p))]
-   [1 2 (temporal-rule nil (d/constant :kernel/retracts) nil)]
+   [1 2 (temporal-rule nil (d/constant :retract) nil)]
    [-1 4 (temporal-rule
            (d/constant
             (t/occurrence-coordinate
@@ -216,6 +216,29 @@
           (rel-set scanned "temporal-result"))))
    temporal-arms))
 
+(def withdrawal-rule
+  (d/rule "withdrawal-result"
+          [(d/variable "retraction") (d/variable "assertion")]
+          [(d/relation-literal
+            d/withdrawal-relation
+            [(d/variable "retraction") (d/variable "assertion")])]))
+
+(def withdrawal-ok
+  (every?
+   (fn [[lower upper]]
+     (let [rows (set (store/withdrawal-tuples-between
+                      temporal-root lower upper))
+           indexed
+           (d/fixpoint-sourced!
+            {d/withdrawal-relation #{}}
+            {d/withdrawal-relation
+             (d/withdrawal-candidate-source temporal-root lower upper)}
+            [withdrawal-rule])
+           scanned (oracle {d/withdrawal-relation rows} [withdrawal-rule])]
+       (= (rel-set indexed "withdrawal-result")
+          (rel-set scanned "withdrawal-result"))))
+   [[-1 1] [1 2] [2 4] [-1 4]]))
+
 ;; (d) virtual text candidates: the indexed posting intersection must agree
 ;; with each candidate source's independent scan for every search mode.
 (def text-propositions
@@ -226,7 +249,7 @@
    (t/triple "@f" "body" "Sunday brunch")
    (t/triple "@d" "count" 42)])
 (def text-db (d/edb text-propositions))
-(def text-candidates (d/build-text-candidates text-propositions))
+(def text-candidates (d/build-text-candidates! text-propositions))
 (def text-rules
   (compile-rules
    [{:head {:rel "one-word" :args [{:var "e"} {:var "a"}]}
@@ -267,7 +290,7 @@
 (def checks
   [[(str "differential: all " N-PROGRAMS
          " generated programs plus as-of/since and all text-search arms match the scan oracle")
-    (and (empty? fails) temporal-ok text-ok)]
+    (and (empty? fails) temporal-ok withdrawal-ok text-ok)]
    ["corpus is non-trivial: >=300 programs derive facts"          (>= n-derived 300)]
    ["corpus exercises recursion: >=150 recursive programs"        (>= n-recursive 150)]
    ["corpus exercises negation: >=100 programs with negation"     (>= n-negated 100)]

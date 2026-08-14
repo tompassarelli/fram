@@ -2,14 +2,15 @@
 name: fram-modeling
 description: >-
   Use when BUILDING a program, app, or tool on the Fram engine, including
-  designing its ontology, vocabulary, shapes, or schema conventions — model
-  data in Fact Normal Form as recursive Terms/Triples and query it through
-  FRAMRPC structured plans instead of SQL/records/imperative state. Covers
-  normalization, append-only occurrence history, immutable snapshots, paging,
-  and Datalog derivation. NOT for one-off store reads or graph-authoring edits.
+  designing its ontology, vocabulary, shapes, or schema conventions — choose an
+  explicit modeling profile, enforce Fact Normal Form for fact-oriented data,
+  and query recursive Terms/Triples through FRAMRPC structured plans. Covers
+  profile scope, normalization, append-only occurrence history, immutable
+  snapshots, paging, and Datalog derivation. NOT for one-off store reads or
+  graph-authoring edits.
 ---
 
-# Fram modeling — Fact Normal Form over recursive Triples
+# Fram modeling — recursive Terms and fact-oriented FNF
 
 The current contract is in `fram:README.md`, `fram:docs/architecture.md`,
 `fram:docs/query-reference.md`, `fram:docs/ontology.md`, and
@@ -21,125 +22,118 @@ Bool | Keyword | Instant`, `Term := Atom | Triple`, and `Triple := (Term, Term,
 Term)`. Positions are neutral; domain roles come from asserted vocabulary, not
 a privileged subject/predicate/object schema.
 
-**Fact Normal Form (FNF) is the admission condition, not a naming preference.**
-In FNF, every particular domain fact has identity as a Term. Its relationship
-to a subject, value, and classification are separate Triples; no domain fact is
-compressed into a specialized predicate/scalar cell. An Atom is opaque identity
-or literal, never a packed relationship. Do not continue to shape design,
-writes, or queries until the model passes the FNF gate below.
+Keep the identity layers explicit:
 
-FNF is the operator's preferred application-modeling discipline, not another
-kernel primitive. Fram can store propositions outside this discipline, and
-calling the discipline *Fact* Normal Form does not erase Fram's distinction
-between proposition, assertion occurrence, and fact-as-view-status.
+```text
+Atom identity target  Atom kind + canonical payload
+Proposition identity  recursive structural Triple equality
+Assertion identity    occurrence coordinate
+```
 
-For greenfield work, model domain state as live Triples and let history,
-identity coordinates, and metadata use the same recursive vocabulary. SQL,
-records, maps, and text may be projections or local control data, but they are
-not a second semantic source of truth.
+An Atom is a leaf Term. Its modeling target is identity by kind plus canonical
+payload, but current Float handling is a known implementation exception: host
+interning makes NaN unequal to itself and treats `+0.0` and `-0.0` as equal,
+while the wire canonicalizes NaN bits and distinguishes signed zero. This says
+nothing about the open-ended resource an Atom may name. Keep self-denoting value
+and resource name as semantic roles; do not invent physical Literal and
+Identifier variants. Until a Float identity policy lands, do not use NaN or
+signed zero where stable identity matters.
+
+Constructing or nesting a Triple creates a structurally identified Term, not an
+assertion. A Triple takes the proposition role when an occurrence carries it as
+statement content. A profile may constrain its structure and assign roles to
+its positions. Fram records that a writer asserted it; Fram does not certify
+truth. Nesting a Triple never asserts it independently.
+
+**Apply Fact Normal Form (FNF) only to propositions admitted by a fact-oriented
+profile, not to every assertion or recursive Term.** Require every semantic
+relationship that profile needs for interpretation, joins, classification, or
+validation to exist as an admitted Triple instead of only in Atom spelling, an
+assumed position, or an out-of-band schema cell. Other asserted profiles own
+their own admission discipline. Do not manufacture an opaque fact id for every
+proposition.
 
 ## 0. Re-ground before designing
 
 Read the current documentation named above, then inspect the typed definitions
 under `fram:src/fram/` and the official client under `fram:clients/bun/`.
-The public data boundary is FRAMRPC v1, not an incidental internal Clojure
+The public data boundary is FRAMRPC v2, not an incidental internal Clojure
 function. The checkout CLI requires `FRAM_SPACE_ID` and routes data commands
 through `fram:bin/fram`; Bun applications use `fram:clients/bun/framrpc.mjs`.
 The native-first server is the default launcher; `jvm-dev` and `jvm-oracle` are
 explicit development routes.
 
-## 1. Establish Fact Normal Form before modeling
+## 1. Choose the profile; then establish Fact Normal Form
 
-- Use this closed normal form for each particular domain fact. `F` is a
-  metavariable for one opaque or minted Term, not Fram syntax:
-
-  ```text
-  (subject, relation, F)
-  (F, :value, value)
-  (F, :member_of, class)
-  ```
-
-  `relation` states how the subject relates to the identified fact. Prefer the
-  precise domain affordance: `:contactable_at`, `:followable_at`,
-  `:assigned_to`, or another established relation. Use `:has` only when
-  possession really is the intended relationship; it otherwise hides questions
-  of ownership, exclusivity, delegation, and access. `:value` and `:member_of`
-  are FNF structural vocabulary. These three propositions end the
-  decomposition: do not create another fact identity merely to reify them.
-  Every additional domain assertion about `subject`, `F`, or `value` is itself
-  another particular fact and takes this same form recursively.
-- Reject both compressed email forms:
-
-  ```text
-  ("Alice", :contact/personal-email, "alice@example.com")
-  ("Alice", :contactable_at, "alice@example.com")
-  ```
-
-  The first hides classification in a spelling namespace. The second removes
-  the namespace but still points its domain relation directly at a scalar,
-  omitting the identity and classification of this particular contact fact.
-  Renaming the predicate does not normalize the model.
-- Normalize the particular fact instead. Let `E` name that fact:
-
-  ```text
-  ("Alice", :contactable_at, E)
-  (E, :value, "alice@example.com")
-  (E, :member_of, :personal_emails)
-  ```
-
-  `E` exists because FNF gives every particular domain fact identity, not
-  because an annotation later happened to need an id. Its printed form may be
-  `personal-email#1515` for human readability, but no consumer may infer its
-  class from that prefix; the `:member_of` Triple is authoritative.
-- Keep three identities separate: `E` is the application-level identity of the
-  particular domain fact; each exact structural Triple is proposition content;
-  and Fram creates a distinct occurrence coordinate for each assertion or
-  retraction. Never mint one as a substitute for another. FNF does not turn
-  `fact` into a new kernel type or erase Fram's fact-as-view-status definition.
-- Present stored data as Triples only. Introduce any metavariable in prose, as
-  with `E` above. Do not put `:=` declarations inside a fact block: `:=` is not
-  Fram syntax and readers have already mistaken explanatory aliases for writes.
-- Treat a leading `:` only as local EDN syntax for a Keyword Atom. It does not
-  mark a predicate, property, function, or privileged slot. `:within` and
-  `"within"` are different Atom types; either can occur in any Triple position.
-  A bare CLI subject becoming an `"@..."` String is CLI shorthand, not ontology.
-- Never encode semantic structure in an Atom's spelling. Reject domain
-  vocabulary such as `:proposal/within`, `:thread/title`, or `:shape/requires`:
-  each is one opaque Keyword, and the slash creates no relationship Fram can
-  join. Replacing the slash with a hyphen, underscore, prefix, suffix, or
-  compound String has the same problem if a consumer interprets its pieces.
-  A multiword lexical label such as `:member_of` is fine only as one opaque
-  relation name; no consumer may recover extra facts by splitting it.
-- State vocabulary membership explicitly rather than spelling a namespace:
+- Decide whether the workload is fact-oriented. For another use of recursive
+  Terms, name the profile and its admission, identity, and query rules. Do not
+  silently apply FNF to assertions governed by another profile, compound
+  values, or other non-asserted structure.
+- In a profile that reads the middle position as a relation, require that Term
+  to name the relationship actually stated. Reject
+  `("Alice", :email, "alice@example.com")`: `:email` is a noun, not the
+  proposition's relation. Prefer the precise affordance:
 
   ```text
   (:contactable_at, :member_of, :contact_relations)
+  ("alice@example.com", :member_of, :email_addresses)
+  ("Alice", :contactable_at, "alice@example.com")
   ```
 
-  Membership is semantic. `grouped under` is merely an organizational or
-  presentation relationship and must not stand in for `:member_of`.
-- The reserved `:kernel/*` vocabulary is closed engine protocol, not a pattern
-  for application terms.
-- Before presenting or implementing a model, inspect every proposed domain
-  Atom containing `/` or another encoded component. If the component implies a
-  join, hierarchy, type, ownership, version, or lifecycle fact, make that fact
-  an explicit Triple. Renaming `/` to `-`, `_`, `.`, or a prefix does not
-  normalize anything. Reject the model until the structure is asserted.
+- Use the String directly only when ordinary String canonicalization and
+  equality are exactly the email-address equality contract. Membership
+  contextualizes the String; it never creates a different Atom.
+- Introduce an Atom kind through a deliberate kernel and codec extension when
+  intrinsic validation, ordering, canonical encoding, or equality differs. An
+  ontology cannot declare one by spelling. Mint a resource identity only when
+  the denoted thing has continuity or mutable representation independent of its
+  Atom:
 
-The FNF gate passes only when all six answers are yes:
+  ```text
+  (address-1, :represented_by, "alice@example.com")
+  (address-1, :member_of, :email_addresses)
+  ("Alice", :contactable_at, address-1)
+  ```
 
-1. Does every particular domain fact have its own Term `F`?
-2. Are its subject relationship, value, and classification stated as
-   `(subject, relation, F)`, `(F, :value, value)`, and
-   `(F, :member_of, class)`?
-3. Does every domain relation point to the identified fact rather than directly
-   to a scalar value?
-4. Can every membership and relationship be discovered by querying Triples
-   rather than parsing Atom text?
-5. Would changing an Atom's presentation spelling leave domain structure
-   intact?
-6. Have fact identity, proposition identity, and assertion-occurrence identity
-   remained distinct?
+- In an unprofiled space, or under a custom profile that admits nested Terms,
+  annotate structural content by nesting it. The built-in relational profile's
+  R1 rejects nested positions, so this is not a relational-profile example.
+  Remember that asserting the outer Triple does not assert the inner one:
+
+  ```text
+  (("Alice", :contactable_at, "alice@example.com"),
+   :verified_by,
+   "mail-checker-1")
+  ```
+
+- Treat a leading `:` only as local EDN syntax for a Keyword Atom. It does not
+  mark a predicate, function, or privileged slot. `:within` and `"within"` are
+  different Atom kinds and either may occur in any Triple position.
+- Reject domain vocabulary such as `:proposal/within`, `:thread/title`, or
+  `:shape/requires` when consumers parse the spelling to recover membership,
+  hierarchy, ownership, version, or another relationship. Changing `/` to `-`,
+  `_`, `.`, a prefix, or a suffix does not create queryable structure. A
+  multiword lexical label such as `:member_of` is fine as one opaque relation
+  name.
+- Keep closed `:kernel/*` and `:rpc/*` protocol vocabulary out of application
+  ontology.
+- Present stored data as Triples only. Do not place explanatory `:=` aliases in
+  a fact block; `:=` is not Fram syntax.
+
+The FNF gate passes only when all seven answers are yes:
+
+1. Is the gate restricted to propositions admitted by a fact-oriented profile
+   rather than every assertion or nested Term?
+2. Does each admitted proposition actually state a relationship under its
+   profile instead of placing a noun in the relation role?
+3. Can every required relationship and membership be queried as a Triple
+   instead of recovered by parsing Atom text?
+4. Does each Atom kind's canonical payload provide the intended equality
+   contract?
+5. Is a new Atom kind used only for different intrinsic scalar semantics?
+6. Is a resource identity minted only for identity or lifecycle beyond the
+   representation, never merely because a proposition exists?
+7. Are Atom, proposition, and assertion-occurrence identity still distinct?
 
 ## 2. The operating model
 
@@ -149,16 +143,35 @@ The FNF gate passes only when all six answers are yes:
   append-only; replacing a value is a retraction plus an assertion in one
   transaction. Never edit FRAMLOG or generated `fram:out/` directly.
 - **History is intrinsic.** An assertion creates an occurrence coordinate.
-  Retraction records a withdrawal Triple targeting the exact occurrence; the
-  old proposition remains addressable in history but is absent from the live
-  view. Transaction sequence plus operation ordinal define logical order; wall
-  clock time is metadata.
+  FRAMLOG stores `assert` and `retract` operations; a successful content
+  retraction withdraws the newest live equal assertion occurrence. That exact
+  occurrence remains addressable in history, and equal proposition content
+  remains live if another assertion occurrence is still in force. A no-match
+  retraction still creates an occurrence and advances the version, but reports
+  `stateChanged = false` and creates no withdrawal. Query
+  `withdrawal(retraction,assertion)` for the exact successful target. Operation
+  and withdrawal rows are system relations, not manufactured domain
+  propositions. Transaction sequence plus operation ordinal define logical
+  order; wall clock time is metadata.
 - **Query immutable views.** Use `bin/fram query` or the Bun client’s `query`,
   with `current`, `asOf`, or `since` selectors. Base relations are
   `triple(t1,t2,t3)` for live propositions and
-  `occurrence(coordinate,action,proposition)` for history. Queries are
-  structured plans, never query-text parsing; page nontrivial results and carry
-  the opaque cursor unchanged so the snapshot stays pinned.
+  `occurrence(coordinate,action,proposition)` plus
+  `withdrawal(retraction,assertion)` for history. Queries are structured plans,
+  never query-text parsing; page nontrivial results and carry the opaque cursor
+  unchanged so the snapshot stays pinned. On native, `since` lower-bounds every
+  base relation; the retained JVM route lower-bounds only `occurrence` and
+  `withdrawal`. Native cursors are operation-specific, `rpc/scan` requires
+  paging above 200 rows, and unpaged `rpc/occurrences` silently stops at 248;
+  consult the query reference rather than assuming one shared limit.
+- **Keep the multiplicity boundary visible.** `rpc/scan` returns one matching
+  row per live assertion occurrence, so equal proposition content can appear
+  more than once. Datalog's `triple` relation is a structural set projection and
+  collapses those equal rows.
+- **Treat JVM supersession as a route-specific effective view.** The retained
+  JVM database facade suppresses targets named by live `:kernel/supersedes`
+  propositions from its live helpers. This does not withdraw the occurrence or
+  change `TermStore` liveness, and it is not native scan or Datalog semantics.
 - **Use Datalog for joins and recursion.** Multiple rules reach a semi-naive
   fixpoint; stratified negation belongs in ordered strata. The query reference
   also defines predicates, arithmetic, aggregates, and the five positive text
@@ -173,10 +186,10 @@ The FNF gate passes only when all six answers are yes:
 
 - **Recursive terms and occurrence semantics:** `fram:README.md` and
   `fram:docs/ontology.md`.
-- **Kernel normalization and the Datomic contrast:**
-  `fram:docs/ontology.md` and `fram:docs/coming-from-datomic.md`. Their flat
-  Triples are legal Fram, but a domain fact in an application model must also
-  pass this skill's stricter FNF gate.
+- **Profile normalization and the Datomic contrast:**
+  `fram:docs/ontology.md` and `fram:docs/coming-from-datomic.md`. A fact-oriented
+  model must pass the FNF gate; another profile must state its own admission
+  contract rather than inheriting FNF accidentally.
 - **Structured recursive query:** `fram:docs/query-reference.md` and
   `fram:clients/bun/README.md`.
 - **Executable contracts:** `fram:tests/triple_kernel_test.clj`,
@@ -196,13 +209,13 @@ The FNF gate passes only when all six answers are yes:
 - If you mint opaque ids for values that already have identity as Terms, stop.
   Use the Term directly; occurrence coordinates are created by the engine for
   history, not by the application as a reverse map.
-- If any particular domain fact is flattened into an attribute/value cell,
-  stop. Give the fact a Term and separately state its subject relationship,
-  value, and membership. This is mandatory, not conditional on continuity,
-  annotation, or anticipated reuse.
+- If a relation points directly to an Atom, check its equality contract. Keep
+  the direct form when Atom equality is domain equality; use a new Atom kind for
+  different intrinsic scalar semantics or a resource Term for independent
+  lifecycle. Never mint an id merely because a proposition exists.
 - If a domain Keyword or String uses namespace spelling to imply membership,
-  stop and replace that spelling with an opaque Term plus an asserted
-  `:member_of` proposition. Keyword versus String carries type, not membership.
+  stop and assert that membership separately. Keyword versus String carries
+  Atom kind, not membership.
 - If you bypass FRAMRPC to reach an internal store helper, stop and confirm that
   the task is engine implementation work rather than application modeling.
 

@@ -4,7 +4,7 @@
 #   SHIM_TOKEN=$(openssl rand -hex 32) docker compose up -d --build
 #
 # Topology: the Worker fetches the shim (bearer token, HTTP); the shim speaks
-# FRAMRPC v1 to the Fram server over the private network.
+# FRAMRPC v2 to the Fram server over the private network.
 # The Fram server's port 7977 is NEVER published — the wire protocol is
 # unauthenticated by design and must stay behind the shim.
 services:

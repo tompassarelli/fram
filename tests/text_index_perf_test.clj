@@ -30,7 +30,7 @@
   (vec
    (for [_ (range 10)]
      (let [started (System/nanoTime)
-           source (text-search/build-source corpus-50k (* 64 1024 1024))
+           source (text-search/build-source! corpus-50k (* 64 1024 1024))
            elapsed (/ (- (System/nanoTime) started) 1000000.0)]
        (when (zero? (text-search/source-weight source))
          (throw (ex-info "impossible empty text index" {})))
@@ -39,7 +39,7 @@
 
 (def heap-before (collect-heap!))
 (def retained-source
-  (text-search/build-source corpus-50k (* 64 1024 1024)))
+  (text-search/build-source! corpus-50k (* 64 1024 1024)))
 (def heap-after (collect-heap!))
 (def heap-delta (max 0 (- heap-after heap-before)))
 

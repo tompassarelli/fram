@@ -22,7 +22,12 @@ Use the official Bun FRAMRPC client, native CLI, or tagged Cloudflare JSON API f
 
 `ask` accepts the JSON equivalent of the [structured query](query-reference.md), lowers it to a typed plan, and sends FRAMRPC. It is not a string query language.
 
-The zero-dependency Bun client is the builder/application transport. It exposes all thirteen FRAMRPC operations, recursive Terms, atomic batches, expected and served versions, snapshot-pinned paging, occurrence replay, validation, and leases without copying or reinterpreting the codec.
+The zero-dependency Bun client is the builder/application transport. It exposes
+all thirteen FRAMRPC v2 (wire version 2.0) data operations, recursive Terms, atomic
+batches, expected and served versions, snapshot-pinned paging, occurrence
+replay, validation, and leases without copying or reinterpreting the codec.
+The separately named native `rpc/checkpoint` operator is deliberately absent
+from that application client surface.
 
 `bin/fram` also offers scan, occurrences, version, status, and local migration/projection/admin commands. Those are native or local utilities, not additional MCP tools.
 

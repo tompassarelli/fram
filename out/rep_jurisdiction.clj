@@ -57,7 +57,8 @@
   (println "    graph node you JOIN against scope-correct edges — blast radius of a")
   (println "    rep decision, across module boundaries, in one fixpoint.")))
 
-(defn -main [& args]
+(defn -main [& $beagle$rest$host]
+  (let [args (vec $beagle$rest$host)]
   (let [argv (vec args)
    rep-path (str (nth argv 0))
    cg-path (if (> (count argv) 1) (str (nth argv 1)) nil)
@@ -81,4 +82,4 @@
   (println "  mixed " nm)))
   (if (nil? cg-path) nil (let [_h1 (println "\n---- Q4. transitive HAMT blast: defs DOWNSTREAM of any HAMT/mixed def ----")
    _h2 (println "(scope-correct call graph; a caller \"forces\" a HAMT if it reaches one)")]
-  (q4! rep-defs (str cg-path))))))
+  (q4! rep-defs (str cg-path)))))))

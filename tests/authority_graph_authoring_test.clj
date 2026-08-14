@@ -91,7 +91,7 @@
         (get derived-tail "materializedProjectionSha256")))
 ;; Any authority.bclj change must move this pin with it (hash via authority/sha256-text).
 (chk "tracked source matches its pinned graph-authored lineage hash"
-     (= "sha256:ff6a9bbc45d5213b95f7a48f3c1ea068c8d2895073664376bbea0601defe3eb9"
+     (= "sha256:18ea39fc2509522f6a74eaf772cd120bc974a0b3b28e581f91679c3e6a45a311"
         (authority/sha256-text source-text)))
 (chk "RPC line accounting includes one transport-truncated request"
      (and (= "70" (get summary "requestLines"))

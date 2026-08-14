@@ -32,7 +32,7 @@ cp "$repo/clients/cloudflare-do/src/seams.d.ts" "$package_seed/src/seams.d.ts"
 cat >"$package_seed/package.json" <<'JSON'
 {
   "name": "@tompassarelli/fram-cloudflare-do",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Embed the Fram engine inside a Cloudflare Durable Object over the wasm-embed host seam",
   "type": "module",
   "types": "./src/adapter.d.ts",
@@ -165,9 +165,9 @@ source-date-epoch $source_epoch
 release-tag v1.2.3
 release-tag-object $tag_object
 package-name @tompassarelli/fram-cloudflare-do
-package-version 0.2.0
+package-version 0.3.0
 package-json-sha256 $package_json_sha256
-archive-name tompassarelli-fram-cloudflare-do-0.2.0.tgz
+archive-name tompassarelli-fram-cloudflare-do-0.3.0.tgz
 archive-sha256 $archive_sha256
 RECEIPT
 cmp -s "$expected_receipt" "${files_a[1]}" ||

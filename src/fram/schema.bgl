@@ -145,7 +145,7 @@
       [:else (if (interned? s spelling) spelling nil)])))
 
 (defn predicate-name [(s Session) (pid Any)] String
-  (let [(events (Vec t/Triple)) (rot/by-t12 (view s) pid predicate-name-predicate) (raw Any) (if (empty? events) pid (t/triple-t3 (rot/proposition-of (last events))))]
+  (let [(events (Vec t/OperationOccurrence)) (rot/by-t12 (view s) pid predicate-name-predicate) (raw Any) (if (empty? events) pid (t/triple-t3 (rot/proposition-of (last events))))]
     (if (string? raw) raw (str raw))))
 
 (defn register-predicate! [(s Session) (spelling String)] Any
@@ -153,7 +153,7 @@
     (do
       (when (and (not (empty? alias-ids)) (or (nil? candidate) (not (and (= 1 (count alias-ids)) (= candidate (first alias-ids))))))
         (throw (ex-info (str "predicate alias collision: " default-alias) {:predicate canonical :alias default-alias :ids alias-ids})))
-      (let [(pid Any) (if (some? candidate) candidate spelling) (named (Vec t/Triple)) (rot/by-t12 (view s) pid predicate-name-predicate) (builder (Atom txn/Builder)) (txn/open (store-of s))]
+      (let [(pid Any) (if (some? candidate) candidate spelling) (named (Vec t/OperationOccurrence)) (rot/by-t12 (view s) pid predicate-name-predicate) (builder (Atom txn/Builder)) (txn/open (store-of s))]
         (do
           (when (empty? named)
             (txn/assert! builder
@@ -165,7 +165,7 @@
           pid)))))
 
 (defn cardinality [(s Session) (pname String)] String
-  (let [(pid Any) (resolve-predicate s pname) (card Any) (resolve-predicate s cardinality-predicate) (events (Vec t/Triple)) (if (and (some? pid) (some? card)) (rot/by-t12 (view s) pid card) [])]
+  (let [(pid Any) (resolve-predicate s pname) (card Any) (resolve-predicate s cardinality-predicate) (events (Vec t/OperationOccurrence)) (if (and (some? pid) (some? card)) (rot/by-t12 (view s) pid card) [])]
     (if (empty? events)
       multi
       (let [(value Any) (t/triple-t3 (rot/proposition-of (first events)))]
@@ -247,7 +247,7 @@
         (do
           (when (not (= old-name new-name))
             (do
-              (let [(old-ids (Vec Any)) (predicate-ids s old-name) (aliases (Vec t/Triple)) (rot/by-t23 (view s) predicate-alias-predicate old-name)]
+              (let [(old-ids (Vec Any)) (predicate-ids s old-name) (aliases (Vec t/OperationOccurrence)) (rot/by-t23 (view s) predicate-alias-predicate old-name)]
                 (when (and (= 1 (count old-ids)) (and (= pid (first old-ids)) (empty? aliases)))
                   (let [(builder (Atom txn/Builder)) (txn/open (store-of s))]
                     (do

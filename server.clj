@@ -185,7 +185,7 @@
   "Errors reach the client as a response field, not a thrown exception, so the
    only place an error code is observable is the encoded response frame."
   [frame]
-  (if-let [error (some-> frame t/rpcframev1-response t/rpcresponse-error)]
+  (if-let [error (some-> frame t/rpcframev2-response t/rpcresponse-error)]
     [:error (t/rpcerror-code error)]
     [:ok nil]))
 
@@ -462,9 +462,7 @@
                  (conj decisions [index true]))
           (let [[next-propositions changed] (remove-last-equal simulated proposition)]
             (recur (rest remaining) (inc index) next-propositions
-                   (if changed
-                     (conj operations {:action :retract :proposition proposition})
-                     operations)
+                   (conj operations {:action :retract :proposition proposition})
                    (conj decisions [index changed]))))))))
 
 (defn- prepare-actions-on-store! [db actions]
@@ -491,16 +489,16 @@
     (if (empty? remaining)
       (framrpc/rpc-mutation-result! results)
       (let [[input-index changed] (first remaining)
-            occurrence (when changed (first occurrences))]
+            occurrence (first occurrences)]
         (recur (rest remaining)
-               (if changed (subvec occurrences 1) occurrences)
+               (subvec occurrences 1)
                (conj results
                      (framrpc/rpc-action-result!
-                      input-index changed (if changed [occurrence] []))))))))
+                      input-index changed occurrence)))))))
 
 (defn- require-encodable-rpc-response!
   [request served-version payload]
-  (framrpc/encode-rpc-frame-v1!
+  (framrpc/encode-rpc-frame-v2!
    (framrpc/rpc-response-frame
     0
     (framrpc/rpc-response!
@@ -550,12 +548,12 @@
   (let [[action-list fence-option]
         (record-fields! (t/rpc-request-payload-value request) :rpc/batch 2)
         action-values (list-values! action-list)
-        _ (when (> (count action-values) framrpc/rpc-v1-max-batch-actions)
+        _ (when (> (count action-values) framrpc/rpc-v2-max-batch-actions)
             (server-fail!
              :term-depth-exceeded
              "batch action count exceeds the TermCodecV1 depth bound"
              {:actions (count action-values)
-              :maximum framrpc/rpc-v1-max-batch-actions}))
+              :maximum framrpc/rpc-v2-max-batch-actions}))
         actions (mapv parse-action! action-values)
         [fence-present fence] (option-value! fence-option)]
     (when (empty? actions)
@@ -579,9 +577,6 @@
                              t/triple-t3)
                            proposition))))
            options)))
-
-(defn- operation-occurrences [db]
-  (filterv kernel/operation-occurrence? (database/history db)))
 
 (defn- query-record-tag [value]
   (when (and (t/triple? value) (= :rpc/record (t/triple-t3 value)))
@@ -707,7 +702,7 @@
               (mapv parse-query-order! (list-values! order))
               (when limit-present
                 (require-int! limit "query limit")))
-        errors (query/validate-plan plan)]
+        errors (query/validate-plan! plan)]
     (when-let [error (first errors)]
       (server-fail! (query/error-code error) (query/error-message error) {}))
     plan))
@@ -955,6 +950,9 @@
 (defn- occurrence-candidate-source [root lower-exclusive upper-inclusive]
   (datalog/occurrence-candidate-source root lower-exclusive upper-inclusive))
 
+(defn- withdrawal-candidate-source [root lower-exclusive upper-inclusive]
+  (datalog/withdrawal-candidate-source root lower-exclusive upper-inclusive))
+
 (defn- one-triple-pattern [plan]
   (let [find (query/queryplan-find plan)
         strata (query/queryplan-strata plan)
@@ -988,16 +986,18 @@
                  stratum))
          (query/queryplan-strata plan))))
 
-(defn- plan-uses-occurrence? [plan]
-  (boolean
-   (some (fn [stratum]
-           (some (fn [rule]
-                   (some #(and (= :relation (datalog/literal-kind %))
-                               (= datalog/occurrence-relation
-                                  (datalog/literal-relation %)))
-                         (datalog/rule-body rule)))
-                 stratum))
-         (query/queryplan-strata plan))))
+(def ^:private history-relations
+  #{datalog/occurrence-relation datalog/withdrawal-relation})
+
+(defn- plan-history-relations [plan]
+  (into #{}
+        (comp
+         (mapcat identity)
+         (mapcat datalog/rule-body)
+         (filter #(= :relation (datalog/literal-kind %)))
+         (map datalog/literal-relation)
+         (filter history-relations))
+        (query/queryplan-strata plan)))
 
 (defn- plan-uses-only-text-base? [plan]
   (not
@@ -1005,7 +1005,8 @@
            (some (fn [rule]
                    (some #(and (= :relation (datalog/literal-kind %))
                                (contains? #{datalog/triple-relation
-                                            datalog/occurrence-relation}
+                                            datalog/occurrence-relation
+                                            datalog/withdrawal-relation}
                                           (datalog/literal-relation %)))
                          (datalog/rule-body rule)))
                  stratum))
@@ -1198,18 +1199,18 @@
 
 (defn- term-sha256 [term]
   (let [out (ByteArrayOutputStream.)]
-    (framrpc/write-term-codec-v1! out term framrpc/rpc-v1-max-string-bytes
-                               framrpc/rpc-v1-max-term-nodes
-                               framrpc/rpc-v1-max-term-depth)
+    (framrpc/write-term-codec-v1! out term framrpc/rpc-v2-max-string-bytes
+                               framrpc/rpc-v2-max-term-nodes
+                               framrpc/rpc-v2-max-term-depth)
     (let [digest (.digest (MessageDigest/getInstance "SHA-256")
                           (.toByteArray out))]
       (apply str (map #(format "%02x" (bit-and 255 (int %))) digest)))))
 
 (defn- term-codec-v1-bytes [term]
   (t/termcodecmeasure-bytes
-   (framrpc/measure-term-codec-v1! term framrpc/rpc-v1-max-string-bytes
-                                framrpc/rpc-v1-max-term-nodes
-                                framrpc/rpc-v1-max-term-depth)))
+   (framrpc/measure-term-codec-v1! term framrpc/rpc-v2-max-string-bytes
+                                framrpc/rpc-v2-max-term-nodes
+                                framrpc/rpc-v2-max-term-depth)))
 
 (defn- result-weight [rows shape]
   (+ 32 (* 8 (count rows))
@@ -1309,9 +1310,9 @@
         (let [rows (vec (propositions))
               source
               (if (some? attributes)
-                (text-search/build-source-for-attributes
+                (text-search/build-source-for-attributes!
                  rows attributes text-index-byte-limit)
-                (text-search/build-source rows text-index-byte-limit))]
+                (text-search/build-source! rows text-index-byte-limit))]
           (complete-text-index-flight! key flight source)
           source)
         (catch Throwable error
@@ -1528,8 +1529,27 @@
    :locate indexed-cursor-position!
    :cache-term identity})
 
+(defn- rpc-occurrence [occurrence]
+  (framrpc/rpc-occurrence!
+   (t/operationoccurrence-coordinate occurrence)
+   (t/operationoccurrence-action occurrence)
+   (t/operationoccurrence-proposition occurrence)))
+
+(defn- occurrence-cursor-position! [rows after-row]
+  (let [[position value] after-row]
+    (when-not (and (= 2 (count after-row))
+                   (integer? position)
+                   (< -1 position (count rows))
+                   (= value (rpc-occurrence (nth rows position))))
+      (server-fail! :query-cursor-mismatch
+                    "page cursor occurrence is absent from its snapshot" {}))
+    position))
+
 (def ^:private occurrences-page-shape
-  (assoc triples-page-shape :payload framrpc/rpc-occurrences!))
+  {:payload (fn [rows] (framrpc/rpc-occurrences! (mapv rpc-occurrence rows)))
+   :cursor-row (fn [position row] [position (rpc-occurrence row)])
+   :locate occurrence-cursor-position!
+   :cache-term rpc-occurrence})
 
 (defn- paged-result! [rows page digest snapshot-version shape]
   (if (nil? page)
@@ -1562,7 +1582,7 @@
 ;; An RPC list nests one Triple per row, so a response carrying max-term-depth
 ;; rows can never encode: an unpaged read stops there and still fails typed
 ;; instead of folding the whole corpus first.
-(def ^:private unpaged-row-cutoff framrpc/rpc-v1-max-term-depth)
+(def ^:private unpaged-row-cutoff framrpc/rpc-v2-max-term-depth)
 
 (defn- collect-rows [source keep? cutoff cancellation]
   (reduce (fn [result value]
@@ -1614,8 +1634,8 @@
         build #(let [db (database/store-view @database (:root snapshot))
                      root (query-page-root! db version)
                      view (database/store-view db root)]
-                 (collect-rows (database/history view)
-                               kernel/operation-occurrence?
+                 (collect-rows (database/occurrences view)
+                               (constantly true)
                                (when-not page unpaged-row-cutoff)
                                cancellation))
         digest (term-sha256 framrpc/rpc-unit)
@@ -1664,7 +1684,7 @@
                      text? (plan-uses-text? plan)
                      text-attributes
                      (when text? (query/plan-text-attribute-scope plan))
-                     occurrence? (plan-uses-occurrence? plan)
+                     history (plan-history-relations plan)
                      only-text? (and text? (plan-uses-only-text-base? plan))
                      source
                      (when text?
@@ -1675,9 +1695,13 @@
                      candidates
                      (cond->
                       {}
-                       occurrence?
+                       (contains? history datalog/occurrence-relation)
                        (assoc datalog/occurrence-relation
                               (occurrence-candidate-source
+                               root lower-exclusive version))
+                       (contains? history datalog/withdrawal-relation)
+                       (assoc datalog/withdrawal-relation
+                              (withdrawal-candidate-source
                                root lower-exclusive version))
                        source (merge (datalog/text-candidate-sources source)))
                      snapshot-data (when-not only-text?
@@ -1842,9 +1866,9 @@
 
 (defn- request-body-bytes [request]
   (- (alength ^bytes
-              (framrpc/encode-rpc-frame-v1!
+              (framrpc/encode-rpc-frame-v2!
                (framrpc/rpc-request-frame 0 request)))
-     framrpc/rpc-v1-header-bytes))
+     framrpc/rpc-v2-header-bytes))
 
 (defn- take-commit-cohort! [^LinkedBlockingQueue queue first-ticket]
   (let [deadline (+ (:enqueued-ns first-ticket) commit-cohort-max-wait-ns)]
@@ -1971,7 +1995,7 @@
       :rpc/lease-check {:payload (handle-lease-check! payload cancellation snapshot)}
       :rpc/validate {:payload (handle-validate! payload cancellation snapshot)}
       (server-fail! :rpc/unsupported-operation
-                    "operation is not part of FRAMRPC v1" {}))))
+                    "operation is not part of FRAMRPC v2" {}))))
 
 (def ^:private retryable-error-codes
   #{:rpc/conflict :rpc/cancelled :query-cancelled :query-time-limit
@@ -1993,7 +2017,7 @@
                       "request SpaceId does not match the served space" {}))
       (when (= :unsupported (native-op-disposition operation))
         (server-fail! :rpc/unsupported-operation
-                      "operation is not part of FRAMRPC v1" {}))
+                      "operation is not part of FRAMRPC v2" {}))
       (when (and (not (contains? paged-rpc-operations operation))
                  (t/rpcrequest-page request))
         (server-fail! :rpc/unexpected-page
@@ -2041,7 +2065,7 @@
 (defn- validate-stream-header! [header]
   (dotimes [index 8]
     (when-not (= (bit-and 255 (int (aget header index)))
-                 (bit-and 255 (int (aget framrpc/rpc-v1-magic index))))
+                 (bit-and 255 (int (aget framrpc/rpc-v2-magic index))))
       (server-fail! :rpc-invalid-magic "FRAMRPC magic does not match" {})))
   (let [buffer (doto (ByteBuffer/wrap header) (.order ByteOrder/LITTLE_ENDIAN))]
     (.position buffer 8)
@@ -2050,15 +2074,15 @@
           kind (bit-and 255 (int (.get buffer)))
           flags (bit-and 255 (int (.get buffer)))
           body-length (Integer/toUnsignedLong (.getInt buffer))]
-      (when-not (and (= major framrpc/rpc-v1-major)
-                     (= minor framrpc/rpc-v1-minor))
+      (when-not (and (= major framrpc/rpc-v2-major)
+                     (= minor framrpc/rpc-v2-minor))
         (server-fail! :rpc-unsupported-version
                       "FRAMRPC major/minor version is unsupported" {}))
       (when-not (<= 1 kind 4)
         (server-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown" {}))
       (when-not (zero? flags)
-        (server-fail! :rpc-invalid-flags "FRAMRPC v1 flags must be zero" {}))
-      (when (> body-length framrpc/rpc-v1-max-body-bytes)
+        (server-fail! :rpc-invalid-flags "FRAMRPC v2 flags must be zero" {}))
+      (when (> body-length framrpc/rpc-v2-max-body-bytes)
         (server-fail! :rpc-frame-too-large
                       "FRAMRPC declared body exceeds the byte limit" {}))
       (int body-length))))
@@ -2066,27 +2090,27 @@
 (defn read-rpc-frame! [^InputStream input]
   (let [first-byte (.read input)]
     (when-not (neg? first-byte)
-      (when-not (= first-byte (bit-and 255 (int (aget framrpc/rpc-v1-magic 0))))
+      (when-not (= first-byte (bit-and 255 (int (aget framrpc/rpc-v2-magic 0))))
         (server-fail! :rpc-invalid-magic "FRAMRPC magic does not match" {}))
-      (let [header (byte-array framrpc/rpc-v1-header-bytes)]
+      (let [header (byte-array framrpc/rpc-v2-header-bytes)]
         (aset-byte header 0 (unchecked-byte first-byte))
-        (when-not (read-exact! input header 1 (dec framrpc/rpc-v1-header-bytes))
+        (when-not (read-exact! input header 1 (dec framrpc/rpc-v2-header-bytes))
           (server-fail! :rpc-truncated "FRAMRPC frame ended inside its header" {}))
         (let [body-length (validate-stream-header! header)
               body (byte-array body-length)]
           (when-not (read-exact! input body 0 body-length)
             (server-fail! :rpc-truncated "FRAMRPC body is shorter than declared" {}))
-          (let [frame (byte-array (+ framrpc/rpc-v1-header-bytes body-length))]
-            (System/arraycopy header 0 frame 0 framrpc/rpc-v1-header-bytes)
-            (System/arraycopy body 0 frame framrpc/rpc-v1-header-bytes body-length)
-            (framrpc/decode-rpc-frame-v1! frame)))))))
+          (let [frame (byte-array (+ framrpc/rpc-v2-header-bytes body-length))]
+            (System/arraycopy header 0 frame 0 framrpc/rpc-v2-header-bytes)
+            (System/arraycopy body 0 frame framrpc/rpc-v2-header-bytes body-length)
+            (framrpc/decode-rpc-frame-v2! frame)))))))
 
 (defn- write-rpc-frame! [^OutputStream output frame]
   (let [bytes
         (try
-          (framrpc/encode-rpc-frame-v1! frame)
+          (framrpc/encode-rpc-frame-v2! frame)
           (catch Throwable error
-            (let [response (t/rpcframev1-response frame)
+            (let [response (t/rpcframev2-response frame)
                   code (or (:fram/code (ex-data error)) :rpc/internal-error)
                   fallback
                   (framrpc/rpc-response!
@@ -2097,9 +2121,9 @@
                     (or (.getMessage error)
                         "native RPC response is not encodable") nil)
                    nil)]
-              (framrpc/encode-rpc-frame-v1!
+              (framrpc/encode-rpc-frame-v2!
                (framrpc/rpc-response-frame
-                (t/rpcframev1-request-id frame) fallback)))))]
+                (t/rpcframev2-request-id frame) fallback)))))]
     (.write output bytes)
     (.flush output)
     (alength ^bytes bytes)))
@@ -2252,14 +2276,14 @@
     (swap! active-requests assoc request-id cancellation)))
 
 (defn handle-rpc-frame! [frame cancellation]
-  (case (t/rpcframev1-kind frame)
+  (case (t/rpcframev2-kind frame)
     :request
     (framrpc/rpc-response-frame
-     (t/rpcframev1-request-id frame)
-     (handle-rpc-request! (t/rpcframev1-request frame) cancellation))
+     (t/rpcframev2-request-id frame)
+     (handle-rpc-request! (t/rpcframev2-request frame) cancellation))
     :cancel
     (do
-      (when-let [target (get @active-requests (t/rpcframev1-request-id frame))]
+      (when-let [target (get @active-requests (t/rpcframev2-request-id frame))]
         (cancel-state! target :client-cancelled))
       nil)
     (server-fail! :rpc-invalid-kind
@@ -2276,13 +2300,13 @@
           (when (.isConnected socket)
             (.setSoTimeout socket 0))
           (when frame
-            (if (= :cancel (t/rpcframev1-kind frame))
+            (if (= :cancel (t/rpcframev2-kind frame))
               (let [result (handle-rpc-frame! frame (cancellation-state))]
                 (record-request! :rpc/cancel (- (System/nanoTime) started)
                                  :ok nil nil)
                 result)
-              (let [request-id (t/rpcframev1-request-id frame)
-                    operation (t/rpcrequest-op (t/rpcframev1-request frame))
+              (let [request-id (t/rpcframev2-request-id frame)
+                    operation (t/rpcrequest-op (t/rpcframev2-request frame))
                     cancellation (cancellation-state)]
                 (register-request! request-id cancellation)
                 (future
@@ -2307,7 +2331,7 @@
           (throw error))))))
 
 (defn serve!
-  "Serve FRAMRPC v1 requests. The default bind is loopback; an authenticated
+  "Serve FRAMRPC v2 requests. The default bind is loopback; an authenticated
    private gateway may set FRAM_BIND explicitly. The active process holds
    writer authority for the full listener lifetime; a standby refreshes reads."
   [port path expected-space role]

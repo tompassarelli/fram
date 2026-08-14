@@ -17,7 +17,7 @@
 (defn result-set [propositions query-plan]
   (set (q/result-rows (q/run! propositions query-plan))))
 (defn error-codes [query-plan]
-  (set (map q/error-code (q/compile-errors (q/compile-query query-plan)))))
+  (set (map q/error-code (q/compile-errors (q/compile-query! query-plan)))))
 
 (def entity (t/triple :entity :key "a"))
 (defn arithmetic-rule [operator]

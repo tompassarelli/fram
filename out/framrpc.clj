@@ -189,25 +189,25 @@
    value (decode-term-core! buffer 0 max-string-bytes max-nodes max-depth counter)]
   (t/->TermCodecDecoded value (deref counter))))
 
-(def rpc-v1-major 1)
+(def rpc-v2-major 2)
 
-(def rpc-v1-minor 0)
+(def rpc-v2-minor 0)
 
-(def rpc-v1-header-bytes 26)
+(def rpc-v2-header-bytes 26)
 
-(def rpc-v1-max-body-bytes 1048576)
+(def rpc-v2-max-body-bytes 1048576)
 
-(def rpc-v1-max-frame-bytes 1048602)
+(def rpc-v2-max-frame-bytes 1048602)
 
-(def rpc-v1-max-string-bytes 1048576)
+(def rpc-v2-max-string-bytes 1048576)
 
-(def rpc-v1-max-space-bytes 4096)
+(def rpc-v2-max-space-bytes 4096)
 
-(def rpc-v1-max-term-nodes 65536)
+(def rpc-v2-max-term-nodes 65536)
 
-(def rpc-v1-max-term-depth limits/term-codec-v1-max-depth)
+(def rpc-v2-max-term-depth limits/term-codec-v1-max-depth)
 
-(def rpc-v1-magic (.getBytes "FRAMRPC\u0000" StandardCharsets/UTF_8))
+(def rpc-v2-magic (.getBytes "FRAMRPC\u0000" StandardCharsets/UTF_8))
 
 (defn- rpc-fail! [code ^String message]
   (throw (ex-info message {:type code :fram/code code})))
@@ -284,16 +284,16 @@
   (t/->RpcResponse space op served-version page error payload))
 
 (defn rpc-request-frame [request-id request]
-  (t/->RpcFrameV1 :request 0 request-id request nil))
+  (t/->RpcFrameV2 :request 0 request-id request nil))
 
 (defn rpc-response-frame [request-id response]
-  (t/->RpcFrameV1 :response 0 request-id nil response))
+  (t/->RpcFrameV2 :response 0 request-id nil response))
 
 (defn rpc-cancel-frame [request-id]
-  (t/->RpcFrameV1 :cancel 0 request-id nil nil))
+  (t/->RpcFrameV2 :cancel 0 request-id nil nil))
 
 (defn rpc-event-frame [request-id event]
-  (t/->RpcFrameV1 :event 0 request-id nil event))
+  (t/->RpcFrameV2 :event 0 request-id nil event))
 
 (defn- validate-rpc-page-request! [page]
   (require-rpc-u32! (t/rpcpagerequest-limit page) "page limit")
@@ -310,7 +310,7 @@
 
 (defn- validate-rpc-request! [request]
   (require-rpc-string! (t/rpcrequest-space request) "request space")
-  (utf8-length! (t/rpcrequest-space request) rpc-v1-max-space-bytes "SpaceId")
+  (utf8-length! (t/rpcrequest-space request) rpc-v2-max-space-bytes "SpaceId")
   (require-rpc-keyword! (t/rpcrequest-op request) "request op")
   (let [expected (t/rpcrequest-expected-version request)
    page (t/rpcrequest-page request)
@@ -322,7 +322,7 @@
 
 (defn- validate-rpc-response! [response]
   (require-rpc-string! (t/rpcresponse-space response) "response space")
-  (utf8-length! (t/rpcresponse-space response) rpc-v1-max-space-bytes "SpaceId")
+  (utf8-length! (t/rpcresponse-space response) rpc-v2-max-space-bytes "SpaceId")
   (require-rpc-keyword! (t/rpcresponse-op response) "response op")
   (require-rpc-i64! (t/rpcresponse-served-version response) "served version")
   (let [page (t/rpcresponse-page response)
@@ -332,11 +332,11 @@
   (require-rpc-optional-term! (t/rpc-response-payload-value response) "response payload")))
 
 (defn- validate-rpc-frame! [frame]
-  (if (= 0 (t/rpcframev1-flags frame)) nil (rpc-fail! :rpc-invalid-flags "FRAMRPC v1 flags must be zero"))
-  (require-rpc-i64! (t/rpcframev1-request-id frame) "request id")
-  (let [kind (t/rpcframev1-kind frame)
-   request (t/rpcframev1-request frame)
-   response (t/rpcframev1-response frame)]
+  (if (= 0 (t/rpcframev2-flags frame)) nil (rpc-fail! :rpc-invalid-flags "FRAMRPC v2 flags must be zero"))
+  (require-rpc-i64! (t/rpcframev2-request-id frame) "request id")
+  (let [kind (t/rpcframev2-kind frame)
+   request (t/rpcframev2-request frame)
+   response (t/rpcframev2-response frame)]
   (cond
   (= kind :request) (if (and request (nil? response)) (validate-rpc-request! request) (rpc-fail! :rpc-invalid-shape "request frame must carry exactly one RpcRequest"))
   (or (= kind :response) (= kind :event)) (if (and response (nil? request)) (validate-rpc-response! response) (rpc-fail! :rpc-invalid-shape "response/event frame must carry exactly one RpcResponse"))
@@ -344,8 +344,8 @@
   :else (rpc-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown"))))
 
 (defn- rpc-add-measured-term! [term nodes]
-  (let [remaining (- rpc-v1-max-term-nodes (deref nodes))]
-  (if (<= remaining 0) (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") (let [measure (measure-term-codec-v1! term rpc-v1-max-string-bytes remaining rpc-v1-max-term-depth)]
+  (let [remaining (- rpc-v2-max-term-nodes (deref nodes))]
+  (if (<= remaining 0) (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") (let [measure (measure-term-codec-v1! term rpc-v2-max-string-bytes remaining rpc-v2-max-term-depth)]
   (swap! nodes + (t/termcodecmeasure-nodes measure))
   (t/termcodecmeasure-bytes measure)))))
 
@@ -376,14 +376,14 @@
 (defn- rpc-body-bytes! [frame]
   (validate-rpc-frame! frame)
   (let [nodes (atom 0)
-   kind (t/rpcframev1-kind frame)
-   request (t/rpcframev1-request frame)
-   response (t/rpcframev1-response frame)
+   kind (t/rpcframev2-kind frame)
+   request (t/rpcframev2-request frame)
+   response (t/rpcframev2-response frame)
    size (cond
   (and (= kind :request) request) (rpc-request-body-bytes! request nodes)
   (and (or (= kind :response) (= kind :event)) response) (rpc-response-body-bytes! response nodes)
   :else 0)]
-  (if (> size rpc-v1-max-body-bytes) (rpc-fail! :rpc-frame-too-large "FRAMRPC body exceeds the configured byte limit") size)))
+  (if (> size rpc-v2-max-body-bytes) (rpc-fail! :rpc-frame-too-large "FRAMRPC body exceeds the configured byte limit") size)))
 
 (defn- rpc-write-u16-le! [out value]
   (codec-write-u8! out value)
@@ -393,7 +393,7 @@
   (codec-write-u8! out (if (nil? value) 0 1)))
 
 (defn- rpc-write-term! [out value]
-  (write-term-codec-v1! out value rpc-v1-max-string-bytes rpc-v1-max-term-nodes rpc-v1-max-term-depth)
+  (write-term-codec-v1! out value rpc-v2-max-string-bytes rpc-v2-max-term-nodes rpc-v2-max-term-depth)
   nil)
 
 (defn- write-rpc-page-request! [out page]
@@ -445,24 +445,24 @@
   (rpc-write-present! out payload)
   (if (nil? payload) nil (rpc-write-term! out payload))))
 
-(defn encode-rpc-frame-v1! [frame]
+(defn encode-rpc-frame-v2! [frame]
   (let [body-size (rpc-body-bytes! frame)
    body (ByteArrayOutputStream. body-size)
-   kind (t/rpcframev1-kind frame)
-   request (t/rpcframev1-request frame)
-   response (t/rpcframev1-response frame)]
+   kind (t/rpcframev2-kind frame)
+   request (t/rpcframev2-request frame)
+   response (t/rpcframev2-response frame)]
   (cond
   (and (= kind :request) request) (write-rpc-request! body request)
   (and (or (= kind :response) (= kind :event)) response) (write-rpc-response! body response)
   :else nil)
-  (if (= body-size (.size body)) (let [out (ByteArrayOutputStream. (+ rpc-v1-header-bytes body-size))]
-  (.write out rpc-v1-magic)
-  (rpc-write-u16-le! out rpc-v1-major)
-  (rpc-write-u16-le! out rpc-v1-minor)
+  (if (= body-size (.size body)) (let [out (ByteArrayOutputStream. (+ rpc-v2-header-bytes body-size))]
+  (.write out rpc-v2-magic)
+  (rpc-write-u16-le! out rpc-v2-major)
+  (rpc-write-u16-le! out rpc-v2-minor)
   (codec-write-u8! out (rpc-kind-code! kind))
   (codec-write-u8! out 0)
   (codec-write-u32-le! out body-size)
-  (codec-write-i64-le! out (t/rpcframev1-request-id frame))
+  (codec-write-i64-le! out (t/rpcframev2-request-id frame))
   (.write out (.toByteArray body))
   (.toByteArray out)) (rpc-fail! :rpc-size-mismatch "FRAMRPC preflight size disagrees with encoded body"))))
 
@@ -502,16 +502,16 @@
   :else (rpc-fail! :rpc-invalid-boolean (str context " must be the strict byte 0 or 1")))))
 
 (defn- rpc-read-term! [buffer nodes]
-  (let [remaining (- rpc-v1-max-term-nodes (deref nodes))]
-  (if (<= remaining 0) (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") (let [decoded (decode-term-codec-v1! buffer rpc-v1-max-string-bytes remaining rpc-v1-max-term-depth)]
+  (let [remaining (- rpc-v2-max-term-nodes (deref nodes))]
+  (if (<= remaining 0) (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") (let [decoded (decode-term-codec-v1! buffer rpc-v2-max-string-bytes remaining rpc-v2-max-term-depth)]
   (swap! nodes + (t/termcodecdecoded-nodes decoded))
   (t/termcodecdecoded-value decoded)))))
 
 (defn- ^String rpc-read-space-term! [buffer nodes]
-  (if (>= (deref nodes) rpc-v1-max-term-nodes) (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") (do
+  (if (>= (deref nodes) rpc-v2-max-term-nodes) (rpc-fail! :rpc-term-node-limit "FRAMRPC body exceeds the aggregate Term node limit") (do
   (swap! nodes inc)
   (let [tag (rpc-read-u8! buffer "SpaceId Term tag")]
-  (if (= tag 1) (read-sized-text-core! buffer rpc-v1-max-space-bytes "SpaceId") (rpc-fail! :rpc-invalid-field "FRAMRPC SpaceId must be a String Term"))))))
+  (if (= tag 1) (read-sized-text-core! buffer rpc-v2-max-space-bytes "SpaceId") (rpc-fail! :rpc-invalid-field "FRAMRPC SpaceId must be a String Term"))))))
 
 (defn- rpc-read-keyword-term! [buffer nodes ^String context]
   (let [value (rpc-read-term! buffer nodes)]
@@ -570,13 +570,13 @@
   (loop [index 0
    valid true]
   (if (< index 8) (let [actual (rpc-read-u8! buffer "magic")
-   expected (bit-and 255 (int (aget rpc-v1-magic index)))]
+   expected (bit-and 255 (int (aget rpc-v2-magic index)))]
   (recur (+ index 1) (and valid (= actual expected)))) valid)))
 
-(defn decode-rpc-frame-v1! [bytes]
+(defn decode-rpc-frame-v2! [bytes]
   (let [byte-count (alength bytes)]
-  (if (> byte-count rpc-v1-max-frame-bytes) (rpc-fail! :rpc-frame-too-large "FRAMRPC frame exceeds the configured byte limit") nil)
-  (if (< byte-count rpc-v1-header-bytes) (rpc-fail! :rpc-truncated "FRAMRPC frame ended inside its header") nil)
+  (if (> byte-count rpc-v2-max-frame-bytes) (rpc-fail! :rpc-frame-too-large "FRAMRPC frame exceeds the configured byte limit") nil)
+  (if (< byte-count rpc-v2-header-bytes) (rpc-fail! :rpc-truncated "FRAMRPC frame ended inside its header") nil)
   (let [buffer (doto (ByteBuffer/wrap bytes)
   (.order ByteOrder/LITTLE_ENDIAN))]
   (if (rpc-magic-valid! buffer) nil (rpc-fail! :rpc-invalid-magic "FRAMRPC magic does not match"))
@@ -586,9 +586,9 @@
    flags (rpc-read-u8! buffer "frame flags")
    body-length (rpc-read-u32-le! buffer "body length")
    request-id (rpc-read-i64-le! buffer "request id")]
-  (if (and (= major rpc-v1-major) (= minor rpc-v1-minor)) nil (rpc-fail! :rpc-unsupported-version "FRAMRPC major/minor version is unsupported"))
-  (if (= flags 0) nil (rpc-fail! :rpc-invalid-flags "FRAMRPC v1 flags must be zero"))
-  (if (> body-length rpc-v1-max-body-bytes) (rpc-fail! :rpc-frame-too-large "FRAMRPC declared body exceeds the configured byte limit") nil)
+  (if (and (= major rpc-v2-major) (= minor rpc-v2-minor)) nil (rpc-fail! :rpc-unsupported-version "FRAMRPC major/minor version is unsupported"))
+  (if (= flags 0) nil (rpc-fail! :rpc-invalid-flags "FRAMRPC v2 flags must be zero"))
+  (if (> body-length rpc-v2-max-body-bytes) (rpc-fail! :rpc-frame-too-large "FRAMRPC declared body exceeds the configured byte limit") nil)
   (if (< (.remaining buffer) body-length) (rpc-fail! :rpc-truncated "FRAMRPC body is shorter than declared") nil)
   (if (> (.remaining buffer) body-length) (rpc-fail! :rpc-trailing-bytes "FRAMRPC frame has bytes beyond its declared body") nil)
   (let [nodes (atom 0)
@@ -611,16 +611,16 @@
 
 (def query-current :query/current)
 
-(def rpc-v1-list-envelope-depth limits/rpc-v1-list-envelope-depth)
+(def rpc-v2-list-envelope-depth limits/rpc-v2-list-envelope-depth)
 
-(def rpc-v1-max-list-values limits/rpc-v1-max-list-values)
+(def rpc-v2-max-list-values limits/rpc-v2-max-list-values)
 
-(def rpc-v1-mutation-response-wrapper-depth limits/rpc-v1-mutation-response-wrapper-depth)
+(def rpc-v2-mutation-response-wrapper-depth limits/rpc-v2-mutation-response-wrapper-depth)
 
-(def rpc-v1-max-batch-actions limits/rpc-v1-max-batch-actions)
+(def rpc-v2-max-batch-actions limits/rpc-v2-max-batch-actions)
 
 (defn rpc-list! [values]
-  (if (> (count values) rpc-v1-max-list-values) (do
+  (if (> (count values) rpc-v2-max-list-values) (do
   (rpc-fail! :term-depth-exceeded "RPC list length exceeds the TermCodecV1 depth bound")))
   (reduce (fn [tail value] (require-rpc-term! value "RPC list value")
   (t/triple :rpc/list value tail)) rpc-list-end (reverse values)))
@@ -631,7 +631,7 @@
    count-value 0]
   (cond
   (= cursor rpc-list-end) result
-  (>= count-value rpc-v1-max-term-nodes) (rpc-fail! :rpc-invalid-list "RPC list exceeds the Term node bound")
+  (>= count-value rpc-v2-max-term-nodes) (rpc-fail! :rpc-invalid-list "RPC list exceeds the Term node bound")
   (and (t/triple? cursor) (= :rpc/list (t/triple-t1 cursor))) (let [head (t/triple-t2 cursor)
    tail (t/triple-t3 cursor)]
   (require-rpc-term! head "RPC list head")
@@ -672,8 +672,8 @@
   (if (or (= policy rpc-subject-any) (= policy rpc-subject-existing)) nil (rpc-fail! :rpc-invalid-policy "RPC subject policy is invalid"))
   (rpc-record! :rpc/action [operation proposition policy]))
 
-(defn rpc-action-result! [input-index ^Boolean changed occurrences]
-  (rpc-record! :rpc/action-result [input-index changed (rpc-list! occurrences)]))
+(defn rpc-action-result! [input-index ^Boolean changed occurrence]
+  (if (t/occurrence-coordinate? occurrence) (rpc-record! :rpc/action-result [input-index changed occurrence]) (rpc-fail! :rpc-invalid-occurrence "RPC action result requires one occurrence coordinate")))
 
 (defn rpc-mutation-result! [results]
   (rpc-record! :rpc/mutation-result [(rpc-list! results)]))
@@ -693,6 +693,9 @@
 
 (defn rpc-triples! [values]
   (rpc-record! :rpc/triples [(rpc-list! values)]))
+
+(defn rpc-occurrence! [coordinate action proposition]
+  (if (and (t/occurrence-coordinate? coordinate) (and (or (= action t/assert-action) (= action t/retract-action)) (t/triple? proposition))) (rpc-record! :rpc/occurrence [coordinate action proposition]) (rpc-fail! :rpc-invalid-occurrence "RPC occurrence requires a coordinate, :assert/:retract action, and Triple proposition")))
 
 (defn rpc-occurrences! [values]
   (rpc-record! :rpc/occurrences [(rpc-list! values)]))

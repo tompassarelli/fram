@@ -81,13 +81,13 @@
     decoded))
 
 (defn- count-node! [nodes]
-  (when (> (swap! nodes inc) framrpc/rpc-v1-max-term-nodes)
+  (when (> (swap! nodes inc) framrpc/rpc-v2-max-term-nodes)
     (fail! "shim/term-node-limit" "Term exceeds the node limit")))
 
 (declare decode-term!)
 
 (defn- decode-term! [value nodes depth]
-  (when (> depth framrpc/rpc-v1-max-term-depth)
+  (when (> depth framrpc/rpc-v2-max-term-depth)
     (fail! "shim/term-depth-limit" "Term exceeds the nesting limit"))
   (count-node! nodes)
   (when-not (vector? value)
@@ -194,7 +194,7 @@
   (when-not (and (string? value) (not (str/blank? value)))
     (fail! "shim/invalid-space" "space must be a non-empty string"))
   (when (> (alength (.getBytes ^String value StandardCharsets/UTF_8))
-           framrpc/rpc-v1-max-space-bytes)
+           framrpc/rpc-v2-max-space-bytes)
     (fail! "shim/invalid-space" "space exceeds the FRAMRPC byte limit"))
   value)
 

@@ -17,7 +17,7 @@
 
 ;; ----------------------------------------------------- direct authoring seam
 (def store (c/new-term-store "s2-authoring"))
-(def context (rr/context store))
+(def context (rr/context! store))
 (def node-a (rr/mint! context))
 (def node-b (rr/mint! context))
 (def predicate (t/triple "predicate-space" :predicate "edge"))

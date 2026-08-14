@@ -168,7 +168,7 @@
 (def RESOLVE-SPACE String "resolve")
 
 (defn resolve-edn! [(host CorpusHost) (edn-paths (Vec Any)) (body Any)] Any
-  (let [ctx (ri/new-graph RESOLVE-SPACE) with-state (:with-state host)]
+  (let [ctx (ri/new-graph! RESOLVE-SPACE) with-state (:with-state host)]
     (with-state ctx
       (fn [] Any
         (let [state-fn (:state host) load (:load-edn host) loaded (mapv load edn-paths) state (state-fn) install-srcs (:install-srcs state) install-tables (:install-tables state)]

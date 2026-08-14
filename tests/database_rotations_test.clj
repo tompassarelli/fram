@@ -7,7 +7,7 @@
 ;;      VALUE-EQUAL (not merely answer-equal) to a from-scratch build. This is the
 ;;      whole basis for never invalidating on write.
 ;;   C. PROJECTION EQUIVALENCE — the O(1) rotations projection makes fram.query
-;;      return exactly what the whole-corpus q/project projection returns, over a
+;;      return exactly what the whole-corpus q/project! projection returns, over a
 ;;      randomized corpus and a battery of query shapes (joins, negation, recursion,
 ;;      derived relations, aggregates, paging).
 ;;   D. SEGMENTS — a published content-addressed segment set round-trips the exact
@@ -98,7 +98,7 @@
 
 ;; ---- C. projection equivalence vs the whole-corpus oracle ------------------
 (def facts (mapv (fn [[l p r]] (ck/->Fact l p r)) corpus))
-(def oracle-projection (q/project facts))
+(def oracle-projection (q/project! facts))
 (def rot-projection (rotations/datalog-projection idx))
 
 (def query-shapes

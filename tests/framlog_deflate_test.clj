@@ -45,7 +45,8 @@
 
 (defn fold-propositions [path]
   (let [db (database/open-database! path "deflate-parity")]
-    (set (map #(t/triple-t3 %) (database/live-occurrences db)))))
+    (set (map t/operationoccurrence-proposition
+              (database/live-occurrences db)))))
 
 (check! "deflate and plain generations fold to identical propositions"
         (= (fold-propositions plain-path) (fold-propositions gz-path)))

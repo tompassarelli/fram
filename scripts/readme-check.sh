@@ -163,17 +163,19 @@ else
     fi
   }
   run_contains 'committed via server (v1)' \
-    bin/fram tell :email :member_of :contact_relations
+    bin/fram tell :contactable_at :member_of :contact_relations
   run_contains 'committed via server (v2)' \
-    bin/fram tell Alice :email alice@example.com
-  run_contains ':email  alice@example.com' bin/fram show Alice
-  run_contains '["@Alice" "alice@example.com"]' \
-    bin/fram query '{:find "emails" :rules [{:head {:rel "emails" :args [{:var "who"} {:var "email"}]} :body [{:rel "triple" :args [{:var "who"} :email {:var "email"}]}]}]}'
-  run_contains ':kernel/asserts' bin/fram occurrences
-  run_exact valid bin/fram validate
+    bin/fram tell '"alice@example.com"' :member_of :email_addresses
   run_contains 'committed via server (v3)' \
-    bin/fram retract Alice :email alice@example.com
-  run_exact 3 bin/fram version
+    bin/fram tell '"Alice"' :contactable_at '"alice@example.com"'
+  run_contains ':contactable_at' bin/fram show '"Alice"'
+  run_contains '["Alice" "alice@example.com"]' \
+    bin/fram query '{:find "emails" :rules [{:head {:rel "emails" :args [{:var "who"} {:var "email"}]} :body [{:rel "triple" :args [{:var "who"} :contactable_at {:var "email"}]}]}]}'
+  run_contains ':contactable_at' bin/fram occurrences
+  run_exact valid bin/fram validate
+  run_contains 'committed via server (v4)' \
+    bin/fram retract '"Alice"' :contactable_at '"alice@example.com"'
+  run_exact 4 bin/fram version
 fi
 
 # --local: toolchain present

@@ -4,19 +4,47 @@ This document maps Fram's [shared vocabulary](glossary.md) onto durable storage,
 
 ## Kernel and history
 
-The kernel accepts the recursive grammar and neutral `t1`/`t2`/`t3` positions defined in the glossary. Domain roles come from ontology patterns, never position. A proposition enters history at ordinary Triple coordinates:
+The kernel accepts the recursive grammar and assigns no domain roles to the
+neutral `t1`/`t2`/`t3` positions defined in the glossary. A profile may map
+those positions to domain roles; an unprofiled Term carries no such positional
+meaning. FRAMLOG records a signed operation: a coordinate, an `assert` or
+`retract` action, and proposition content. The query layer exposes that record
+directly:
 
 ```text
-tx := (space, :kernel/tx-sequence, sequence)
-op := (tx, :kernel/op-ordinal, ordinal)
-(op, :kernel/asserts, proposition)
+occurrence(
+  ((space, :kernel/tx-sequence, sequence), :kernel/op-ordinal, ordinal),
+  :assert,
+  proposition)
 ```
 
-Retractions use `:kernel/retracts`; `(retraction-op, :kernel/withdraws, assertion-op)` names the exact withdrawn assertion. Transaction sequence and operation ordinal define replay order. Recorded, valid, and observation time are ordinary metadata and never proposition identity. See [ontology](ontology.md) for modeling rules.
+A successful content retraction additionally appears in the system relation
+`withdrawal(retraction-coordinate, assertion-coordinate)`. Its target is the
+newest earlier live assertion occurrence in the same SpaceId carrying
+structurally equal proposition content. It withdraws only that occurrence, so
+another equal assertion occurrence remains live if one exists. Each successful
+retraction has exactly one target, and each assertion occurrence is withdrawn
+at most once. A no-match retraction still produces a retraction occurrence and
+advances the logical version (transaction sequence); it produces no withdrawal
+row and reports `stateChanged = false`.
+
+Occurrences and withdrawals are queryable system relations, not ordinary
+semantic proposition Triples. Transaction sequence and operation ordinal define
+replay order. Recorded, valid, and observation time are metadata and never
+proposition identity. See [ontology](ontology.md) for modeling rules.
 
 ## Storage, writer, and readers
 
-`TermStore` interns Atoms and recursive Triples. `AtomRow`, `TripleRow`, operation rows, integer handles, and `SPO`/`POS`/`OSP` rotations are private mechanics, not semantic identity.
+`TermStore` interns Atoms and recursive Triples. `AtomRow`, `TripleRow`,
+transaction rows, operation rows, withdrawal targets, integer handles, and
+`SPO`/`POS`/`OSP` rotations are private mechanics, not semantic identity. Those
+physical records may be wider than three fields, and query projections may
+have arbitrary arity while every cell remains a Term. Neither fact changes the
+public semantic grammar `Term := Atom | Triple`.
+
+Performance work belongs first in those private rows, indexes, and materialized
+projections. A public `TupleN` Term would change equality, codecs, nesting, and
+query semantics; physical layout alone does not justify that semantic change.
 
 Binary FRAMLOG v1 is authoritative. Its header fixes the SpaceId; transaction frames carry a logical sequence and ordered assert/retract operations using the recursive Term codec. Replay rebuilds liveness and indexes. A one-shot migration converts the legacy flat log; serving has no dual semantic path.
 
@@ -40,11 +68,12 @@ Historical roots use validated prefix-bound FRI2 checkpoints plus tail replay. C
 
 ## Query projection
 
-The evaluator exposes two materialized relations and five positive virtual ones:
+The evaluator exposes three materialized relations and five positive virtual ones:
 
 ```text
-triple(t1, t2, t3)                              live state
+triple(t1, t2, t3)                              structural live-state set
 occurrence(coordinate, action, proposition)     explicit history
+withdrawal(retraction, assertion)                exact cancellation target
 
 text-match(entity, attribute, needle)           token conjunction
 text-phrase(entity, attribute, needle)          ordered tokens
@@ -53,17 +82,29 @@ text-stem(entity, attribute, needle)            English stemming
 text-search(entity, attribute, needle, score)   ranked
 ```
 
-Every cell is a Term. The two materialized relations are position-neutral. The
-five text relations are named in the EAV reading because searching a value
-assumes it; they share one lazy snapshot-scoped index whose extra analyzers
-realize on first use. Rules, recursion, stratified negation, arithmetic,
-aggregates, temporal selectors, and paging are specified in the
-[query reference](query-reference.md).
+Every cell is a Term. `triple` is position-neutral; `occurrence` and
+`withdrawal` assign system roles to their columns. The five text relations are
+named in the EAV reading because searching a value assumes it; they share one
+lazy snapshot-scoped index whose extra analyzers realize on first use. Rules,
+recursion, stratified negation, arithmetic, aggregates, temporal selectors, and
+paging are specified in the [query reference](query-reference.md).
+
+Multiplicity belongs to occurrence state. `TermStore` live occurrences and
+`rpc/scan` preserve one entry per live assertion occurrence, including equal
+proposition content asserted more than once. Datalog's `triple` relation is a
+set projection by recursive structural Triple equality, so those equal live
+occurrences contribute one row there.
+
+The retained JVM database facade has a separate effective-view rule:
+`database/live-occurrences` and `database/live-propositions` suppress a target
+named by a live `:kernel/supersedes` proposition. That rule does not withdraw
+the target or change `TermStore` liveness, and it is not a universal native
+`rpc/scan` or Datalog `triple` behavior.
 
 ## Boundaries
 
 1. **FRAMLOG** is durable local history.
-2. **FRAMRPC v1** is the private binary server protocol: thirteen closed data operations using the same recursive Term codec, plus `rpc/checkpoint` on the native engine for operators and embedders.
+2. **FRAMRPC v2 (wire version 2.0)** is the private binary server protocol: thirteen closed data operations using the same recursive Term codec, plus `rpc/checkpoint` on the native engine for operators and embedders.
 3. **CLI EDN** is local human syntax lowered to typed records before FRAMRPC; it is not the wire.
 4. **Public JSON edges** are closed adapters. `bin/fram-mcp` exposes only the five verbs in the [tool catalog](tool-catalog.md).
 
@@ -84,8 +125,8 @@ through the same release gate.
 ```text
 fram_open -> opaque database handle
 fram_transact | fram_query | fram_snapshot
-          -> one canonical FRAMRPC v1 request slice
-          <- one canonical FRAMRPC v1 response buffer
+          -> one canonical FRAMRPC v2 request slice
+          <- one canonical FRAMRPC v2 response buffer
 fram_close
 ```
 

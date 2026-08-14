@@ -64,8 +64,8 @@
 
 ;; Lift a bare store into the handle every layer below reads.
 (defn graph
-  ([store] (ri/graph store {}))
-  ([store writers] (ri/graph store writers)))
+  ([store] (ri/graph! store {}))
+  ([store writers] (ri/graph! store writers)))
 ;; *reject!* — how a verb signals an UNACCEPTABLE edit (collision / no-capture /
 ;; nothing-to-do / shape violation). The CLI path (-main) wants a process exit code;
 ;; a LONG-LIVED server running the verb in-process must NOT die on a rejected edit —
@@ -443,7 +443,7 @@
                     (if (and (identical? graph context)
                              (identical? target-builder builder))
                       (let [node (txn/mint! builder)]
-                        (ri/ordinal context node)
+                        (ri/ordinal! context node)
                         node)
                       (original-mint! graph target-builder)))
                   ri/assert-on!
@@ -476,7 +476,7 @@
 
 (defn- with-corpus-state! [store-or-graph body]
   (let [store (if (map? store-or-graph) (ri/store-of store-or-graph) store-or-graph)
-        context (rr/context store)
+        context (rr/context! store)
         ids (rco/corpus-predicate-ids context)]
     (binding [ctx store
             rctx context
@@ -675,7 +675,7 @@
   (spit out-path
         (str (str/join "\n"
                        (restore-scalar-integers
-                        (rmi/extract-lines (emit-env) src)))
+                        (rmi/extract-lines! (emit-env) src)))
              "\n")))
 
 ;; render output dir honors *resolve-out* (default $RESOLVE_OUT, then /tmp) so

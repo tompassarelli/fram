@@ -4,25 +4,62 @@ This document is the single source for Fram's current semantic, storage, query, 
 
 ## Semantic kernel
 
-**Atom** — A non-recursive leaf: String, Int, Float, Bool, Keyword, or Instant.
+**Atom** — A leaf Term whose intended identity contract is determined by its
+Atom kind and canonical payload. Current kinds are String, Int, Float, Bool,
+Keyword, and Instant. Float is a known implementation exception: host
+interning makes NaN unequal to itself and treats `+0.0` and `-0.0` as equal,
+while the wire
+canonicalizes NaN bits and distinguishes signed zero. Self-denoting value and
+resource name are semantic roles of an Atom, not different storage variants.
 
-**Term** — Any value accepted in a Triple: an Atom or another Triple.
+**Term** — The recursive union `Term := Atom | Triple`.
 
-**Triple** — Exactly three neutral Terms, recursively; the kernel assigns no subject, predicate, object, entity, or attribute role to a position.
+**Triple** — Exactly three neutral Terms, recursively. Its term identity is
+recursive structural equality. Constructing or nesting a Triple does not assert
+it; the kernel assigns no subject, predicate, object, entity, or attribute role
+to a position.
 
 **t1 / t2 / t3** — The first, second, and third positional addresses of `Triple := (Term, Term, Term)`; these public names never appear on the binary wire.
 
-**proposition** — A Triple used as statement content, independent of whether, when, or how often it is asserted.
+**proposition** — The role of a Triple when an occurrence carries it as
+statement content. A profile may decide whether that structure is admissible
+and how to interpret it. Proposition identity is recursive structural Triple
+equality; assertion status does not come from Triple syntax.
 
 **transaction coordinate** — `(space, :kernel/tx-sequence, sequence)`, the durable logical address of one accepted transaction.
 
-**occurrence** — One assertion or retraction at `(transaction-coordinate, :kernel/op-ordinal, ordinal)`; equal propositions at different coordinates remain distinct.
+**occurrence** — One logged operation at
+`(transaction-coordinate, :kernel/op-ordinal, ordinal)`, carrying the action
+`assert` or `retract` and one proposition. The coordinate is assertion identity:
+equal propositions asserted at different coordinates remain distinct.
 
-**live set** — The propositions whose assertion occurrences remain in force after exact retractions; full occurrence history is retained.
+**withdrawal** — The derived system relation from one successful retraction
+occurrence to the exact earlier assertion occurrence it cancels. Both
+occurrences carry the same proposition, occupy the same SpaceId, and are ordered
+assertion before retraction. A no-match retraction still has an occurrence but
+advances the logical version, reports `stateChanged = false`, and produces no
+withdrawal.
+
+**live occurrence state** — The assertion occurrences still in force after
+exact retractions. Structurally equal proposition content can occur more than
+once; retracting one occurrence leaves another equal occurrence live.
+
+**`triple` projection** — The Datalog structural set of live proposition
+content. Unlike live occurrence state and `rpc/scan`, it collapses equal live
+propositions to one row.
+
+**effective view (JVM route only)** — The JVM database facade suppresses an
+occurrence from its `live-occurrences` and `live-propositions` helpers when a
+live `:kernel/supersedes` proposition names that occurrence as its target. This
+does not change `TermStore` liveness and is not native scan or Datalog
+semantics.
 
 **fact** — A proposition admitted by a particular view's rules, not a stored kernel type.
 
-**Turtle** — The “turtles all the way down” architecture prior: prefer the same recursive Triple language for data, coordinates, history, and metadata; never a primitive or storage type.
+**Turtle** — The “turtles all the way down” architecture prior: prefer the same
+recursive Term language for semantic content and structural coordinates when
+the model permits. It never makes operation or withdrawal rows into domain
+propositions and is never a primitive or storage type.
 
 **profile** — An optional, stored contract that validates a space's propositions above the unchanged kernel.
 
@@ -50,7 +87,9 @@ This document is the single source for Fram's current semantic, storage, query, 
 
 ## Wire and deployment
 
-**FRAMRPC** — Fram's private binary protocol for typed recursive Terms and a closed thirteen-operation data surface.
+**FRAMRPC v2** — Fram's private binary protocol, wire version 2.0, for typed
+recursive Terms and a closed data surface of thirteen operations, plus the
+separately named native `rpc/checkpoint` operator capability.
 
 **writer** — The sole active server generation authorized to append to a SpaceId's log. Native production has no standby-serving mode.
 

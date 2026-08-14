@@ -16,6 +16,7 @@ canonical_docs=(
   docs/query-reference.md
   docs/tool-catalog.md
   deploy/cloudflare/PROCEDURE.md
+  integrations/north/skills/fram-modeling/SKILL.md
 )
 
 # Historical documents are quarantined by location AND by banner; the policy
@@ -119,8 +120,32 @@ grep -Fq 'triple(t1, t2, t3)' docs/query-reference.md ||
   fail 'query reference lacks the triple base relation'
 grep -Fq 'occurrence(coordinate, action, proposition)' docs/query-reference.md ||
   fail 'query reference lacks the occurrence base relation'
-grep -Fq 'FRAMRPC v1' docs/isolation-and-deployment.md ||
-  fail 'wire reference lacks FRAMRPC v1'
+grep -Fq 'withdrawal(retraction, assertion)' docs/query-reference.md ||
+  fail 'query reference lacks the targeted-withdrawal base relation'
+grep -Fq 'Atom kind and canonical payload' docs/glossary.md ||
+  fail 'glossary lacks the Atom term-identity contract'
+grep -Fq 'Constructing or nesting a Triple does not assert' docs/glossary.md ||
+  fail 'glossary collapses Triple construction into assertion'
+grep -Fq 'R1 requires each of `t1`, `t2`, and `t3` to be an Atom' docs/ontology.md ||
+  fail 'ontology does not delimit nested examples from relational R1'
+grep -Fq 'profile lint bootstrap-skips every Triple whose `t2` is exactly the' docs/ontology.md ||
+  fail 'ontology narrows the implemented profile-lint bootstrap exemption'
+grep -Fq 'exemption but do not bind a profile' docs/ontology.md ||
+  fail 'ontology conflates the profile-lint exemption with profile binding'
+
+for pattern in \
+  'semantic-history' \
+  ':kernel/asserts' \
+  ':kernel/retracts' \
+  ':kernel/withdraws' \
+  'FRAMRPC v1' \
+  'every particular domain fact has'; do
+  if rg -n -F "$pattern" "${canonical_docs[@]}"; then
+    fail "canonical documentation retains rejected semantic surface: $pattern"
+  fi
+done
+grep -Fq 'FRAMRPC v2 (wire version 2.0)' docs/isolation-and-deployment.md ||
+  fail 'wire reference lacks FRAMRPC v2 (wire version 2.0)'
 grep -Fq '`manifest.json` is the backup commit point' docs/isolation-and-deployment.md ||
   fail 'deployment reference lacks the atomic backup commit point'
 grep -Fq 'different SpaceId fails closed during boot before mutation' docs/isolation-and-deployment.md ||
@@ -139,12 +164,12 @@ grep -Fq '**Current scope:** historical experiment and sealed-consumer vocabular
   fail 'naming ledger leaves Codegraph vocabulary unscoped'
 
 mapfile -t readme_launchers < <(sed -n 's/^\$ \(bin\/[^ ]*\).*/\1/p' README.md)
-expected_launchers=(bin/fram-up bin/fram bin/fram bin/fram bin/fram bin/fram bin/fram)
+expected_launchers=(bin/fram-up bin/fram bin/fram bin/fram bin/fram bin/fram bin/fram bin/fram)
 [[ "${readme_launchers[*]}" == "${expected_launchers[*]}" ]] ||
   fail "README launchers drifted: ${readme_launchers[*]}"
 
 mapfile -t readme_verbs < <(sed -n 's/^\$ bin\/fram \([^ ]*\).*/\1/p' README.md)
-expected_verbs=(tell tell show query occurrences validate)
+expected_verbs=(tell tell tell show query occurrences validate)
 [[ "${readme_verbs[*]}" == "${expected_verbs[*]}" ]] ||
   fail "README native commands drifted: ${readme_verbs[*]}"
 

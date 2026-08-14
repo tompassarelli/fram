@@ -254,11 +254,11 @@
             (searchbuildstate-stem-postings state)
             (searchbuildstate-trigram-postings state))))))))
 
-(defn build-source-result
+(defn build-source-result!
   [(propositions (Vec t/Triple)) (maximum Int)] TextSearchSourceResult
   (let [(rows (Vec t/Triple)) (vec propositions)
         (exact-result text-index/TextCandidateSourceResult)
-        (text-index/build-source-result rows maximum)
+        (text-index/build-source-result! rows maximum)
         (exact text-index/TextCandidateSource?)
         (text-index/source-result-source exact-result)]
     (if (nil? exact)
@@ -284,19 +284,19 @@
      (contains? attributes (t/triple-t2 proposition)))
    propositions))
 
-(defn build-source-for-attributes-result
+(defn build-source-for-attributes-result!
   [(propositions (Vec t/Triple))
    (attributes (Set Any))
    (maximum Int)]
   TextSearchSourceResult
-  (build-source-result
+  (build-source-result!
    (propositions-for-attributes propositions attributes) maximum))
 
-(defn build-source
+(defn build-source!
   [(propositions (Vec t/Triple)) (maximum Int)] TextSearchSource
   (let [(rows (Vec t/Triple)) (vec propositions)
         (exact text-index/TextCandidateSource)
-        (text-index/build-source rows maximum)
+        (text-index/build-source! rows maximum)
         (weight Int)
         (+ (text-index/source-weight exact)
            112
@@ -306,12 +306,12 @@
     (index-limit weight maximum)
     (->TextSearchSource exact rows maximum cell weight)))
 
-(defn build-source-for-attributes
+(defn build-source-for-attributes!
   [(propositions (Vec t/Triple))
    (attributes (Set Any))
    (maximum Int)]
   TextSearchSource
-  (build-source
+  (build-source!
    (propositions-for-attributes propositions attributes) maximum))
 
 ;; Build-on-first-use with a benign race: a concurrent double build is
@@ -490,7 +490,7 @@
     (if (not (wordneedleresult-ok needle-result))
       (handles-error (wordneedleresult-error needle-result))
       (let [(indexed-result text-index/TextHandlesResult)
-            (text-index/indexed-handles-result
+            (text-index/indexed-handles-result!
              (textsearchsource-exact source) needle)]
         (if (not (text-index/handles-result-ok? indexed-result))
           (handles-error (text-index/handles-result-error indexed-result))
@@ -839,31 +839,31 @@
       (rows-result-rows result)
       (text-index/raise-text-error (rows-result-error result)))))
 
-(defn exact-indexed-rows-result
+(defn exact-indexed-rows-result!
   [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (let [(result text-index/TextRowsResult)
-        (text-index/indexed-rows-result (textsearchsource-exact source) needle)]
+        (text-index/indexed-rows-result! (textsearchsource-exact source) needle)]
     (if (text-index/rows-result-ok? result)
       (rows-ok (text-index/rows-result-rows result))
       (rows-error (text-index/rows-result-error result)))))
 
-(defn exact-scan-rows-result
+(defn exact-scan-rows-result!
   [(source TextSearchSource) (needle Any)] TextSearchRowsResult
   (let [(result text-index/TextRowsResult)
-        (text-index/scan-rows-result (textsearchsource-exact source) needle)]
+        (text-index/scan-rows-result! (textsearchsource-exact source) needle)]
     (if (text-index/rows-result-ok? result)
       (rows-ok (text-index/rows-result-rows result))
       (rows-error (text-index/rows-result-error result)))))
 
-(defn exact-indexed-rows
+(defn exact-indexed-rows!
   [(source TextSearchSource) (needle Any)] (Vec (Vec Any))
-  (let [(result TextSearchRowsResult) (exact-indexed-rows-result source needle)]
+  (let [(result TextSearchRowsResult) (exact-indexed-rows-result! source needle)]
     (if (rows-result-ok? result)
       (rows-result-rows result)
       (text-index/raise-text-error (rows-result-error result)))))
 
-(defn exact-scan-rows [(source TextSearchSource) (needle Any)] (Vec (Vec Any))
-  (let [(result TextSearchRowsResult) (exact-scan-rows-result source needle)]
+(defn exact-scan-rows! [(source TextSearchSource) (needle Any)] (Vec (Vec Any))
+  (let [(result TextSearchRowsResult) (exact-scan-rows-result! source needle)]
     (if (rows-result-ok? result)
       (rows-result-rows result)
       (text-index/raise-text-error (rows-result-error result)))))

@@ -1,8 +1,8 @@
 # Fram from Cloudflare Workers
 
 The Worker is stateless. It sends authenticated JSON to the shim; the shim
-validates a closed request, converts tagged JSON Terms to FRAMRPC, and opens one
-private socket to the durable Fram server.
+validates a closed request, converts tagged JSON Terms to FRAMRPC v2 (wire
+version 2.0), and opens one private socket to the durable Fram server.
 
 ```text
 Worker -- HTTPS + bearer + JSON --> shim -- private FRAMRPC --> Fram server
@@ -41,7 +41,7 @@ Every Term is an exact tagged array:
 ["boolean", true]
 ["keyword", "kernel/type"]
 ["instant", "1785580282", "123000000"]
-["triple", ["string", "Alice"], ["keyword", "contact/email"], ["string", "alice@example.com"]]
+["triple", ["string", "Alice"], ["keyword", "contactable_at"], ["string", "alice@example.com"]]
 ```
 
 Integers use canonical decimal strings. Float values use exact lowercase
@@ -155,14 +155,17 @@ curl -sS "$W/bench?n=20&t2=title"
 
 ## Operational properties
 
-- The 1 MiB limit applies independently to request JSON, FRAMRPC frames, and
-  response JSON.
+- The 1 MiB limit applies independently to request JSON, FRAMRPC bodies, and
+  response JSON. A FRAMRPC frame adds its 26-byte header, for an exact maximum
+  of 1,048,602 bytes.
 - Authentication runs before body parsing and uses a constant-time token
   comparison.
 - `Request.space` is the database identity. Filesystem paths never cross the
   public boundary.
-- Expected versions are exact logical transaction coordinates, not wall-clock
-  timestamps.
+- `expectedVersion` is a non-negative logical sequence carried as an i64; the
+  Worker client serializes it as canonical JSON decimal text when needed. It is
+  not a transaction-coordinate Triple or a wall-clock timestamp, and every data
+  operation may supply it.
 - Container restart replays `history.framlog`; Workers keep no cache or session.
 - TLS terminates at the reverse proxy or tunnel in front of port 8080. A plain
   Internet-facing bearer-token endpoint is not a production deployment.

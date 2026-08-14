@@ -79,17 +79,17 @@
 
 (defn rpcresponse-payload [r] (:payload r))
 
-(defrecord RpcFrameV1 [kind flags request-id request response])
+(defrecord RpcFrameV2 [kind flags request-id request response])
 
-(defn rpcframev1-kind [r] (:kind r))
+(defn rpcframev2-kind [r] (:kind r))
 
-(defn rpcframev1-flags [r] (:flags r))
+(defn rpcframev2-flags [r] (:flags r))
 
-(defn rpcframev1-request-id [r] (:request-id r))
+(defn rpcframev2-request-id [r] (:request-id r))
 
-(defn rpcframev1-request [r] (:request r))
+(defn rpcframev2-request [r] (:request r))
 
-(defn rpcframev1-response [r] (:response r))
+(defn rpcframev2-response [r] (:response r))
 
 (defrecord TermCodecMeasure [bytes nodes])
 
@@ -121,8 +121,8 @@
 (defn ^Boolean rpc-response? [v]
   (instance? RpcResponse v))
 
-(defn ^Boolean rpc-frame-v1? [v]
-  (instance? RpcFrameV1 v))
+(defn ^Boolean rpc-frame-v2? [v]
+  (instance? RpcFrameV2 v))
 
 (defn rpc-page-request-cursor-value [^RpcPageRequest v]
   (rpcpagerequest-cursor v))
@@ -199,6 +199,20 @@
 
 (defn transactionframe-operations [r] (:operations r))
 
+(defrecord OperationOccurrence [coordinate action proposition])
+
+(defn operationoccurrence-coordinate [r] (:coordinate r))
+
+(defn operationoccurrence-action [r] (:action r))
+
+(defn operationoccurrence-proposition [r] (:proposition r))
+
+(defrecord Withdrawal [retraction assertion])
+
+(defn withdrawal-retraction [r] (:retraction r))
+
+(defn withdrawal-assertion [r] (:assertion r))
+
 (defrecord TermStore [space-id next-sequence atoms triples transactions operations withdrawal-targets active-buckets active-cells fold-open atom-slots triple-slots active-slots])
 
 (defn termstore-space-id [r] (:space-id r))
@@ -252,15 +266,15 @@
 (defn ^Boolean term-store-dump? [v]
   (instance? TermStoreDump v))
 
+(defn ^Boolean operation-occurrence? [v]
+  (instance? OperationOccurrence v))
+
+(defn ^Boolean withdrawal? [v]
+  (instance? Withdrawal v))
+
 (def tx-sequence :kernel/tx-sequence)
 
 (def op-ordinal :kernel/op-ordinal)
-
-(def asserts :kernel/asserts)
-
-(def retracts :kernel/retracts)
-
-(def withdraws :kernel/withdraws)
 
 (def recorded-at-predicate :kernel/recorded-at)
 
@@ -290,15 +304,6 @@
 (defn ^Boolean occurrence-coordinate? [v]
   (and (triple? v) (and (transaction-coordinate? (triple-t1 v)) (and (= op-ordinal (triple-t2 v)) (and (integer? (triple-t3 v)) (>= (triple-t3 v) 0))))))
 
-(defn ^Triple assertion-occurrence [^Triple occurrence ^Triple proposition]
-  (if (and (occurrence-coordinate? occurrence) (triple? proposition)) (triple occurrence asserts proposition) (throw (ex-info "fram: assertion requires an occurrence coordinate" {:type :invalid-assertion-occurrence}))))
-
-(defn ^Triple retraction-occurrence [^Triple occurrence ^Triple proposition]
-  (if (and (occurrence-coordinate? occurrence) (triple? proposition)) (triple occurrence retracts proposition) (throw (ex-info "fram: retraction requires an occurrence coordinate" {:type :invalid-retraction-occurrence}))))
-
-(defn ^Triple withdrawal [^Triple retraction ^Triple target]
-  (if (and (occurrence-coordinate? retraction) (occurrence-coordinate? target)) (triple retraction withdraws target) (throw (ex-info "fram: withdrawal requires retraction and target occurrence coordinates" {:type :invalid-withdrawal}))))
-
 (defn ^Triple recorded-at [^Triple source ^Instant at]
   (if (and (triple? source) (instant? at)) (triple source recorded-at-predicate at) (throw (ex-info "fram: recorded-at requires a triple source and Instant" {:type :invalid-recorded-at}))))
 
@@ -312,3 +317,19 @@
    left-ordinal (triple-t3 left)
    right-ordinal (triple-t3 right)]
   (if (= left-space right-space) (or (< left-seq right-seq) (and (= left-seq right-seq) (< left-ordinal right-ordinal))) (throw (ex-info "fram: occurrences from different spaces have no shared order" {:type :incomparable-occurrence-spaces})))) (throw (ex-info "fram: occurrence ordering requires occurrence coordinates" {:type :invalid-occurrence-order}))))
+
+(defn ^OperationOccurrence operation-occurrence [^Triple coordinate action ^Triple proposition]
+  (if (and (occurrence-coordinate? coordinate) (and (or (= assert-action action) (= retract-action action)) (and (triple? proposition) (term? proposition)))) (->OperationOccurrence coordinate action proposition) (throw (ex-info "fram: operation occurrence requires a coordinate, action, and Triple proposition" {:type :invalid-operation-occurrence}))))
+
+(defn ^Boolean assertion-occurrence? [value]
+  (and (operation-occurrence? value) (and (occurrence-coordinate? (operationoccurrence-coordinate value)) (and (= assert-action (operationoccurrence-action value)) (and (triple? (operationoccurrence-proposition value)) (term? (operationoccurrence-proposition value)))))))
+
+(defn ^Boolean retraction-occurrence? [value]
+  (and (operation-occurrence? value) (and (occurrence-coordinate? (operationoccurrence-coordinate value)) (and (= retract-action (operationoccurrence-action value)) (and (triple? (operationoccurrence-proposition value)) (term? (operationoccurrence-proposition value)))))))
+
+(defn ^Withdrawal withdrawal [^OperationOccurrence retraction ^OperationOccurrence assertion]
+  (let [retraction-coordinate (operationoccurrence-coordinate retraction)
+   assertion-coordinate (operationoccurrence-coordinate assertion)]
+  (if (and (retraction-occurrence? retraction) (assertion-occurrence? assertion)) (let [retraction-transaction (triple-t1 retraction-coordinate)
+   assertion-transaction (triple-t1 assertion-coordinate)]
+  (if (and (= (operationoccurrence-proposition retraction) (operationoccurrence-proposition assertion)) (and (= (triple-t1 retraction-transaction) (triple-t1 assertion-transaction)) (occurrence-before? assertion-coordinate retraction-coordinate))) (->Withdrawal retraction assertion) (throw (ex-info "fram: withdrawal requires a later retraction of the same asserted proposition" {:type :invalid-withdrawal})))) (throw (ex-info "fram: withdrawal requires a later retraction of the same asserted proposition" {:type :invalid-withdrawal})))))

@@ -15,7 +15,7 @@
 (defn result-set [propositions query-plan]
   (set (q/result-rows (q/run! propositions query-plan))))
 (defn error-codes [query-plan]
-  (set (map q/error-code (q/compile-errors (q/compile-query query-plan)))))
+  (set (map q/error-code (q/compile-errors (q/compile-query! query-plan)))))
 
 (let [propositions [(t/triple "a" :count 150)
                     (t/triple "b" :count 50)

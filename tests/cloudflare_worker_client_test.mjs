@@ -21,7 +21,11 @@ check('all Atom tags and recursive Triples are exact and canonical', () => {
     client.booleanTerm(true),
     client.keywordTerm('kernel/type'),
     client.instantTerm(-2, 3),
-    client.tripleTerm('Alice', client.keywordTerm('email'), 'alice@example.com'),
+    client.tripleTerm(
+      'Alice',
+      client.keywordTerm('contactable_at'),
+      'alice@example.com',
+    ),
   ];
   for (const value of values) assert.equal(client.validateTerm(value), value);
   assert.deepEqual(values[1], ['integer', '-42']);
@@ -56,10 +60,11 @@ check('version request is the exact JSON FRAMRPC envelope', async () => {
       return responseFor(observed.body);
     },
   });
-  const response = await fram.version();
+  const response = await fram.version({ expectedVersion: 11n });
   assert.equal(observed.url, 'https://shim.test/q');
   assert.deepEqual(observed.body, {
-    space: 'space-a', op: 'rpc/version', payload: ['keyword', 'rpc/unit'],
+    space: 'space-a', op: 'rpc/version', expectedVersion: '11',
+    payload: ['keyword', 'rpc/unit'],
   });
   assert.equal(observed.init.headers['content-type'], 'application/json');
   assert.equal(observed.init.headers.accept, 'application/json');
@@ -96,6 +101,13 @@ check('typed query plans and pagination contain no untyped JSON data', async () 
   const [plan, snapshot] = client.recordFields(request.payload, 'query/request', 2);
   client.recordFields(plan, 'query/plan', 2);
   assert.deepEqual(client.recordFields(snapshot, 'query/as-of', 1)[0], ['integer', '9']);
+
+  await fram.query(client.tripleQuery({ t2: client.keywordTerm('title') }),
+    { since: { lowerExclusive: 9, upper: 12 } });
+  const [_sincePlan, sinceSnapshot] = client.recordFields(request.payload, 'query/request', 2);
+  const [lower, upper] = client.recordFields(sinceSnapshot, 'query/since', 2);
+  assert.deepEqual(lower, ['integer', '9']);
+  assert.deepEqual(client.recordFields(upper, 'query/as-of', 1)[0], ['integer', '12']);
 });
 
 check('the closed client exposes every public operation and no raw escape', async () => {

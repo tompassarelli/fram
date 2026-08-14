@@ -37,7 +37,7 @@
 
 ;; --- (1) same facts set: cached, single build, identical object ---------------
 (def build-count (atom 0))
-(with-redefs [q/project (let [orig q/project]
+(with-redefs [q/project! (let [orig q/project!]
                           (fn [facts] (swap! build-count inc) (orig facts)))]
   (let [p1 (server/whole-corpus-projection facts-a)
         p2 (server/whole-corpus-projection facts-a)]

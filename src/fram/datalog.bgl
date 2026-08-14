@@ -3,7 +3,6 @@
 ;; are query-local; the kernel assigns no role to t1, t2, or t3.
 (ns fram.datalog)
 (define-mode strict)
-(require fram.kernel :as kernel)
 (require fram.rotation :as rot)
 (require fram.store :as store)
 (require fram.types :as t)
@@ -85,6 +84,7 @@
 
 (def triple-relation String "triple")
 (def occurrence-relation String "occurrence")
+(def withdrawal-relation String "withdrawal")
 (def text-match-relation String "text-match")
 (def text-phrase-relation String "text-phrase")
 (def text-substring-relation String "text-substring")
@@ -94,7 +94,10 @@
   #{text-match-relation text-phrase-relation text-substring-relation
     text-stem-relation text-search-relation})
 (def base-relations (Set String)
-  (conj text-relations triple-relation occurrence-relation))
+  (conj text-relations
+        triple-relation
+        occurrence-relation
+        withdrawal-relation))
 (def comparison-operators (Set Keyword) #{:eq :ne :lt :le :gt :ge})
 (def subtract-operator Keyword (keyword "-"))
 (def builtin-operators (Set Keyword)
@@ -316,22 +319,40 @@
             (conj acc (triple-row value)))
           #{} triples))
 
-;; Ordinary queries see live propositions only. History is a separate explicit
-;; relation of (occurrence-coordinate, action, proposition) rows.
+(defn- occurrence-row [(value t/OperationOccurrence)] Tuple
+  [(t/operationoccurrence-coordinate value)
+   (t/operationoccurrence-action value)
+   (t/operationoccurrence-proposition value)])
+
+(defn- occurrence-rows [(occurrences (Vec t/OperationOccurrence))] (Set Tuple)
+  (reduce
+   (fn [(acc (Set Tuple)) (value t/OperationOccurrence)] (Set Tuple)
+     (conj acc (occurrence-row value)))
+   #{} occurrences))
+
+(defn- withdrawal-row [(value t/Withdrawal)] Tuple
+  [(t/operationoccurrence-coordinate (t/withdrawal-retraction value))
+   (t/operationoccurrence-coordinate (t/withdrawal-assertion value))])
+
+(defn- withdrawal-rows [(withdrawals (Vec t/Withdrawal))] (Set Tuple)
+  (reduce
+   (fn [(acc (Set Tuple)) (value t/Withdrawal)] (Set Tuple)
+     (conj acc (withdrawal-row value)))
+   #{} withdrawals))
+
+;; Ordinary queries see live propositions only. History is explicit system
+;; data: operation occurrences and their derived targeted withdrawals.
 (defn edb [(propositions (Vec t/Triple))] Db
   {triple-relation (rows propositions)})
 
-(defn edb-with-occurrences
-  [(propositions (Vec t/Triple)) (occurrences (Vec t/Triple))] Db
-  (let [checked
-        (reduce (fn [(acc (Vec t/Triple)) (value t/Triple)] (Vec t/Triple)
-                  (if (kernel/operation-occurrence? value)
-                    (conj acc value)
-                    (throw (ex-info "fram: occurrence relation accepts only operation occurrences"
-                                    {:type :invalid-operation-occurrence}))))
-                [] occurrences)]
-    {triple-relation (rows propositions)
-     occurrence-relation (rows checked)}))
+(defn edb-with-history
+  [(propositions (Vec t/Triple))
+   (occurrences (Vec t/OperationOccurrence))
+   (withdrawals (Vec t/Withdrawal))]
+  Db
+  {triple-relation (rows propositions)
+   occurrence-relation (occurrence-rows occurrences)
+   withdrawal-relation (withdrawal-rows withdrawals)})
 
 (defn- term-value [(term QueryTerm) (subst Substitution)] Any
   (let [name (queryterm-variable term)]
@@ -571,8 +592,8 @@
     (cond
       [(= relation text-match-relation)
        (if indexed
-         (text-search/exact-indexed-rows-result source needle)
-         (text-search/exact-scan-rows-result source needle))]
+         (text-search/exact-indexed-rows-result! source needle)
+         (text-search/exact-scan-rows-result! source needle))]
       [(= relation text-phrase-relation)
        (if indexed
          (text-search/phrase-indexed-rows-result! source needle)
@@ -861,10 +882,11 @@
     (->RotationCandidateSource rotation lower-exclusive)))
 
 ;; Exclusive lower bound, matching store/operation-range-bounds exactly.
-(defn- event-after-sequence? [(event t/Triple) (lower-exclusive Int)] Bool
+(defn- event-after-sequence?
+  [(event t/OperationOccurrence) (lower-exclusive Int)] Bool
   (if (< lower-exclusive 0)
     true
-    (let [(occurrence t/Triple) (rot/occurrence-of event)]
+    (let [(occurrence t/Triple) (t/operationoccurrence-coordinate event)]
       (if (t/occurrence-coordinate? occurrence)
         (let [(transaction t/Triple) (t/triple-t1 occurrence)
               (sequence Int) (t/triple-t3 transaction)]
@@ -874,10 +896,12 @@
 ;; Public because every candidate source built from a projected rotation has to
 ;; apply the same window: the rotation carries the upper snapshot only.
 (defn events-after-sequence
-  [(events (Vec t/Triple)) (lower-exclusive Int)] (Vec t/Triple)
+  [(events (Vec t/OperationOccurrence))
+   (lower-exclusive Int)]
+  (Vec t/OperationOccurrence)
   (if (< lower-exclusive 0)
     events
-    (filterv (fn [(event t/Triple)] Bool
+    (filterv (fn [(event t/OperationOccurrence)] Bool
                (event-after-sequence? event lower-exclusive))
       events)))
 
@@ -903,6 +927,17 @@
   (reduce (fn [(current CandidateSource) (tuple Tuple)] CandidateSource
             (candidate-source-add relation current tuple))
           source tuples))
+
+(defn withdrawal-candidate-source
+  [(root t/TermStore)
+   (lower-exclusive Int)
+   (upper-inclusive Int)]
+  CandidateSource
+  (candidate-source-add-rows
+   withdrawal-relation
+   (empty-candidate-source)
+   (set (store/withdrawal-tuples-between
+         root lower-exclusive upper-inclusive))))
 
 (defn- build-candidate-sources
   [(db Db) (relations (Vec String)) (seed CandidateSources)] CandidateSources
@@ -933,10 +968,10 @@
                         relation base tuples)))))
           sources relations))
 
-(defn text-relation-needle-valid? [(relation String) (needle Any)] Bool
+(defn text-relation-needle-valid?! [(relation String) (needle Any)] Bool
   (cond
     [(= relation text-match-relation)
-     (text-index/text-needle-valid? needle)]
+     (text-index/text-needle-valid?! needle)]
     [(or (= relation text-phrase-relation)
          (= relation text-stem-relation))
      (text-search/word-needle-valid? needle)]
@@ -960,10 +995,10 @@
    text-search-relation
    (->VirtualCandidateSource text-search-relation source)})
 
-(defn build-text-candidates-result
+(defn build-text-candidates-result!
   [(propositions (Vec t/Triple))] CandidateSourcesResult
   (let [(result text-search/TextSearchSourceResult)
-        (text-search/build-source-result
+        (text-search/build-source-result!
          propositions text-index/text-index-max-bytes)
         (source text-search/TextSearchSource?) (text-search/source-result-source result)]
     (if (some? source)
@@ -973,10 +1008,10 @@
        (query-evaluation-error-from-text-error
         (text-search/source-result-error result))))))
 
-(defn build-text-candidates-for-attributes-result
+(defn build-text-candidates-for-attributes-result!
   [(propositions (Vec t/Triple)) (attributes (Set Any))] CandidateSourcesResult
   (let [(result text-search/TextSearchSourceResult)
-        (text-search/build-source-for-attributes-result
+        (text-search/build-source-for-attributes-result!
          propositions attributes text-index/text-index-max-bytes)
         (source text-search/TextSearchSource?)
         (text-search/source-result-source result)]
@@ -987,9 +1022,9 @@
        (query-evaluation-error-from-text-error
         (text-search/source-result-error result))))))
 
-(defn build-text-candidates [(propositions (Vec t/Triple))] CandidateSources
+(defn build-text-candidates! [(propositions (Vec t/Triple))] CandidateSources
   (text-candidate-sources
-   (text-search/build-source propositions text-index/text-index-max-bytes)))
+   (text-search/build-source! propositions text-index/text-index-max-bytes)))
 
 (defn- bound-prefix
   [(arguments (Vec QueryTerm)) (order (Vec Int)) (subst Substitution)] (Vec Any)
@@ -1094,20 +1129,21 @@
    (subst Substitution)
    (context QueryEvaluationContext)]
   (Vec Substitution)
-  (let [(events (Vec t/Triple))
+  (let [(events (Vec t/OperationOccurrence))
         (events-after-sequence
          (rot/matching (rotationcandidatesource-rotation rotation)
                        (bound-term-value (nth arguments 0) subst)
                        (bound-term-value (nth arguments 1) subst)
                        (bound-term-value (nth arguments 2) subst))
          (rotationcandidatesource-lower-exclusive rotation))]
-    (loop [(remaining (Vec t/Triple)) events
+    (loop [(remaining (Vec t/OperationOccurrence)) events
            (seen (Set t/Triple)) #{}
            (results (Vec Substitution)) []]
       (if (or (empty? remaining)
               (not (query-evaluation-context-open? context)))
         results
-        (let [(proposition t/Triple) (rot/proposition-of (first remaining))]
+        (let [(proposition t/Triple)
+              (t/operationoccurrence-proposition (first remaining))]
           (if (contains? seen proposition)
             (recur (rest remaining) seen results)
             (let [matched

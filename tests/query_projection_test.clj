@@ -65,7 +65,7 @@
                (map (fn [index] [(message "broadcast-" index)])
                     (remove #{2} (range 6))))))
 
-(def projection (q/project propositions))
+(def projection (q/project! propositions))
 (let [one-shot (q/run! propositions pending-plan)
       projected (q/run-projected! projection pending-plan)]
   (check! "shared projection equals one-shot evaluation"
@@ -94,7 +94,7 @@
 
 (let [small-pages (drain projection 3)
       large-pages (drain projection 50)
-      reversed-pages (drain (q/project (vec (reverse propositions))) 7)]
+      reversed-pages (drain (q/project! (vec (reverse propositions))) 7)]
   (check! "page drains lose and duplicate no rows"
           (and (= expected (set small-pages))
                (= (count small-pages) (count (set small-pages)))))
@@ -159,7 +159,7 @@
       {:find "direct"
        :rules [{:head {:rel "direct" :args [{:var "message"}]}
                 :body [{:rel "triple" :args [{:var "message"} :to recipient]}]}]}
-      compiled (q/compile-query syntax-form)
+      compiled (q/compile-query! syntax-form)
       syntax-result (q/run-syntax! propositions syntax-form)]
   (check! "syntax adapter produces typed QueryPlan"
           (and (q/compile-ok? compiled)

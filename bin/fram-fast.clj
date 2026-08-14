@@ -81,14 +81,14 @@
     (if-let [message (response-error-message response)]
       (do (println (str "REJECTED by server: " message))
           (write-failure-status response))
-      (let [[[input-index changed occurrences]] (mutation-results! response)]
+      (let [[[input-index changed occurrence]] (mutation-results! response)]
         (println
          (str (if changed "committed" "no change")
               " via server (v" (t/rpcresponse-served-version response) "): "
               (render-term subject) " " (render-term predicate) " = "
               (render-term value)
-              " [input " input-index ", occurrences "
-              (count (rt/rpc-list-values! occurrences)) "]"))
+              " [input " input-index ", occurrence "
+              (render-term occurrence) "]"))
         :ok))))
 
 (defn fast-show! [subject]
@@ -166,14 +166,34 @@
       (doseq [triple (rt/rpc-list-values! values)]
         (println (pr-str (term-datum triple)))))))
 
+(defn- print-occurrence! [occurrence]
+  (let [[coordinate action proposition]
+        (rt/rpc-record-fields! occurrence :rpc/occurrence 3)]
+    (println
+     (pr-str {:type :occurrence
+              :coordinate (term-datum coordinate)
+              :action action
+              :proposition (term-datum proposition)}))))
+
 (defn- occurrences! []
-  (let [response (rt/native-call! (server-port) :rpc/occurrences wire/rpc-unit)]
-    (rt/require-native-success! response)
-    (let [[values]
-          (rt/rpc-record-fields! (rt/native-payload response)
-                                 :rpc/occurrences 1)]
-      (doseq [occurrence (rt/rpc-list-values! values)]
-        (println (pr-str (term-datum occurrence)))))))
+  (loop [cursor nil]
+    (let [response
+          (rt/native-call! (server-port) (rt/rpc-space-id) :rpc/occurrences
+                           wire/rpc-unit nil
+                           (wire/rpc-page-request! 200 cursor) nil)
+          _ (rt/require-native-success! response)
+          page (t/rpcresponse-page response)]
+      (when-not page
+        (throw (ex-info "paged occurrences response omitted page metadata"
+                        {:type :rpc-missing-page})))
+      (let [[values]
+            (rt/rpc-record-fields! (rt/native-payload response)
+                                   :rpc/occurrences 1)]
+        (doseq [occurrence (rt/rpc-list-values! values)]
+          (print-occurrence! occurrence)))
+      (if (t/rpcpageresponse-done page)
+        true
+        (recur (t/rpc-page-response-cursor-value page))))))
 
 (defn -main [& args]
   (let [command (first args)]

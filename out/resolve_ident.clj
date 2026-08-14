@@ -33,11 +33,11 @@
 
 (defn graph-ordinals [r] (:ordinals r))
 
-(defn ^Graph graph [store writers]
+(defn ^Graph graph! [store writers]
   (->Graph store (atom (rot/project! store)) writers (atom no-ordinals)))
 
-(defn ^Graph new-graph [^String space-id]
-  (graph (c/new-term-store space-id) {}))
+(defn ^Graph new-graph! [^String space-id]
+  (graph! (c/new-term-store space-id) {}))
 
 (defn store-of [^Graph g]
   (graph-store g))
@@ -58,7 +58,7 @@
   (reset! (graph-view g) rotation)
   g))
 
-(defn ordinal [^Graph g node]
+(defn ordinal! [^Graph g node]
   (let [book (deref (graph-ordinals g))
    hit (get book node)]
   (if (some? hit) hit (let [n (+ 1 (count book))]
@@ -80,7 +80,7 @@
 
 (defn proposition-at [^Graph g occurrence]
   (let [event (rot/event-at (view g) occurrence)]
-  (if (nil? event) nil (rot/proposition-of event))))
+  (if (nil? event) nil (t/operationoccurrence-proposition event))))
 
 (defn subject-at [^Graph g occurrence]
   (let [p (proposition-at g occurrence)]
@@ -115,7 +115,7 @@
   (count (deref (graph-ordinals g))))
 
 (defn withdrawal-count [^Graph g]
-  (count (c/withdrawal-triples (graph-store g))))
+  (count (c/withdrawals (graph-store g))))
 
 (defn open [^Graph g]
   (txn/open (graph-store g)))
@@ -123,7 +123,7 @@
 (defn mint! [^Graph g b]
   (let [node (txn/mint! b)]
   (do
-  (ordinal g node)
+  (ordinal! g node)
   node)))
 
 (defn assert-on! [b subject predicate value]

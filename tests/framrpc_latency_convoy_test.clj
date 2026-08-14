@@ -109,7 +109,7 @@
            false)])])])))
 
 (try
-  (check! "listener starts on FRAMRPC v1"
+  (check! "listener starts on FRAMRPC v2"
           (some? (eventually #(request! port space :rpc/version wire/rpc-unit))))
 
   (doseq [batch (partition-all 100 (range fixture-count))]
@@ -185,7 +185,7 @@
       (with-open [socket (java.net.Socket.)]
         (.connect socket (java.net.InetSocketAddress. "127.0.0.1" (int port)) 1000)
         (let [output (.getOutputStream socket)]
-          (.write output (wire/encode-rpc-frame-v1!
+          (.write output (wire/encode-rpc-frame-v2!
                           (wire/rpc-request-frame
                            900001
                            (wire/rpc-request!

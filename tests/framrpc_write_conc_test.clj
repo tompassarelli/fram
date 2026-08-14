@@ -97,14 +97,12 @@
   (let [code (error-code response)]
     (if code
       {:error code}
-      (let [[[input-index changed occurrences]] (action-results response)
-            coordinates (values-list occurrences)
-            coordinate (first coordinates)]
+      (let [[[input-index changed coordinate]] (action-results response)]
         {:error nil
          :version (t/rpcresponse-served-version response)
          :input-index input-index
          :changed changed
-         :occurrence-count (count coordinates)
+         :occurrence-count 1
          :coordinate? (and coordinate (t/occurrence-coordinate? coordinate))
          :coordinate-version
          (when coordinate (t/triple-t3 (t/triple-t1 coordinate)))
@@ -112,7 +110,7 @@
          :proposition proposition}))))
 
 (try
-  (check! "listener starts on FRAMRPC v1"
+  (check! "listener starts on FRAMRPC v2"
           (some? (eventually #(request! port space :rpc/version wire/rpc-unit))))
 
   ;; ---- A. disjoint subjects: 8 socket writers x 25 sequential writes --------

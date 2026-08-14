@@ -93,15 +93,17 @@
             []))]
     (vec (concat e-root e-pat e-caps e-asof))))
 
-(defn run
+(defn run!
   [(store-atom (Atom t/TermStore)) (root Any) (pattern Any) (opts Any)] Any
   (let [errs (validate root pattern opts)]
     (if (seq errs)
       {:error errs}
       (let [(schema s/Session) (s/session! store-atom)
-            (history (Vec t/Triple)) (c/operation-occurrences store-atom)
-            (live-now (Vec t/Triple)) (c/live-occurrences store-atom)
-            (withdrawals (Vec t/Triple)) (c/withdrawal-triples store-atom)
+            (occurrences (Vec t/OperationOccurrence))
+            (c/occurrences store-atom)
+            (live-now (Vec t/OperationOccurrence))
+            (c/live-occurrences store-atom)
+            (withdrawals (Vec t/Withdrawal)) (c/withdrawals store-atom)
             (asof Int?)
             (let [candidate (get opts :as-of)]
               (if (integer? candidate) candidate nil))
@@ -111,66 +113,67 @@
             (max-nodes Int)
             (clamp (get opts :max-nodes) default-max-nodes)
             (state (Atom Int)) (atom 0)]
-        (letfn [(event-occurrence [(event t/Triple)] t/Triple
-                  (t/triple-t1 event))
-                (event-proposition [(event t/Triple)] t/Triple
-                  (t/triple-t3 event))
-                (event-sequence [(event t/Triple)] Int
+        (letfn [(event-occurrence [(event t/OperationOccurrence)] t/Triple
+                  (t/operationoccurrence-coordinate event))
+                (event-proposition [(event t/OperationOccurrence)] t/Triple
+                  (t/operationoccurrence-proposition event))
+                (event-sequence [(event t/OperationOccurrence)] Int
                   (let [(occurrence t/Triple) (event-occurrence event)
                         (transaction t/Triple) (t/triple-t1 occurrence)]
                     (t/triple-t3 transaction)))
-                (assertion-event? [(event t/Triple)] Bool
-                  (= t/asserts (t/triple-t2 event)))
-                (events-at [(cutoff Int)] (Vec t/Triple)
+                (assertion-event? [(event t/OperationOccurrence)] Bool
+                  (t/assertion-occurrence? event))
+                (events-at [(cutoff Int)] (Vec t/OperationOccurrence)
                   (reduce
                     (fn
-                      [(active (Vec t/Triple)) (event t/Triple)] (Vec t/Triple)
+                      [(active (Vec t/OperationOccurrence))
+                       (event t/OperationOccurrence)]
+                      (Vec t/OperationOccurrence)
                       (if (> (event-sequence event) cutoff)
                         active
                         (if (assertion-event? event)
                           (conj active event)
                           (let [(proposition t/Triple) (event-proposition event)
-                                (target t/Triple?)
+                                (target t/OperationOccurrence?)
                                 (last
                                   (filterv
-                                    (fn [(candidate t/Triple)] Bool
+                                    (fn [(candidate t/OperationOccurrence)] Bool
                                       (= proposition
                                         (event-proposition candidate)))
                                     active))]
                             (if (nil? target)
                               active
                               (filterv
-                                (fn [(candidate t/Triple)] Bool
+                                (fn [(candidate t/OperationOccurrence)] Bool
                                   (not= (event-occurrence target)
                                     (event-occurrence candidate)))
                                 active))))))
                     []
-                    history))
-                (snapshot-events [] (Vec t/Triple)
+                    occurrences))
+                (snapshot-events [] (Vec t/OperationOccurrence)
                   (if (some? asof) (events-at asof) live-now))
-                (live-event? [(event t/Triple)] Bool
+                (live-event? [(event t/OperationOccurrence)] Bool
                   (boolean
                     (some
-                      (fn [(candidate t/Triple)] Bool
+                      (fn [(candidate t/OperationOccurrence)] Bool
                         (= (event-occurrence event)
                           (event-occurrence candidate)))
                       live-now)))
-                (withdrawal-for [(occurrence t/Triple)] t/Triple?
-                  (let [(withdrawal t/Triple?)
+                (withdrawal-for [(occurrence t/Triple)] t/Withdrawal?
+                  (let [(withdrawal t/Withdrawal?)
                         (first
                           (filterv
-                            (fn [(candidate t/Triple)] Bool
-                              (and (= t/withdraws
-                                     (t/triple-t2 candidate))
-                                (= occurrence
-                                  (t/triple-t3 candidate))))
+                            (fn [(candidate t/Withdrawal)] Bool
+                              (= occurrence
+                                (t/operationoccurrence-coordinate
+                                  (t/withdrawal-assertion candidate))))
                             withdrawals))]
                     withdrawal))
                 (metadata-value [(owner Any) (predicate Keyword)] Any
-                  (let [(event t/Triple?)
+                  (let [(event t/OperationOccurrence?)
                         (last
                           (filterv
-                            (fn [(candidate t/Triple)] Bool
+                            (fn [(candidate t/OperationOccurrence)] Bool
                               (if-not (assertion-event? candidate)
                                 false
                                 (let [(proposition t/Triple)
@@ -196,22 +199,23 @@
                   (s/resolve-predicate schema p))
                 (nm-of [(term Any)] Any
                   (or (s/name-of schema term) term))
-                (fwd-events [(left Any) (predicate Any)] (Vec t/Triple)
-                  (let [(candidates (Vec t/Triple))
+                (fwd-events
+                  [(left Any) (predicate Any)] (Vec t/OperationOccurrence)
+                  (let [(candidates (Vec t/OperationOccurrence))
                         (cond
                           (some? asof) (snapshot-events)
                           prov?
                           (filterv
-                            (fn [(event t/Triple)] Bool
+                            (fn [(event t/OperationOccurrence)] Bool
                               (and (assertion-event? event)
                                 (or (live-event? event)
                                   (some?
                                     (withdrawal-for
                                       (event-occurrence event))))))
-                            history)
+                            occurrences)
                           :else live-now)]
                     (filterv
-                      (fn [(event t/Triple)] Bool
+                      (fn [(event t/OperationOccurrence)] Bool
                         (if-not (assertion-event? event)
                           false
                           (let [(proposition t/Triple)
@@ -220,9 +224,10 @@
                               (= predicate
                                 (t/triple-t2 proposition))))))
                       candidates)))
-                (rev-events [(predicate Any) (right Any)] (Vec t/Triple)
+                (rev-events
+                  [(predicate Any) (right Any)] (Vec t/OperationOccurrence)
                   (filterv
-                    (fn [(event t/Triple)] Bool
+                    (fn [(event t/OperationOccurrence)] Bool
                       (if-not (assertion-event? event)
                         false
                         (let [(proposition t/Triple)
@@ -231,14 +236,14 @@
                                  (t/triple-t2 proposition))
                             (= right (t/triple-t3 proposition))))))
                     (snapshot-events)))
-                (subject-events [(left Any)] (Vec t/Triple)
+                (subject-events [(left Any)] (Vec t/OperationOccurrence)
                   (filterv
-                    (fn [(event t/Triple)] Bool
+                    (fn [(event t/OperationOccurrence)] Bool
                       (and (assertion-event? event)
                         (= left
                           (t/triple-t1 (event-proposition event)))))
                     (snapshot-events)))
-                (leaf [(predicate Any) (event t/Triple)] Any
+                (leaf [(predicate Any) (event t/OperationOccurrence)] Any
                   (let [(proposition t/Triple) (event-proposition event)
                         (right Any) (t/triple-t3 proposition)
                         (value Any)
@@ -250,7 +255,7 @@
                     (if-not prov?
                       value
                       (let [(occurrence t/Triple) (event-occurrence event)
-                            (withdrawal t/Triple?)
+                            (withdrawal t/Withdrawal?)
                             (if (some? asof)
                               nil
                               (withdrawal-for occurrence))
@@ -267,17 +272,18 @@
                         (if (nil? withdrawal)
                           base
                           (let [(retraction t/Triple)
-                                (t/triple-t1 withdrawal)]
+                                (t/operationoccurrence-coordinate
+                                  (t/withdrawal-retraction withdrawal))]
                             (assoc base
                               :withdrawn_by (agent-of retraction)
                               :withdrawn_at retraction)))))))
                 (values [(pname String) (predicate Any) (left Any)] Any
-                  (let [(events (Vec t/Triple))
+                  (let [(events (Vec t/OperationOccurrence))
                         (fwd-events left predicate)]
                     (when (seq events)
                       (let [(rendered (Vec Any))
                             (mapv
-                              (fn [(event t/Triple)] Any
+                              (fn [(event t/OperationOccurrence)] Any
                                 (leaf predicate event))
                               events)]
                         (if (= "single" (s/cardinality schema pname))
@@ -324,7 +330,7 @@
                       acc
                       (distinct
                         (mapv
-                          (fn [(event t/Triple)] Any
+                          (fn [(event t/OperationOccurrence)] Any
                             (t/triple-t2 (event-proposition event)))
                           (subject-events left))))
 
@@ -335,7 +341,7 @@
                         acc
                         (let [(subjects (Vec Any))
                               (mapv
-                                (fn [(event t/Triple)] Any
+                                (fn [(event t/OperationOccurrence)] Any
                                   (t/triple-t1
                                     (event-proposition event)))
                                 (rev-events predicate left))]
@@ -365,7 +371,7 @@
                                 result
                                 (let [(subjects (Vec Any))
                                       (mapv
-                                        (fn [(event t/Triple)] Any
+                                        (fn [(event t/OperationOccurrence)] Any
                                           (t/triple-t1
                                             (event-proposition event)))
                                         (rev-events predicate left))]
@@ -381,7 +387,7 @@
                                 result
                                 (let [(rendered (Vec Any))
                                       (mapv
-                                        (fn [(event t/Triple)] Any
+                                        (fn [(event t/OperationOccurrence)] Any
                                           (let [(right Any)
                                                 (t/triple-t3
                                                   (event-proposition event))

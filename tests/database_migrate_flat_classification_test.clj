@@ -31,8 +31,8 @@
    {:tx 4 :op "assert" :l "Alice" :p "mail" :r "second@example.com"}
    {:tx 4 :op "assert" :l "Alice" :p "tag" :r "red"}
    {:tx 5 :op "assert" :l "Alice" :p "tag" :r "blue"}
-   ;; A single-valued retract may carry a different spelling/value. Its explicit
-   ;; occurrence relation, not proposition equality, preserves the legacy fold.
+   ;; A single-valued retract may carry a different spelling/value. Migration
+   ;; resolves it to the active proposition before writing the physical retract.
    {:tx 6 :op "retract" :l "Alice" :p "email" :r "ignored-value"}])
 
 (spit legacy-source (str (str/join "\n" (map pr-str rows)) "\n"))
@@ -52,16 +52,20 @@
            (count
             (filter #(= :kernel/supersedes (t/triple-t2 %))
                     (database/supersession-triples runtime)))))
-(check! "alias-spelled retract is recorded as an exact withdrawal relation"
-        (some #(= :kernel/withdraws (t/triple-t2 %))
-              (database/withdrawal-triples runtime)))
+(check! "alias-spelled retract is recorded as an exact withdrawal"
+        (some #(= (t/operationoccurrence-proposition
+                   (t/withdrawal-retraction %))
+                  (t/operationoccurrence-proposition
+                   (t/withdrawal-assertion %)))
+              (database/withdrawals runtime)))
 (check! "explicit multi cardinality preserves distinct proposition values"
         (and (contains? live (t/triple "Alice" "tag" "red"))
              (contains? live (t/triple "Alice" "tag" "blue"))))
-(check! "classification metadata itself remains ordinary Triple history"
+(check! "classification metadata stays semantic while history stays structural"
         (and (contains? live (t/triple "@contact" "predicate_name" "email"))
              (contains? live (t/triple "@contact" "predicate_alias" "mail"))
-             (every? t/triple? (database/history runtime))))
+             (every? t/operation-occurrence? (database/occurrences runtime))
+             (every? t/withdrawal? (database/withdrawals runtime))))
 
 (def collision-source (java.io.File. scratch "collision.log"))
 (def collision-target (java.io.File. scratch "collision.framlog"))

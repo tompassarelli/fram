@@ -1,7 +1,7 @@
 #lang beagle
 ;; The portable store ABI deliberately uses only records and homogeneous
 ;; vectors. Semantic values are recursive Terms; transaction history is kept
-;; in private physical rows and projected back to ordinary Triples.
+;; in private physical rows and exposed through non-Term system records.
 (ns fram.types)
 (define-mode strict)
 (require fram.slots :as slots)
@@ -51,7 +51,7 @@
    (page RpcPageResponse?)
    (error RpcError?)
    (payload Term?)])
-(defrecord RpcFrameV1
+(defrecord RpcFrameV2
   [(kind Keyword)
    (flags Int)
    (request-id Int)
@@ -68,7 +68,7 @@
 (defn rpc-error? [(v Any)] Bool (instance? RpcError v))
 (defn rpc-request? [(v Any)] Bool (instance? RpcRequest v))
 (defn rpc-response? [(v Any)] Bool (instance? RpcResponse v))
-(defn rpc-frame-v1? [(v Any)] Bool (instance? RpcFrameV1 v))
+(defn rpc-frame-v2? [(v Any)] Bool (instance? RpcFrameV2 v))
 
 ;; These bridges preserve the closed Term fields while working around Beagle's
 ;; current inability to pass a recursive Dyn through a module boundary.
@@ -102,6 +102,13 @@
 (defrecord ActiveBucket [(triple-handle Int) (positions (Vec Int))])
 (defrecord CommitOperation [(action Keyword) (proposition Triple)])
 (defrecord TransactionFrame [(sequence Int) (operations (Vec CommitOperation))])
+;; An operation occurrence records an assertion or retraction of proposition
+;; content. Keeping it outside Term prevents system history from masquerading
+;; as an ordinary semantic Triple.
+(defrecord OperationOccurrence
+  [(coordinate Triple) (action Keyword) (proposition Triple)])
+(defrecord Withdrawal
+  [(retraction OperationOccurrence) (assertion OperationOccurrence)])
 ;; While fold-open, active-cells carries every bucket's positions and the
 ;; ActiveBucket rows carry only their handle.
 ;; Every mutable field is a cell, so the record itself is written once and no
@@ -133,12 +140,11 @@
 (defn commit-operation? [(v Any)] Bool (instance? CommitOperation v))
 (defn transaction-frame? [(v Any)] Bool (instance? TransactionFrame v))
 (defn term-store-dump? [(v Any)] Bool (instance? TermStoreDump v))
+(defn operation-occurrence? [(v Any)] Bool (instance? OperationOccurrence v))
+(defn withdrawal? [(v Any)] Bool (instance? Withdrawal v))
 
 (def tx-sequence Keyword :kernel/tx-sequence)
 (def op-ordinal Keyword :kernel/op-ordinal)
-(def asserts Keyword :kernel/asserts)
-(def retracts Keyword :kernel/retracts)
-(def withdraws Keyword :kernel/withdraws)
 (def recorded-at-predicate Keyword :kernel/recorded-at)
 (def assert-action Keyword :assert)
 (def retract-action Keyword :retract)
@@ -189,24 +195,6 @@
                  (and (integer? (triple-t3 v))
                       (>= (triple-t3 v) 0))))))
 
-(defn assertion-occurrence [(occurrence Triple) (proposition Triple)] Triple
-  (if (and (occurrence-coordinate? occurrence) (triple? proposition))
-    (triple occurrence asserts proposition)
-    (throw (ex-info "fram: assertion requires an occurrence coordinate"
-                    {:type :invalid-assertion-occurrence}))))
-
-(defn retraction-occurrence [(occurrence Triple) (proposition Triple)] Triple
-  (if (and (occurrence-coordinate? occurrence) (triple? proposition))
-    (triple occurrence retracts proposition)
-    (throw (ex-info "fram: retraction requires an occurrence coordinate"
-                    {:type :invalid-retraction-occurrence}))))
-
-(defn withdrawal [(retraction Triple) (target Triple)] Triple
-  (if (and (occurrence-coordinate? retraction) (occurrence-coordinate? target))
-    (triple retraction withdraws target)
-    (throw (ex-info "fram: withdrawal requires retraction and target occurrence coordinates"
-                    {:type :invalid-withdrawal}))))
-
 (defn recorded-at [(source Triple) (at Instant)] Triple
   (if (and (triple? source) (instant? at))
     (triple source recorded-at-predicate at)
@@ -230,3 +218,53 @@
                         {:type :incomparable-occurrence-spaces}))))
     (throw (ex-info "fram: occurrence ordering requires occurrence coordinates"
                     {:type :invalid-occurrence-order}))))
+
+(defn operation-occurrence
+  [(coordinate Triple)
+   (action Keyword)
+   (proposition Triple)]
+  OperationOccurrence
+  (if (and (occurrence-coordinate? coordinate)
+           (and (or (= assert-action action) (= retract-action action))
+                (and (triple? proposition) (term? proposition))))
+    (->OperationOccurrence coordinate action proposition)
+    (throw (ex-info "fram: operation occurrence requires a coordinate, action, and Triple proposition"
+                    {:type :invalid-operation-occurrence}))))
+
+(defn assertion-occurrence? [(value Any)] Bool
+  (and (operation-occurrence? value)
+       (and (occurrence-coordinate?
+             (operationoccurrence-coordinate value))
+            (and (= assert-action (operationoccurrence-action value))
+                 (and (triple? (operationoccurrence-proposition value))
+                      (term? (operationoccurrence-proposition value)))))))
+
+(defn retraction-occurrence? [(value Any)] Bool
+  (and (operation-occurrence? value)
+       (and (occurrence-coordinate?
+             (operationoccurrence-coordinate value))
+            (and (= retract-action (operationoccurrence-action value))
+                 (and (triple? (operationoccurrence-proposition value))
+                      (term? (operationoccurrence-proposition value)))))))
+
+(defn withdrawal
+  [(retraction OperationOccurrence) (assertion OperationOccurrence)] Withdrawal
+  (let [(retraction-coordinate Triple)
+        (operationoccurrence-coordinate retraction)
+        (assertion-coordinate Triple)
+        (operationoccurrence-coordinate assertion)]
+    (if (and (retraction-occurrence? retraction)
+             (assertion-occurrence? assertion))
+      (let [(retraction-transaction Triple) (triple-t1 retraction-coordinate)
+            (assertion-transaction Triple) (triple-t1 assertion-coordinate)]
+        (if (and (= (operationoccurrence-proposition retraction)
+                    (operationoccurrence-proposition assertion))
+                 (and (= (triple-t1 retraction-transaction)
+                         (triple-t1 assertion-transaction))
+                      (occurrence-before? assertion-coordinate
+                                          retraction-coordinate)))
+          (->Withdrawal retraction assertion)
+          (throw (ex-info "fram: withdrawal requires a later retraction of the same asserted proposition"
+                          {:type :invalid-withdrawal}))))
+      (throw (ex-info "fram: withdrawal requires a later retraction of the same asserted proposition"
+                      {:type :invalid-withdrawal})))))

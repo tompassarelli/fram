@@ -646,7 +646,8 @@
                          (assoc active handle (pop positions))
                          (conj (assoc live target false) false)))))))))))
 
-(defn- occurrence-event [(dump t/TermStoreDump) (position Int)] t/Triple
+(defn- occurrence-event
+  [(dump t/TermStoreDump) (position Int)] t/OperationOccurrence
   (let [(row t/OperationRow) (nth (t/termstoredump-operations dump) position)
         (transaction t/Triple)
         (t/transaction-coordinate (t/termstoredump-space-id dump)
@@ -655,9 +656,8 @@
         (t/occurrence-coordinate transaction (t/operationrow-ordinal row))
         (proposition Any)
         (resolve-handle dump (t/operationrow-triple-handle row))]
-    (if (= t/assert-action (t/operationrow-action row))
-      (t/assertion-occurrence occurrence proposition)
-      (t/retraction-occurrence occurrence proposition))))
+    (t/operation-occurrence
+     occurrence (t/operationrow-action row) proposition)))
 
 (defn close-fri! [(image Any)] Nil nil)
 (defn restore-store! [(image Any) (target Any)] Any
@@ -672,10 +672,10 @@
   (store/transaction-count (cacheimage-store image)))
 (defn operation-count [(image Any)] Int
   (store/operation-count (cacheimage-store image)))
-(defn semantic-history [(image Any)] Any
-  (store/semantic-history (cacheimage-store image)))
-(defn operation-occurrences [(image Any)] Any
-  (store/operation-occurrences (cacheimage-store image)))
+(defn occurrences [(image Any)] Any
+  (store/occurrences (cacheimage-store image)))
+(defn withdrawals [(image Any)] Any
+  (store/withdrawals (cacheimage-store image)))
 (defn live-occurrences [(image Any)] Any
   (store/live-occurrences (cacheimage-store image)))
 (defn live-propositions [(image Any)] Any
@@ -691,7 +691,8 @@
   (index-matches image 5 [t1 t3]))
 (defn live-occurrences-as-of [(image Any) (sequence Int)] Any
   (let [(dump t/TermStoreDump) (cacheimage-dump image)]
-    (mapv (fn [(position Int)] t/Triple (occurrence-event dump position))
+    (mapv (fn [(position Int)] t/OperationOccurrence
+            (occurrence-event dump position))
           (live-positions-as-of image sequence))))
 (defn live-propositions-as-of [(image Any) (sequence Int)] Any
   (let [(dump t/TermStoreDump) (cacheimage-dump image)]

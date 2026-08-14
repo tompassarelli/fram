@@ -36,7 +36,7 @@ The measured scenarios are:
 
 The Fram adapter seeds a scratch FRAMLOG through the current server engine, then
 times FRAMLOG replay plus the first successful `rpc/status` request over a real
-loopback FRAMRPC v1 socket. It loads the server in the benchmark JVM and binds
+loopback FRAMRPC v2 socket. It loads the server in the benchmark JVM and binds
 the listener between those two timed steps, so JVM startup and TCP bind remain
 outside `boot-to-serving-ms`; steady reads and writes do cross the socket and
 use the production binary protocol. SQLite uses Python's standard `sqlite3`

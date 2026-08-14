@@ -9,7 +9,7 @@
 (require fram.rt :as rt)
 
 (declare-extern fram.rt/native-request-to!
-  [String Int t/RpcRequest -> t/RpcResponse])
+  (Fn [String Int t/RpcRequest] t/RpcResponse))
 
 (defrecord ProviderDescriptor
   [(identity t/Triple)
@@ -265,7 +265,7 @@
    (capability-value t/Triple)
    (space String)
    (plan ProviderPlan)
-   (executor [t/RpcRequest -> t/RpcResponse])]
+   (executor (Fn [t/RpcRequest] t/RpcResponse))]
   ProviderInvocation
   (let [(boot ProviderBoot) (boot-providers descriptors enabled) (descriptor-value ProviderDescriptor) (provider-for boot capability-value)]
     (cond

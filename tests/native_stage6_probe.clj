@@ -1,6 +1,7 @@
 #!/usr/bin/env bb
 (require '[clojure.java.io :as io]
          '[clojure.string :as str]
+         '[framrpc :as wire]
          '[fram.store :as store]
          '[fram.types :as t]
          '[fri-port])
@@ -40,10 +41,23 @@
       (fail! "operation corpus row is not a Triple" {:encoded encoded}))))
 
 (defn projections [ctx]
-  {:history (store/semantic-history ctx)
+  {:occurrences (store/occurrences ctx)
+   :withdrawals (store/withdrawals ctx)
    :live-occurrences (store/live-occurrences ctx)
    :live-propositions (store/live-propositions ctx)
    :dump (store/dump-term-store ctx)})
+
+(defn occurrence-term [occurrence]
+  (wire/rpc-occurrence!
+   (t/operationoccurrence-coordinate occurrence)
+   (t/operationoccurrence-action occurrence)
+   (t/operationoccurrence-proposition occurrence)))
+
+(defn withdrawal-term [withdrawal]
+  (wire/rpc-record!
+   :rpc/withdrawal
+   [(t/operationoccurrence-coordinate (t/withdrawal-retraction withdrawal))
+    (t/operationoccurrence-coordinate (t/withdrawal-assertion withdrawal))]))
 
 (defn reload! [ctx]
   (let [before (projections @ctx)
@@ -135,8 +149,12 @@
         channels (projections ctx)
         artifacts
         (merge
-         {:history.hex (term-lines (:history channels))
-          :live-occurrences.hex (term-lines (:live-occurrences channels))
+         {:history.hex
+          (term-lines
+           (into (mapv occurrence-term (:occurrences channels))
+                 (map withdrawal-term (:withdrawals channels))))
+          :live-occurrences.hex
+          (term-lines (mapv occurrence-term (:live-occurrences channels)))
           :live-propositions.hex (term-lines (:live-propositions channels))
           :term-store-dump.bin (encode-dump (:dump channels))}
          (rejection-channels lines))

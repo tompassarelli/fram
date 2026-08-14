@@ -89,9 +89,8 @@
    (reverse values)))
 
 (defn rpc-action-result
-  [(input-index Int) (changed Bool) (occurrences (Vec t/Triple))] t/Triple
-  (rpc-record :rpc/action-result
-              [input-index changed (rpc-triple-list occurrences)]))
+  [(input-index Int) (changed Bool) (occurrence t/Triple)] t/Triple
+  (rpc-record :rpc/action-result [input-index changed occurrence]))
 
 (defn rpc-mutation-result [(results (Vec t/Triple))] t/Triple
   (rpc-record :rpc/mutation-result [(rpc-triple-list results)]))
@@ -223,14 +222,14 @@
   (let [(t1 OptionResult) (patternresult-t1 pattern)
         (t2 OptionResult) (patternresult-t2 pattern)
         (t3 OptionResult) (patternresult-t3 pattern)
-        (events (Vec t/Triple))
+        (events (Vec t/OperationOccurrence))
         (rot/matching
          rotation
          (if (optionresult-present t1) (optionresult-value t1) nil)
          (if (optionresult-present t2) (optionresult-value t2) nil)
          (if (optionresult-present t3) (optionresult-value t3) nil))]
     (mapv
-     (fn [(event t/Triple)] t/Triple (rot/proposition-of event))
+     (fn [(event t/OperationOccurrence)] t/Triple (rot/proposition-of event))
      events)))
 
 (defn scan-cursor
@@ -419,7 +418,7 @@
   (cond
     [(empty? values)
      (actions-error :rpc-invalid-action "batch requires at least one action")]
-    [(> (count values) limits/rpc-v1-max-batch-actions)
+    [(> (count values) limits/rpc-v2-max-batch-actions)
      (actions-error
       :term-depth-exceeded
       "batch action count exceeds the TermCodecV1 depth bound")]
@@ -497,9 +496,7 @@
               (recur
                (vec (rest remaining))
                (removal-values removed)
-               (if (removal-changed removed)
-                 (conj operations (store/retract-operation proposition))
-                 operations)
+               (conj operations (store/retract-operation proposition))
                (conj decisions
                      (->Decision (action-index action)
                                  (removal-changed removed)))))))))))
@@ -534,8 +531,8 @@
       (if (integer? sequence) sequence 0))
     0))
 
-(defn lease-event? [(event t/Triple)] Bool
-  (let [proposition (t/triple-t3 event)]
+(defn lease-event? [(event t/OperationOccurrence)] Bool
+  (let [proposition (t/operationoccurrence-proposition event)]
     (and (t/triple? proposition)
          (let [value (t/triple-t3 proposition)]
            (and (= :kernel/lease (t/triple-t2 proposition))
@@ -545,15 +542,16 @@
 
 (defn current-lease [(root (Atom t/TermStore)) (resource Any)] LeaseState
   (reduce
-   (fn [(known LeaseState) (event t/Triple)] LeaseState
+   (fn [(known LeaseState) (event t/OperationOccurrence)] LeaseState
      (if (lease-event? event)
-       (let [(proposition t/Triple) (t/triple-t3 event)
+       (let [(proposition t/Triple) (t/operationoccurrence-proposition event)
              (value t/Triple) (t/triple-t3 proposition)]
          (if (= resource (t/triple-t1 proposition))
            (->LeaseState true
                          (t/triple-t1 value)
                          (t/triple-t3 value)
-                         (occurrence-sequence (t/triple-t1 event)))
+                         (occurrence-sequence
+                          (t/operationoccurrence-coordinate event)))
            known))
        known))
    (->LeaseState false nil 0 0)
@@ -572,29 +570,32 @@
 
 (defn mutation-results
   [(transaction t/Triple?) (decisions (Vec Decision))] t/Triple
-  (let [(results (Vec t/Triple))
-        (loop [(remaining (Vec Decision)) decisions (ordinal Int) 0 (values (Vec t/Triple)) []]
-          (if (empty? remaining)
-            values
-            (let [(decision Decision) (first remaining)
-                  (changed Bool) (decision-changed decision)]
-              (recur
-               (vec (rest remaining))
-               (if changed (inc ordinal) ordinal)
-               (conj
-                values
-                (rpc-action-result
-                 (decision-index decision)
-                 changed
-                 (if (and changed transaction)
-                   [(t/occurrence-coordinate transaction ordinal)]
-                   [])))))))]
-    (rpc-mutation-result results)))
+  (if transaction
+    (let [(present-transaction t/Triple) transaction
+          (results (Vec t/Triple))
+          (loop [(remaining (Vec Decision)) decisions
+                 (ordinal Int) 0
+                 (values (Vec t/Triple)) []]
+            (if (empty? remaining)
+              values
+              (let [(decision Decision) (first remaining)]
+                (recur
+                 (vec (rest remaining))
+                 (inc ordinal)
+                 (conj
+                  values
+                  (rpc-action-result
+                   (decision-index decision)
+                   (decision-changed decision)
+                   (t/occurrence-coordinate present-transaction ordinal)))))))]
+      (rpc-mutation-result results))
+    (throw (ex-info "mutation receipt requires a transaction coordinate"
+                    {:type :rpc-invalid-mutation-receipt}))))
 
 (defn mutation-response-encode-error! [(candidate t/RpcResponse)] String?
   (let [encoded
         (native-wire/encode-response-bytes!
-         (t/->RpcFrameV1 :response 0 0 nil candidate))]
+         (t/->RpcFrameV2 :response 0 0 nil candidate))]
     (native-wire/encoderesult-error encoded)))
 
 (defn commit-mutation!
@@ -631,7 +632,7 @@
           (error-response
            request served-version
            (native-wire/response-encode-error-code encode-error) false
-           "mutation response exceeds FRAMRPC v1 encode limits")
+           "mutation response exceeds FRAMRPC v2 encode limits")
           (if changed
             (do
               (store/commit-transaction! root operations)

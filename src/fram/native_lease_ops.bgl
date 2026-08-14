@@ -95,7 +95,7 @@
 (defn response-encode-error! [(candidate t/RpcResponse)] String?
   (let [encoded
         (native-wire/encode-response-bytes!
-         (t/->RpcFrameV1 :response 0 0 nil candidate))]
+         (t/->RpcFrameV2 :response 0 0 nil candidate))]
     (native-wire/encoderesult-error encoded)))
 
 (defn response-preflight-error
@@ -106,7 +106,7 @@
   (error-response
    request served-version
    (native-wire/response-encode-error-code encode-error) false
-   "lease response exceeds FRAMRPC v1 encode limits"))
+   "lease response exceeds FRAMRPC v2 encode limits"))
 
 (defn expected-version-matches?
   [(served-version Int) (expected-version Int?)] Bool
@@ -153,7 +153,7 @@
           (->FenceResult false nil nil nil
                          "lease fence requires Term resource/holder and an integer epoch"))))))
 
-(defn lease-state [(event t/Triple)] LeaseState?
+(defn lease-state [(event t/OperationOccurrence)] LeaseState?
   (let [(proposition t/Triple) (rot/proposition-of event)
         (value Any) (t/triple-t3 proposition)
         (occurrence t/Triple) (rot/occurrence-of event)]
@@ -175,7 +175,7 @@
       nil)))
 
 (defn current-lease [(session schema/Session) (resource Any)] LeaseState?
-  (loop [(remaining (Vec t/Triple))
+  (loop [(remaining (Vec t/OperationOccurrence))
          (rot/by-t12 (schema/view session) resource :kernel/lease)
          (current LeaseState?) nil]
     (if (empty? remaining)

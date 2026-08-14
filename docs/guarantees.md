@@ -1,6 +1,6 @@
 # Guarantees
 
-This document is the current source-head guarantee, concurrency, workload, and client-obligation contract, with every claim bound to a named gate or explicit gap.
+This document is the current source-head guarantee, concurrency, workload, and client-obligation contract, with every statement bound to a named gate or explicit gap.
 
 A guarantee enters this contract only with its gate named. Removing or
 excluding a gate removes the guarantee. A failure observed in production must
@@ -21,8 +21,10 @@ Vocabulary:
 
 ## Surface binding
 
-Every guarantee below binds to the occurrence-native server, binary FRAMLOG,
-and FRAMRPC v1 in this source tree.
+Unless a row explicitly names the retained JVM route or a storage regime, every
+guarantee below binds to the occurrence-native server, binary FRAMLOG, and exact
+FRAMRPC v2 wire version 2.0 in this source tree. A mismatch in either the major
+or minor wire version is rejected rather than negotiated.
 
 ## Durability
 
@@ -71,9 +73,9 @@ detected loudly (D5) but is not repairable by truncation the way a torn tail is
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
 | I1 | One active writer per `SpaceId`; its singleton FIFO commit sequencer orders every mutation, while readers take only immutable published snapshots. Under POSIX storage the engine enforces this with a `flock` on the log and fails a second server closed; under a host storage table the exclusivity is the embedder's grant and the engine cannot check it | BACKED for the POSIX regime | [`../tests/writer_authority_test.clj`](../tests/writer_authority_test.clj), [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj); the host-storage clause is an obligation, not a guarantee — see [isolation and deployment](isolation-and-deployment.md#deployment-shapes) |
-| I2 | OCC: a stale or future `expected-version` returns `:rpc/conflict` without moving the version | BACKED | `native_rpc_server_test.clj`; race shape in `database_test.clj` (24 racers → exactly 1 ok) |
+| I2 | OCC: every one of the 13 data operations accepts and enforces `expected-version`; a stale or future value returns `:rpc/conflict` before operation-specific handling and without moving the version | PARTIAL | [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) is a JVM-listener gate for the stale-mutation case; `database_test.clj` covers the mutation race shape (24 racers → exactly 1 ok). The native dispatcher performs the check before its operation split, but all 13 operations are not exercised individually |
 | I3 | K concurrent socket writers: every acked proposition is durable exactly once, per-writer issue order is preserved, tx-sequence strictly rises, each ack's version equals its frame's tx-seq, and the published root contains that transaction before its ack | BACKED | [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) — 8 writers × 25 + 80 OCC racers, durable-frame/barrier/publication verification |
-| I4 | Reads do not convoy writes: validate is a non-convoying read; during a 2 s slow query or validate, a lone write acks ≤ 250 ms and ten concurrent writes ack ≤ 1 s (mutations share cohort barriers — see capacity notes) | BACKED | [`../tests/framrpc_latency_convoy_test.clj`](../tests/framrpc_latency_convoy_test.clj) — injected-delay convoy + disconnect-cancels-work |
+| I4 | **JVM route only:** reads do not convoy writes; validate is a non-convoying read, and during a 2 s slow query or validate a lone write acks ≤ 250 ms and ten concurrent writes ack ≤ 1 s (mutations share cohort barriers — see capacity notes). Native production makes no such guarantee: its `dispatch_mutex` serializes the dispatch of every complete request | BACKED for the JVM route | [`../tests/framrpc_latency_convoy_test.clj`](../tests/framrpc_latency_convoy_test.clj) — JVM injected-delay convoy + disconnect-cancels-work; there is no native non-convoy gate |
 
 ## Ordering and recovery
 
@@ -89,9 +91,10 @@ detected loudly (D5) but is not repairable by truncation the way a torn tail is
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
-| N1 | Closed 13-operation FRAMRPC v1 data surface — plus one fixed `rpc/checkpoint` native operator capability that is absent from `framClient` and cannot select another operation; unknown tags, fields, or trailing bytes are rejected; EDN is refused on the wire | BACKED | [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj), `native_rpc_server_test.clj`, [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj), [`../tests/fram_backup_restore_test.sh`](../tests/fram_backup_restore_test.sh) |
-| N2 | Limits: body ≤ 1,048,576 B; frame ≤ 1,048,602 B; string ≤ 1 MiB; term nodes ≤ 65,536; depth ≤ 256 | PARTIAL | [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj) gates the JVM encode/decode boundaries; native lp64/wasm32 mutation gates cover response body size and depth, while direct native encode-side string and node at-limit/one-over cases remain ungated |
-| N3 | `:rpc/scan`, `:rpc/query`, and `:rpc/occurrences` accept the same page cursor. List bounds derive from the TermCodecV1 depth budget of 256: a request list is capped at **250** values (less a six-deep request envelope), an unpaged reply at **248** rows (less an eight-deep response envelope), and a mutation batch at **247** actions (less a nine-deep receipt envelope). Depth violations refuse typed `:term-depth-exceeded`. Before a write, batch, or successful lease acquire, renew, or release commits, the runtime constructs and encodes its exact predicted response using the real SpaceId, operation, served version, occurrence coordinates or lease epoch, and the lease operation's frozen expiry. A response that exceeds the wire byte budget refuses typed `:rpc-frame-too-large` without advancing version or state. Paging is the escape for reads and answers the same relation. The cliff binds every response, so the contract's 4096-row page ceiling is unusable; keep pages well under 248 rows | BACKED | [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) pins paged reassembly, cursor pinning, bounded unpaged fold, depth rejection, and byte-size rejection with unchanged version and state; [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh) proves the same mutation atomicity across native lp64 and wasm32 |
+| N1 | Exact FRAMRPC wire 2.0 exposes 13 data operations plus the separate fixed native `rpc/checkpoint` operator; the data client cannot select that operator. A major or minor version mismatch, unknown tag or field, or trailing byte is rejected, and EDN is refused. The JVM codec models request, response, cancel, and event frames. A cancel retains the 26-byte header and request id and has a zero-byte body. The native decoder accepts request frames only and its encoder emits response frames only, so identical-host-codec guarantees do not extend beyond that directional surface | BACKED | [`../tests/fram_rpc_v2_test.clj`](../tests/fram_rpc_v2_test.clj) gates the four JVM frame records and empty cancel; [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj) gates the 13-operation boundary; [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh) gates native request/response parity; [`../tests/fram_backup_restore_test.sh`](../tests/fram_backup_restore_test.sh) exercises the fixed checkpoint operator |
+| N2 | Limits: header = 26 B; body ≤ 1,048,576 B; frame ≤ 1,048,602 B; SpaceId ≤ 4,096 UTF-8 bytes; string ≤ 1 MiB; term nodes ≤ 65,536; depth ≤ 256 | PARTIAL | [`../tests/fram_rpc_v2_test.clj`](../tests/fram_rpc_v2_test.clj) gates the JVM encode/decode boundaries, including cancel/header, body, physical frame, and SpaceId limits; native lp64/wasm32 mutation gates cover response body size and depth, while direct native encode-side string and node at-limit/one-over cases remain ungated |
+| N3 | Paging behavior is operation- and route-specific. On native, an unpaged query over 248 rows refuses typed `:term-depth-exceeded`; scan has a 200-row/page maximum, refuses a larger unpaged result with `:rpc/native-page-required`, and uses its own `:rpc/native-scan-cursor`; unpaged `rpc/occurrences` silently returns only the first 248 rows. Clients therefore paginate every nontrivial read and never treat an unpaged occurrence result as complete. Recursive list bounds still cap a request list at 250 values and a mutation batch at 247 actions. Before a write, batch, or successful lease acquire, renew, or release commits, the runtime encodes its exact predicted response; a depth or byte-budget failure refuses without advancing version or state | PARTIAL | [`../tests/native_rpc_server_test.clj`](../tests/native_rpc_server_test.clj) is a **JVM-route** gate for paged reassembly, cursor pinning, and its own unpaged depth refusals; it is not native evidence. [`../tests/fram_wasm_embed_smoke.sh`](../tests/fram_wasm_embed_smoke.sh) gates the native lp64/wasm32 query boundary at 248/249 rows, paged query escape, and mutation atomicity. Native scan's 200-row refusal/cursor and unpaged-occurrence truncation remain source-backed but not directly gated |
+| N4 | Target contract: Float Atom identity is its kind plus canonical payload, matching the FRAMRPC wire bits | UNBACKED | Current host interning diverges: NaN is unequal to itself and `+0.0` equals `-0.0`, while FRAMRPC canonicalizes NaN and distinguishes signed zero. This is an explicit core gap, not a wire-compatibility guarantee |
 
 ## Query
 
@@ -103,22 +106,25 @@ detected loudly (D5) but is not repairable by truncation the way a torn tail is
 | Q3a | The text index is exact-snapshot keyed, single-flight, and retained across requests for four versions — **JVM route only**. The native route builds the source per query, plan-gated so an unqueried text relation costs nothing, and leans on the ordered-result cache (Q5) for repeats | PARTIAL | `text_index_cache_test.clj` covers the JVM cache; native rebuild cost is unmeasured |
 | Q4 | Budgets: step budget 10,000,000; timeout `min(60000, requested else 5000)` ms | UNBACKED | numbers live in source only; no gate exercises the limits |
 | Q5 | Complete deterministically ordered results are reused by snapshot generation, SpaceId, resolved `{lower-exclusive, upper-inclusive}` view, operation, and canonical request digest; concurrent misses share one computation | PARTIAL | `native_rpc_server_test.clj` exercises one evaluator run for two concurrent misses, selector-equivalent historical reuse, lower-bound separation, bounds, counters, and restart reset |
-| Q6 | `current`, inclusive `as-of U`, and `since L upper` compose transaction-exact state plus occurrence history; `(L,U]` never materializes the full occurrence relation | BACKED | `datalog_diff_test.clj` 7/7 including temporal and text-match source arms; `model_generative_test.clj` compares as-of state and since events after every generated operation; `native_rpc_server_test.clj` covers composition and cursors |
+| Q6 | `current`, inclusive `as-of U`, and `since L upper` compose transaction-exact state plus occurrence and targeted-withdrawal history. Native applies the `(L,U]` lower bound to every base relation without materializing the full occurrence relation. The retained JVM route lower-bounds only `occurrence` and `withdrawal`, leaving `triple` and text at upper snapshot `U` | PARTIAL | `datalog_diff_test.clj` including temporal and text-match source arms; `model_generative_test.clj` compares as-of state and since events after every generated operation; `native_rpc_server_test.clj` covers the retained JVM composition and cursors. The cross-route divergence is documented rather than unified |
 | Q7 | A historical miss uses the newest valid prefix-bound checkpoint and replays its tail; corrupt derived state falls back to canonical history. Sealed ranges preserve rows, while unavailable and explicitly expired ranges remain distinct | PARTIAL | `native_rpc_server_test.clj` covers corrupt FRI fallback, sealed-range parity, manifest reload, and both typed errors; active-log compaction and production retention policy are not yet gated |
 
 ## Profiles
 
-The relational profile is advisory at this slice. Its declared rules are R1:
-all positions are Atoms; R2: t1 is a non-blank String or Keyword; R3: t2 is
-a non-blank String or Keyword; R4: t3 is a non-nil Atom (the blank String is
-valid). Only the exact `:kernel/profile` anchoring proposition is exempt.
+The EAV profile whose stored kind is currently named `"relational"` is advisory
+at this slice. Its declared rules are R1: all positions are Atoms; R2: t1 is a
+non-blank String or Keyword; R3: t2 is a non-blank String or Keyword; R4: t3 is
+a non-nil Atom (the blank String is valid). Profile lint bootstrap-skips every
+Triple whose t2 is exactly the Keyword `:kernel/profile`. Only a well-formed
+anchor with the required header and rule propositions binds a profile; malformed
+anchor-shaped Triples receive the broad lint exemption but bind nothing.
 
 R5 — the declared-vocabulary rule — is listed separately because a profile
 opts into it: a space that does not list `R5` beside R1-R4 keeps every
 verdict it had. Where it is listed, a proposition whose t2 is a namespaced
 Keyword violates R5 unless that Keyword's membership is asserted in the same
-space as `(predicate, :member_of, anything)`. The engine's `:kernel/*`
-occurrence vocabulary is exempt, as the ontology's regress rule records.
+space as `(predicate, :member_of, anything)`. Closed `:kernel/*` protocol
+vocabulary is exempt.
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
@@ -130,9 +136,23 @@ occurrence vocabulary is exempt, as the ontology's regress rule records.
 
 ## Write semantics
 
-One writer serializes accepted transactions while clients read immutable published snapshots. Native mutations may carry `expected-version`; stale or future values fail `:rpc/conflict` without advancing the version. Lease fencing is an additional resource guard, not a replacement for transaction OCC or sole-writer authority.
+One writer serializes accepted transactions while clients read immutable
+published snapshots. All 13 data operations may carry `expected-version`;
+stale or future values fail `:rpc/conflict` before operation-specific handling
+and without advancing the version. Lease fencing is an additional resource
+guard, not a replacement for transaction OCC or sole-writer authority.
 
-Actions in a batch receive ordered occurrence coordinates and commit as one frame or not at all. Every assertion creates a new occurrence even when equal proposition content is live. Retraction withdraws the latest live equal occurrence and records its exact target; retracting without a live match is an explicit unchanged receipt and does not advance the version. Cardinality, uniqueness, referential integrity, and replacement policy are domain rules, never implied by `t1`, `t2`, or `t3`.
+Actions in a batch receive ordered occurrence coordinates and commit as one
+frame or not at all. Every assertion creates a new occurrence even when equal
+proposition content is live. A successful retraction carries structurally equal
+content, follows its target in the same SpaceId, and withdraws exactly the
+newest live equal assertion occurrence; one assertion occurrence can be
+withdrawn at most once. The derived `withdrawal(retraction, assertion)` system
+relation records that target. Retracting without a live match is an explicit
+`stateChanged = false` receipt. It still records a retraction occurrence and
+advances the version, but produces no withdrawal.
+Cardinality, uniqueness, referential integrity, and replacement policy are
+domain rules, never implied by `t1`, `t2`, or `t3`.
 
 ## Workload envelope and client obligations
 
@@ -140,7 +160,7 @@ Reference workload NW-1 is a coordination substrate observed near 350k live Trip
 
 | Dimension | Contract |
 |---|---|
-| Request/response | body ≤ 1 MiB; frame ≤ 1 MiB; bulk reads paginate; a request list is bounded at 250 values and an unpaged reply at 248 rows; mutation replies are exact-preflighted before commit under N3 |
+| Request/response | header = 26 B; body ≤ 1,048,576 B; frame ≤ 1,048,602 B; SpaceId ≤ 4,096 UTF-8 bytes; bulk reads paginate; native scan pages use at most 200 rows, native query pages stay within the Term depth budget, and unpaged native occurrences are incomplete above 248 rows; mutation replies are exact-preflighted before commit under N3 |
 | Latency | targeted read p95 at 500k Triples and ≤8 clients is TBD and may not be cited |
 | Writes | sustained single-transaction throughput and restart cost per 100k Triples are TBD and may not be cited |
 | Contention | `:rpc/conflict` is normal contract behavior; retry from a fresh base |

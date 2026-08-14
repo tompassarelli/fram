@@ -92,8 +92,8 @@
    store (ri/store-of context)]
   (ri/with-view! context (rot/staged (rot/project! store) (t/triple-t1 coordinate) (t/triple-t3 coordinate) (txn/builder-operations open)))))
 
-(defn context [store]
-  (ri/graph store {builder-key (txn/open store)}))
+(defn context! [store]
+  (ri/graph! store {builder-key (txn/open store)}))
 
 (defn mint! [context]
   (txn/mint! (builder context)))

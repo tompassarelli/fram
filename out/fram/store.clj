@@ -473,11 +473,11 @@
   (let [row (nth (store-operations store) operation-position)]
   (t/occurrence-coordinate (t/transaction-coordinate (t/termstore-space-id store) (t/operationrow-tx-sequence row)) (t/operationrow-ordinal row))))
 
-(defn- event-at [store operation-position]
+(defn- operation-occurrence-at [store operation-position]
   (let [row (nth (store-operations store) operation-position)
    occurrence (occurrence-at store operation-position)
    proposition (resolve-triple-handle store (t/operationrow-triple-handle row))]
-  (if (= t/assert-action (t/operationrow-action row)) (t/assertion-occurrence occurrence proposition) (t/retraction-occurrence occurrence proposition))))
+  (t/operation-occurrence occurrence (t/operationrow-action row) proposition)))
 
 (defn- first-transaction-after [transactions sequence]
   (loop [low 0
@@ -543,29 +543,32 @@
   (if (and (some? exact) (some? proposition)) (filterv (fn [position] (= proposition-handle (t/operationrow-triple-handle (nth (store-operations store) position)))) candidates) candidates)))
 
 (defn occurrence-tuple-at [store position]
-  (let [event (event-at store position)]
-  [(t/triple-t1 event) (t/triple-t2 event) (t/triple-t3 event)]))
+  (let [occurrence (operation-occurrence-at store position)]
+  [(t/operationoccurrence-coordinate occurrence) (t/operationoccurrence-action occurrence) (t/operationoccurrence-proposition occurrence)]))
 
-(defn operation-occurrences [ctx]
+(defn occurrences [ctx]
   (let [store (deref ctx)]
   (loop [position 0
-   events []]
-  (if (>= position (count (store-operations store))) events (recur (inc position) (conj events (event-at store position)))))))
+   values []]
+  (if (>= position (count (store-operations store))) values (recur (inc position) (conj values (operation-occurrence-at store position)))))))
 
-(defn withdrawal-triples [ctx]
+(defn withdrawals [ctx]
   (let [store (deref ctx)]
   (loop [position 0
-   withdrawals []]
-  (if (>= position (count (store-operations store))) withdrawals (let [target (nth (store-withdrawal-targets store) position)]
-  (if (>= target 0) (recur (inc position) (conj withdrawals (t/withdrawal (occurrence-at store position) (occurrence-at store target)))) (recur (inc position) withdrawals)))))))
+   values []]
+  (if (>= position (count (store-operations store))) values (let [target (nth (store-withdrawal-targets store) position)]
+  (if (>= target 0) (recur (inc position) (conj values (t/withdrawal (operation-occurrence-at store position) (operation-occurrence-at store target)))) (recur (inc position) values)))))))
 
-(defn semantic-history [ctx]
-  (let [store (deref ctx)]
-  (loop [position 0
-   history []]
-  (if (>= position (count (store-operations store))) history (let [with-event (conj history (event-at store position))
-   target (nth (store-withdrawal-targets store) position)]
-  (if (>= target 0) (recur (inc position) (conj with-event (t/withdrawal (occurrence-at store position) (occurrence-at store target)))) (recur (inc position) with-event)))))))
+(defn withdrawal-tuples-between [store lower-exclusive upper-inclusive]
+  (let [bounds (operation-range-bounds store lower-exclusive upper-inclusive)
+   start (nth bounds 0)
+   end (nth bounds 1)]
+  (loop [position start
+   rows []]
+  (if (>= position end) rows (let [target (nth (store-withdrawal-targets store) position)]
+  (if (>= target 0) (let [retraction (operation-occurrence-at store position)
+   assertion (operation-occurrence-at store target)]
+  (recur (inc position) (conj rows [(t/operationoccurrence-coordinate retraction) (t/operationoccurrence-coordinate assertion)]))) (recur (inc position) rows)))))))
 
 (defn- ^Boolean operation-live? [store position row]
   (and (= t/assert-action (t/operationrow-action row)) (let [positions (active-positions store (t/operationrow-triple-handle row))
@@ -578,7 +581,7 @@
    total (count operations)]
   (loop [position 0
    live []]
-  (if (>= position total) live (if (operation-live? store position (nth operations position)) (recur (inc position) (conj live (event-at store position))) (recur (inc position) live))))))
+  (if (>= position total) live (if (operation-live? store position (nth operations position)) (recur (inc position) (conj live (operation-occurrence-at store position))) (recur (inc position) live))))))
 
 (defn live-propositions [ctx]
   (let [store (deref ctx)

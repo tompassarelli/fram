@@ -1,5 +1,5 @@
 ;; pull_test.clj — PULL API gate (in-process, mirrors database_test.clj bootstrap).
-;; Drives pull/validate + pull/run against a store built through the database API; no
+;; Drives pull/validate + pull/run! against a store built through the database API; no
 ;; network daemon. A dispatch-level test at the end boots the daemon's `db`/`schema`
 ;; state in-process and exercises execute-query for {:op :pull}.
 ;;   bb -cp out tests/pull_test.clj
@@ -33,39 +33,39 @@
   (commit! db "u" "@b" "part_of" :link "@x" nil)
 
   ;; --- (1) flat scalar attrs ------------------------------------------------
-  (let [r (pull/run st "@x" ["title" "status"] {})]
+  (let [r (pull/run! st "@x" ["title" "status"] {})]
     (chk "flat: :fram/id present" (= "@x" (:fram/id r)))
     (chk "flat: single scalar title" (= "Ship v1" (get r "title")))
     (chk "flat: single scalar status" (= "open" (get r "status"))))
 
   ;; --- (2) single- vs multi-cardinality rendering ---------------------------
-  (let [r (pull/run st "@x" ["status" "tag"] {})]
+  (let [r (pull/run! st "@x" ["status" "tag"] {})]
     (chk "cardinality: single -> scalar" (string? (get r "status")))
     (chk "cardinality: multi -> vector" (vector? (get r "tag")))
     (chk "cardinality: multi values present" (= #{"red" "blue"} (set (get r "tag")))))
 
   ;; --- (3) nested ref recursion ---------------------------------------------
-  (let [r (pull/run st "@x" [{"depends_on" ["title"]}] {})
+  (let [r (pull/run! st "@x" [{"depends_on" ["title"]}] {})
         deps (get r "depends_on")]
     (chk "nested: depends_on is a vector" (vector? deps))
     (chk "nested: target :fram/id" (= "@dep1" (:fram/id (first deps))))
     (chk "nested: target attr pulled" (= "Design" (get (first deps) "title"))))
 
   ;; --- (4) reverse ref ------------------------------------------------------
-  (let [r (pull/run st "@x" ["_part_of"] {})
+  (let [r (pull/run! st "@x" ["_part_of"] {})
         rev (get r "_part_of")]
     (chk "reverse: vector of subjects" (vector? rev))
     (chk "reverse: found the pointing subjects" (= #{"@a" "@b"} (set (map :fram/id rev)))))
 
   ;; --- (5) :* wildcard ------------------------------------------------------
-  (let [r (pull/run st "@x" [:*] {})]
+  (let [r (pull/run! st "@x" [:*] {})]
     (chk "wildcard: includes title" (= "Ship v1" (get r "title")))
     (chk "wildcard: includes multi tag" (= #{"red" "blue"} (set (get r "tag"))))
     (chk "wildcard: ref rendered as name string (no recursion)" (= ["@dep1"] (get r "depends_on")))
     (chk "wildcard: reserved preds hidden" (not (contains? r "name"))))
 
   ;; --- (6) provenance -------------------------------------------------------
-  (let [r (pull/run st "@x" ["status"] {:provenance true})
+  (let [r (pull/run! st "@x" ["status"] {:provenance true})
         p (get r "status")]
     (chk "prov: :val" (= "open" (:val p)))
     (chk "prov: :cid is an int" (integer? (:cid p)))
@@ -77,8 +77,8 @@
 
   ;; --- (7) provenance surfaces a WITHDRAWN value with attribution ------------
   (retract! db "w" "@x" "tag" "red" nil "no longer relevant")
-  (let [plain (pull/run st "@x" ["tag"] {})
-        prov  (pull/run st "@x" ["tag"] {:provenance true})
+  (let [plain (pull/run! st "@x" ["tag"] {})
+        prov  (pull/run! st "@x" ["tag"] {:provenance true})
         red   (first (filter #(= "red" (:val %)) (get prov "tag")))]
     (chk "withdraw: plain view drops the withdrawn value" (= #{"blue"} (set (get plain "tag"))))
     (chk "withdraw: provenance surfaces the withdrawn value" (some? red))
@@ -95,13 +95,13 @@
   ;; --- (8) as-of: historical value + historical withdrawal state ------------
   (let [r1 (commit! db "u" "@y" "status" :assert "s1" nil)
         r2 (commit! db "u" "@y" "status" :assert "s2" nil)
-        atS1 (pull/run st "@y" ["status"] {:as-of (:ok r1)})
-        now  (pull/run st "@y" ["status"] {})]
+        atS1 (pull/run! st "@y" ["status"] {:as-of (:ok r1)})
+        now  (pull/run! st "@y" ["status"] {})]
     (chk "as-of: sees the historical value at S1" (= "s1" (get atS1 "status")))
     (chk "as-of: current view sees the latest" (= "s2" (get now "status"))))
   (let [rt (commit! db "u" "@y" "tag" :assert "T" nil)
         _  (retract! db "u" "@y" "tag" "T" nil)                 ; withdrawn AFTER seqT
-        atT (pull/run st "@y" ["tag"] {:provenance true :as-of (:ok rt)})
+        atT (pull/run! st "@y" ["tag"] {:provenance true :as-of (:ok rt)})
         tv  (first (filter #(= "T" (:val %)) (get atT "tag")))]
     (chk "as-of: value withdrawn after S is live at S" (some? tv))
     (chk "as-of: withdrawal after S renders :withdrawn false at S" (= false (:withdrawn tv))))
@@ -110,7 +110,7 @@
   (commit! db "u" "@c1" "rel" :link "@c2" nil)
   (commit! db "u" "@c2" "rel" :link "@c3" nil)
   (commit! db "u" "@c3" "rel" :link "@c4" nil)
-  (let [r (pull/run st "@c1" [{"rel" :...}] {:max-depth 2})
+  (let [r (pull/run! st "@c1" [{"rel" :...}] {:max-depth 2})
         c2 (first (get r "rel"))
         c3 (first (get c2 "rel"))
         c4 (first (get c3 "rel"))]
@@ -118,7 +118,7 @@
     (chk "max-depth: node beyond the cap is truncated" (and (= "@c4" (:fram/id c4)) (:fram/truncated c4))))
 
   ;; --- (10) caps: max-nodes -> :fram/truncated ------------------------------
-  (let [r (pull/run st "@x" [{"depends_on" ["title"]}] {:max-nodes 1})
+  (let [r (pull/run! st "@x" [{"depends_on" ["title"]}] {:max-nodes 1})
         dep (first (get r "depends_on"))]
     (chk "max-nodes: budget exhausted truncates deeper subjects"
          (and (= "@dep1" (:fram/id dep)) (:fram/truncated dep) (not (contains? dep "title")))))
@@ -126,7 +126,7 @@
   ;; --- (11) cycle: :fram/cycle stub + termination ---------------------------
   (commit! db "u" "@k1" "rel" :link "@k2" nil)
   (commit! db "u" "@k2" "rel" :link "@k1" nil)
-  (let [r (pull/run st "@k1" [{"rel" :...}] {})            ; terminating IS the evidence
+  (let [r (pull/run! st "@k1" [{"rel" :...}] {})            ; terminating IS the evidence
         k2 (first (get r "rel"))
         back (first (get k2 "rel"))]
     (chk "cycle: revisit on current path becomes a :fram/cycle stub"
@@ -145,14 +145,14 @@
   (chk "validate: bad root" (seq (pull/validate 42 ["title"] {})))
   (chk "validate: never throws on garbage" (not (throws? #(pull/validate {:x 1} {:y 2} {:max-depth :bad}))))
   (chk "run: malformed pattern -> {:error}, no throw"
-       (let [r (pull/run st "@x" [42] {})] (and (map? r) (contains? r :error))))
+       (let [r (pull/run! st "@x" [42] {})] (and (map? r) (contains? r :error))))
 
   ;; --- (13) unknown root: sensible empty node (documented choice) ------------
   (chk "unknown root -> bare {:fram/id} node, not an error"
-       (= {:fram/id "@nope"} (pull/run st "@nope" ["title"] {})))
+       (= {:fram/id "@nope"} (pull/run! st "@nope" ["title"] {})))
 
   ;; --- (14) vector root -----------------------------------------------------
-  (let [r (pull/run st ["@x" "@dep1"] ["title"] {})]
+  (let [r (pull/run! st ["@x" "@dep1"] ["title"] {})]
     (chk "vector root: one node per root" (and (vector? r) (= 2 (count r))))
     (chk "vector root: nodes resolve independently"
          (= ["Ship v1" "Design"] (mapv #(get % "title") r)))))
@@ -167,10 +167,10 @@
       db   (new-database rlog)]
   (register-pred! db "title" "single" "literal")
   (commit! db "u" "@r" "title" :assert "Persisted" nil)
-  (let [live    (pull/run (:store db) "@r" ["title"] {:provenance true})
+  (let [live    (pull/run! (:store db) "@r" ["title"] {:provenance true})
         live-ts (:ts (get live "title"))
         st2     (replay rlog)                       ; fresh store rebuilt from the log alone
-        boot    (pull/run st2 "@r" ["title"] {:provenance true})
+        boot    (pull/run! st2 "@r" ["title"] {:provenance true})
         boot-ts (:ts (get boot "title"))]
     (chk "replay: live render carries :ts" (some? live-ts))
     (chk "replay: booted value equals live value" (= "Persisted" (:val (get boot "title"))))
