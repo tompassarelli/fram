@@ -201,8 +201,7 @@ boundary registers a trap reporter that writes one
 lands, naming `FRAM_OUT_OF_MEMORY` for arena exhaustion and `FRAM_HOST_ERROR`
 for host I/O. It is a report, not a recovery — the instance is gone, and an
 embedder that answers no `fd_write` sees only the trap. Size the store to the
-budget;
-the measured shapes are in [`../RELEASE-v0.5.0.md`](../RELEASE-v0.5.0.md).
+budget.
 
 ## Durable state, backup, and restore
 

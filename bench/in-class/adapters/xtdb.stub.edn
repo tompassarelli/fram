@@ -1,5 +1,0 @@
-{:adapter "xtdb"
- :status :stub
- :requires [:pinned-artifact :durable-document-store :durable-transaction-store]
- :must-observe [:await-transaction-sync :independent-readers]
- :contract "~/code/fram/main/bench/in-class/scenario-contract.edn"}

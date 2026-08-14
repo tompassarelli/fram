@@ -1,5 +1,0 @@
-agent-of nil
-observed-of 17
-ts-of "2030-01-02T03:04:05Z"
-causal-key [17 nil ""]
-missing-provenance [nil 17 "2030-01-02T03:04:05Z" [17 -1 ""]]

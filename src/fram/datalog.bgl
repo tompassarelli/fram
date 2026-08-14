@@ -732,57 +732,6 @@
                  (conj acc (rule-head-relation value)))
                #{} rules)))
 
-(defn- derive-round!
-  [(db Db)
-   (sources CandidateSources)
-   (rules (Vec Rule))
-   (context QueryEvaluationContext)]
-  Db
-  (loop [remaining rules current db]
-    (if (or (empty? remaining)
-            (not (query-evaluation-context-open? context)))
-      current
-      (let [value (first remaining)
-            relation (rule-head-relation value)
-            derived (derive-rule! db sources value context)]
-        (if (query-evaluation-context-open? context)
-          (recur
-           (rest remaining)
-           (update current relation
-                   (fn [(known (U (Set Tuple) Nil))] (Set Tuple)
-                     (reduce (fn
-                               [(rows-value (Set Tuple))
-                                (row Tuple)]
-                               (Set Tuple)
-                               (conj rows-value row))
-                             (or known #{}) derived))))
-          current)))))
-
-(defn- relations-stable? [(before Db) (after Db) (relations (Vec String))] Bool
-  (loop [remaining relations]
-    (if (empty? remaining)
-      true
-      (let [relation (first remaining)]
-        (if (= (get before relation #{}) (get after relation #{}))
-          (recur (rest remaining))
-          false)))))
-
-(defn fixpoint-oracle-with-candidates!
-  [(db0 Db) (rules (Vec Rule)) (sources CandidateSources)] Db
-  (let [relations (rule-head-relations rules)
-        context (new-query-evaluation-context *query-control*)]
-    (loop [db db0]
-      (let [next (derive-round! db sources rules context)
-            error-value (query-evaluation-context-error context)]
-        (if (some? error-value)
-          (raise-query-evaluation-error! error-value)
-          (if (relations-stable? db next relations)
-            next
-            (recur next)))))))
-
-(defn- fixpoint-oracle! [(db0 Db) (rules (Vec Rule))] Db
-  (fixpoint-oracle-with-candidates! db0 rules {}))
-
 (defn- append-handle [(index HandleBucket) (key Any) (handle Int)] HandleBucket
   (update index key
           (fn [(current (U (Vec Int) Nil))] (Vec Int)

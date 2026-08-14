@@ -188,9 +188,7 @@
 ;; MICRO delta = pooled across all scored call-sites: sum(in-scope callers) /
 ;; sum(incumbent-returned callers) — the standard size-weighted summary, so a
 ;; higher-arity collision counts for more than a per-name average admits.
-;; The PASS line is the project's documented kill line (RESULTS.md): delta <
-;; +0.20 fails. 0.50 was an optimistic target the 2-way-split floor structurally
-;; caps — not the gate.
+;; A delta below +0.20 fails.
 (defn bench-a!
   [(by-name (Map String (Vec (Map Keyword Any))))
    (radj (Map (Vec Any) (Set (Vec Any))))]

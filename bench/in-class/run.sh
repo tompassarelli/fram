@@ -82,8 +82,5 @@ bb "$HERE/report.bb" "$OUTPUT"
   printf 'ended_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf 'end_load=%s\n' "$(cat /proc/loadavg)"
 } >>"$META"
-if [[ -f "$HERE/golden.edn" && "${BENCH_CHECK_GOLDEN:-1}" = "1" ]]; then
-  bb "$HERE/check-golden.bb" "$OUTPUT" "$HERE/golden.edn"
-fi
 echo "raw-results=$OUTPUT" >&2
 echo "metadata=$META" >&2

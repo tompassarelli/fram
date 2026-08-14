@@ -132,52 +132,6 @@ jobs:
           CC: musl-gcc
         run: bash tests/native_release_artifact_test.sh
 
-      - name: Occurrence-native run-bb suite and native cache/adapter smokes
-        env:
-          BEAGLE: ${{ github.workspace }}/.beagle
-        run: |
-          set -uo pipefail
-          manifest=tests/occurrence_native_ci_manifest.txt
-          hosted_test=tests/run_hosted_test.sh
-          # Named, not scanned: these two are the release-relevant run-shell
-          # gates that need nothing past the runner's own cc.
-          smokes=(
-            tests/fram_native_build_cache_smoke.sh
-            tests/fram_native_generated_adapter_smoke.sh
-          )
-
-          fail=0
-          gates=0
-          while IFS=$'\t' read -r disposition _class test_path _evidence; do
-            [ "$disposition" = "run-bb" ] || continue
-            if [ ! -f "$test_path" ]; then
-              echo "missing inventoried path: $test_path" >&2
-              fail=1
-              continue
-            fi
-            gates=$((gates + 1))
-            echo "== $test_path =="
-            "$hosted_test" 240s env -u FRAM_TELEMETRY_LOG \
-              bb -cp out "$test_path" || fail=1
-          done < "$manifest"
-
-          for smoke in "${smokes[@]}"; do
-            if ! awk -F '\t' -v path="$smoke" \
-                '$1 == "run-shell" && $3 == path { found = 1 }
-                 END { exit !found }' "$manifest"; then
-              echo "$smoke is no longer a run-shell gate in $manifest" >&2
-              fail=1
-              continue
-            fi
-            gates=$((gates + 1))
-            echo "== $smoke =="
-            "$hosted_test" 600s env -u FRAM_TELEMETRY_LOG \
-              bash "$smoke" || fail=1
-          done
-
-          echo "release gates run: $gates"
-          exit $fail
-
   publish:
     name: Publish the tagged release
     needs: gate

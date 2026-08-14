@@ -1,7 +1,0 @@
-@topic-writing
-title  writing
-owner  personal
-source  migrated
-committed  2026-06-15
----
-Topic thread (migrated from tag `writing`). Threads relate_to this.

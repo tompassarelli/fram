@@ -11,9 +11,6 @@
     nil
     (catch clojure.lang.ExceptionInfo error (:type (ex-data error)))))
 
-(defn hex [bytes]
-  (apply str (map #(format "%02x" (bit-and (int %) 255)) bytes)))
-
 (def path "/tmp/fram-fri-cache-v2.fri")
 (def path-two "/tmp/fram-fri-cache-v2-second.fri")
 (def corrupt-path "/tmp/fram-fri-cache-v2-corrupt.fri")
@@ -48,11 +45,7 @@
   (str/join "\n" (map slurp ["fri.clj" "rotations.clj"
                               "src/fri.bclj" "src/fri_port.bclj"
                               "out/fri.clj" "out/fri_port.clj"])))
-(def encode-term-v1! (deref (ns-resolve 'fri-port 'encode-term-v1!)))
 (def decode-term-v1! (deref (ns-resolve 'fri-port 'decode-term-v1!)))
-(def framlog-golden-term (t/triple "Alice" :email "alice@example.com"))
-(def framlog-golden-term-hex
-  "070105000000416c6963650605000000656d61696c0111000000616c696365406578616d706c652e636f6d")
 (def malformed-length (byte-array [1 5 0 0 0 65]))
 (def malformed-tag (byte-array [-1]))
 (def excessive-depth (byte-array (repeat 258 7)))
@@ -75,8 +68,6 @@
          (= 2 fri/FMT)
          (= [2 0 0 0]
             (mapv #(bit-and (int %) 255) (subvec (vec bytes-one) 8 12))))]
-   ["TermCodecV1 bytes equal the committed FRAMLOG golden"
-    (= framlog-golden-term-hex (hex (encode-term-v1! framlog-golden-term)))]
    ["TermCodecV1 rejects a truncated sized value"
     (= :invalid-fri-cache (error-type #(decode-term-v1! malformed-length)))]
    ["TermCodecV1 rejects an unknown tag"

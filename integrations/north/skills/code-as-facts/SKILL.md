@@ -162,11 +162,8 @@ Honest scope:
   (`facts-roundtrip.rkt --emit-edn`, §2) round-trips the program losslessly and is
   what the edit verbs ride. Query projection for code-intelligence, truth
   projection for graph-native edits/rename.
-- **`fram:codegraph/` is the retained analysis surface of the experiment that proved
-  this bet** (folded into fram per ADR 0001; measured verdict in
-  `fram:codegraph/RESULTS.md`).
-  Treat it as historical: prefer the entry points above, and read its own records
-  before reviving anything inside it.
+- **`fram:codegraph/` is an opt-in analysis surface.** Prefer the entry points
+  above unless its relational reports are required.
 - Do not spin any of this up for "find the string `foo`" or a single-file read.
 
 The bet, shared with North: a flat text-and-grep view rots and cannot compute

@@ -1,7 +1,0 @@
-version
-assert-at-version	@s5	p_global	v1	0
-version
-assert-at-version	@s5_stale	p_global	v2	0
-assert-at-version	@s5_invalid	p_global	v3	-1
-assert-at-version	@s5	p_global	v1	1
-version

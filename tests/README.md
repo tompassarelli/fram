@@ -1,8 +1,5 @@
 # tests/
 
-`occurrence_native_ci_manifest.txt` is the authoritative list of current hosted
-tests and their runners.
-
 ## How to run (IMPORTANT: from the repo ROOT)
 
 ```

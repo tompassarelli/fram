@@ -1,6 +1,0 @@
-version
-assert	@p_schema_fresh	cardinality	single
-assert	@s8	p_schema_flip	v1
-assert	@s8	p_schema_flip	v2
-assert	@p_schema_flip	cardinality	single
-version

@@ -1,7 +1,0 @@
-@topic-infra
-title  infra
-owner  personal
-source  migrated
-committed  2026-06-15
----
-Topic thread (migrated from tag `infra`). Threads relate_to this.

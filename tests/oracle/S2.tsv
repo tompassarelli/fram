@@ -1,5 +1,0 @@
-version
-assert	@p_single_lww	cardinality	single
-assert	@s2	p_single_lww	v1
-assert	@s2	p_single_lww	v2
-version

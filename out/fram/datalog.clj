@@ -479,30 +479,6 @@
 (defn- rule-head-relations [rules]
   (vec (reduce (fn [acc value] (conj acc (rule-head-relation value))) #{} rules)))
 
-(defn- derive-round! [db sources rules ^QueryEvaluationContext context]
-  (loop [remaining rules
-   current db]
-  (if (or (empty? remaining) (not (query-evaluation-context-open? context))) current (let [value (first remaining)
-   relation (rule-head-relation value)
-   derived (derive-rule! db sources value context)]
-  (if (query-evaluation-context-open? context) (recur (rest remaining) (update current relation (fn [known] (reduce (fn [rows-value row] (conj rows-value row)) (or known #{}) derived)))) current)))))
-
-(defn- ^Boolean relations-stable? [before after relations]
-  (loop [remaining relations]
-  (if (empty? remaining) true (let [relation (first remaining)]
-  (if (= (get before relation #{}) (get after relation #{})) (recur (rest remaining)) false)))))
-
-(defn fixpoint-oracle-with-candidates! [db0 rules sources]
-  (let [relations (rule-head-relations rules)
-   context (new-query-evaluation-context *query-control*)]
-  (loop [db db0]
-  (let [next (derive-round! db sources rules context)
-   error-value (query-evaluation-context-error context)]
-  (if (some? error-value) (raise-query-evaluation-error! error-value) (if (relations-stable? db next relations) next (recur next)))))))
-
-(defn- fixpoint-oracle! [db0 rules]
-  (fixpoint-oracle-with-candidates! db0 rules {}))
-
 (defn- append-handle [index key handle]
   (update index key (fn [current] (if (nil? current) [handle] (conj current handle)))))
 

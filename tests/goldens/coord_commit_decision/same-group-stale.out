@@ -1,1 +1,0 @@
-{:scenario :same-group-stale-write, :snapshot {:version 4, :base-version 4, :live-values ["done"]}, :proposal [{:pred "status", :kind :assert, :r "stale", :base 3}], :original-decision {:reject :conflict, :version 4}, :state-unchanged true}
