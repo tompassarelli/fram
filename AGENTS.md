@@ -1,8 +1,8 @@
 # FRAM repository instructions
 
-## Reference material and licenses
+## External resources and licenses
 
-Before using any external or `~/code/reference/` repository, re-check its
+Before using any external resource or repository under `~/code/resources/`, re-check its
 current revision and license files. Record the check date, exact revision,
 license identifier, and practical implication for FRAM. A dated record applies
 only to the revision checked; never treat it as evergreen.

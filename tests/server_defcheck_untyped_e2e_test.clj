@@ -31,7 +31,7 @@
 (def c0-src "/tmp/cookies-c0.clj")
 (when-not (.exists (io/file c0-src))
   (let [r (sh "bash" "-c"
-            (str "cd /home/tom/code/reference/ring && git show "
+            (str "cd /home/tom/code/resources/ring && git show "
                  "76e5d29128661225a08a9f8dfa7b07c83b6ed4da:ring-core/src/ring/middleware/cookies.clj > " c0-src))]
     (when-not (zero? (:exit r)) (println "SKIP — cannot obtain C0 cookies source") (System/exit 0))))
 
