@@ -116,8 +116,8 @@ valid). Only the exact `:kernel/profile` anchoring proposition is exempt.
 R5 — the declared-vocabulary rule — is listed separately because a profile
 opts into it: a space that does not list `R5` beside R1-R4 keeps every
 verdict it had. Where it is listed, a proposition whose t2 is a namespaced
-Keyword violates R5 unless that Keyword's grouping is asserted in the same
-space as `(predicate, :grouped-under, anything)`. The engine's `:kernel/*`
+Keyword violates R5 unless that Keyword's membership is asserted in the same
+space as `(predicate, :member_of, anything)`. The engine's `:kernel/*`
 occurrence vocabulary is exempt, as the ontology's regress rule records.
 
 | # | Guarantee | Status | Gate |
@@ -126,7 +126,7 @@ occurrence vocabulary is exempt, as the ontology's regress rule records.
 | P2 | Enforce mode rejects a violating operation before append, atomically for a batch | UNBACKED | enforce mode is outside the observe-only slice |
 | P3 | The prospective admission verdict and advisory lint verdict agree for R1-R4 | BACKED | `profile_lint_test.clj` differential corpus, including one negative per rule and the former namespace-carve-out shape |
 | P4 | Tightening a profile preserves committed occurrences and reports older violations by occurrence coordinate | UNBACKED | evolution and occurrence-addressed reporting are outside the observe-only slice |
-| P5 | Under R5 a declaring space rejects a namespaced non-`:kernel/` t2 whose grouping is unasserted, and spaces that omit R5 are unaffected | BACKED | `profile_lint_test.clj` R5 arms: ungrouped reject, grouped accept, omitting space, `:kernel/` exemption |
+| P5 | Under R5 a declaring space rejects a namespaced non-`:kernel/` t2 whose membership is unasserted, and spaces that omit R5 are unaffected | BACKED | `profile_lint_test.clj` R5 arms: nonmember reject, member accept, omitting space, `:kernel/` exemption |
 
 ## Write semantics
 

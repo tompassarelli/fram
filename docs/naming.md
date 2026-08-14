@@ -49,7 +49,7 @@ The old `chartroom` name survives only where provenance would otherwise become f
 
 **Turtle** invokes “turtles all the way down”: use ordinary recursive Triples for data, coordinates, history, and metadata when the model permits. It never names a record, identifier, log, or second stored type; the literal semantic vocabulary is linked from the [glossary](glossary.md#semantic-kernel).
 
-Roles remain ontology conventions, not kernel positions. Grouping implied by spelling must be asserted, as [ontology](ontology.md#normalization) specifies.
+Roles remain ontology conventions, not kernel positions. Membership implied by spelling must be asserted, as [ontology](ontology.md#normalization) specifies.
 
 Atoms terminate recursion honestly. When components need queries or descriptions, use more Triples instead of opaque compounds. Tagged handles, tables, and rows remain private representations; `TurtleRow`, `turtle-id`, and “turtle log” remain category errors.
 
@@ -68,15 +68,43 @@ Skills are named for the tool (`fram-modeling`, `beagle-authoring`) or the bet (
 
 ## normalized example — settled 2026-08-03
 
-The thing is one copyable positive example, defined only in [ontology](ontology.md#normalization). It replaced the earlier `:contact/email` example whose spelling contradicted the new rule. The deciding prior is copy behavior: readers reproduce a concrete example more reliably than a prohibition.
+The thing is one copyable positive example of kernel-level normalization,
+defined only in [ontology](ontology.md#normalization). It replaced the earlier
+`:contact/email` example whose spelling contradicted the new rule. The deciding
+prior is copy behavior: readers reproduce a concrete example more reliably
+than a prohibition. It is legal Fram, but it is not the stricter application
+discipline later named Fact Normal Form.
 
-The ruling is unnamespaced domain vocabulary with grouping asserted as an ordinary Triple. `:kernel/*` occurrence predicates are primitive-exempt; closed `:rpc/*` tags are wire syntax; `SPO`/`POS`/`OSP` are private rotations.
+The ruling is unnamespaced domain vocabulary with membership asserted as an ordinary Triple. `:kernel/*` occurrence predicates are primitive-exempt; closed `:rpc/*` tags are wire syntax; `SPO`/`POS`/`OSP` are private rotations.
 
 Rejected bench:
 
-- **`:contact-email`** — hides the same grouping behind different punctuation.
+- **`:contact-email`** — hides the same membership behind different punctuation.
 - **value reification** — invents an entity and joins where recursive proposition annotation already works.
 - **prohibition-only documentation** — loses to any nearby copyable counterexample.
+
+## Fact Normal Form — preferred application discipline — chosen 2026-08-14
+
+Fact Normal Form (FNF) gives every particular domain fact an application-level
+Term and states three separate propositions:
+
+```text
+(subject, relation, fact)
+(fact, :value, value)
+(fact, :member_of, class)
+```
+
+The relation names the real affordance, such as `:contactable_at` or
+`:followable_at`; `:has` is correct only for actual possession. A relation must
+point to the identified fact, never directly to its scalar value. This is the
+operator's preferred application discipline over Fram, not a new kernel type.
+The exact structural Triples remain proposition identities, and assertion
+occurrences retain their separate engine coordinates.
+
+The stricter application rule does not reverse the kernel's rejection of
+compulsory *statement* reification above. The FNF Term identifies a particular
+domain fact; it is not a surrogate identifier for proposition content or an
+occurrence.
 
 ## Beagle fact projections — identifiers retained; contracts split — chosen 2026-08-03
 
@@ -96,7 +124,7 @@ Rejected bench:
 
 The thing was every remaining `ns/name` family after normalization. An inventory at `a488892` found 26 non-`:kernel/*`/`:rpc/*` families across 692 occurrences and separated them by contract.
 
-- **Semantic fixtures** (`ontology/slot`, `plangrep/*`, `example/*`, `builder/*`, `growth/entry`, `building/id`, `deep/*`, `agent/lane`) became unnamespaced because none exercised grouping. The kernel slash probe and ExceptionInfo tag `:test/rejected-plan` remain intentionally namespaced.
+- **Semantic fixtures** (`ontology/slot`, `plangrep/*`, `example/*`, `builder/*`, `growth/entry`, `building/id`, `deep/*`, `agent/lane`) became unnamespaced because none exercised membership. The kernel slash probe and ExceptionInfo tag `:test/rejected-plan` remain intentionally namespaced.
 - **Historical code** (`provider/*`, `world/*`, `worlds/*`) retained spelling because rewriting a service awaiting retirement buys no queryable structure.
 - **Closed wire tags** (`authority/*`, `fram/*`, `fram.defcheck/*`, `lease/*`, `query/*`) retained spelling because a change is wire versioning, not ontology normalization.
 

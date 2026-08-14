@@ -38,8 +38,9 @@
 (def namespaced-predicate (keyword "contact" "email"))
 (def namespaced-write
   (t/triple "Alice" namespaced-predicate "alice@example.com"))
-(def grouping-assertion
-  (t/triple namespaced-predicate kernel/vocabulary-grouping :contact))
+(def membership-assertion
+  (t/triple namespaced-predicate kernel/vocabulary-membership
+            :contact_relations))
 (def kernel-write (t/triple "north-corpus" :kernel/tx-sequence 1842))
 
 (def negative-corpus
@@ -79,10 +80,10 @@
    ["R5 binds only where the profile lists it"
     (and (kernel/declared-vocabulary-rule? vocabulary-profile-triples space-id)
          (not (kernel/declared-vocabulary-rule? profile-triples space-id)))]
-   ["R5 rejects a namespaced predicate whose grouping is unasserted"
+   ["R5 rejects a namespaced predicate whose membership is unasserted"
     (= ["R5"] (lint-vocabulary [namespaced-write]))]
-   ["R5 accepts the same predicate once its grouping is asserted"
-    (empty? (lint-vocabulary [namespaced-write grouping-assertion]))]
+   ["R5 accepts the same predicate once its membership is asserted"
+    (empty? (lint-vocabulary [namespaced-write membership-assertion]))]
    ["a space that omits R5 keeps its namespaced spellings"
     (empty? (lint-one namespaced-write))]
    ["R5 exempts the engine's primitive :kernel/ vocabulary"

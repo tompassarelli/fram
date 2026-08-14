@@ -16,7 +16,7 @@
 
 (def ^String vocabulary-profile-rule "R5")
 
-(def vocabulary-grouping :grouped-under)
+(def vocabulary-membership :member_of)
 
 (def ^String kernel-vocabulary-prefix ":kernel/")
 
@@ -50,12 +50,12 @@
    spelling (str keyword-value)]
   (and (str/includes? spelling "/") (not (str/starts-with? spelling kernel-vocabulary-prefix)))) false))
 
-(defn- ^Boolean grouped-vocabulary? [triples term]
-  (not (empty? (filterv (fn [value] (and (= term (t/triple-t1 value)) (= vocabulary-grouping (t/triple-t2 value)))) triples))))
+(defn- ^Boolean vocabulary-member? [triples term]
+  (not (empty? (filterv (fn [value] (and (= term (t/triple-t1 value)) (= vocabulary-membership (t/triple-t2 value)))) triples))))
 
 (defn vocabulary-lint-errors [triples proposition]
   (let [t2 (t/triple-t2 proposition)]
-  (if (and (namespaced-vocabulary? t2) (not (grouped-vocabulary? triples t2))) [vocabulary-profile-rule] [])))
+  (if (and (namespaced-vocabulary? t2) (not (vocabulary-member? triples t2))) [vocabulary-profile-rule] [])))
 
 (defn- ^Boolean nonblank-string-or-keyword? [value]
   (or (keyword? value) (and (string? value) (> (count value) 0))))

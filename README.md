@@ -22,7 +22,7 @@ A proposition is one Triple. Its place in history is another Triple, not a
 fourth field attached to the proposition:
 
 ```text
-vocabulary  := (:email, :grouped-under, :contact)
+vocabulary  := (:email, :member_of, :contact_relations)
 proposition := ("Alice", :email, "alice@example.com")
 tx          := ("demo-space", :kernel/tx-sequence, 1)
 occurrence  := (tx, :kernel/op-ordinal, 0)
@@ -31,10 +31,11 @@ occurrence  := (tx, :kernel/op-ordinal, 0)
 (tx, :kernel/recorded-at, Instant(...))
 ```
 
-Domain vocabulary earns its structure by assertion: the grouping a
+Domain vocabulary earns its structure by assertion: the membership a
 namespaced spelling would smuggle into a slash is stored as an ordinary
 Triple instead, where the query engine can join on it. The canonical
-normalized example lives in the [ontology](docs/ontology.md).
+kernel-normalized example lives in the [ontology](docs/ontology.md); strict
+application Fact Normal Form additionally gives each particular fact identity.
 
 Equal propositions can have distinct assertion occurrences. Retractions and
 withdrawals are ordinary Triples too. Logical transaction order is intrinsic to
@@ -76,7 +77,7 @@ $ export FRAM_SPACE_ID=fram-demo
 $ export FRAM_LOG=/tmp/fram-demo.framlog
 $ export FRAM_SERVER_RUNTIME=jvm-dev  # explicit checkout fallback
 $ bin/fram-up
-$ bin/fram tell :email :grouped-under :contact
+$ bin/fram tell :email :member_of :contact_relations
 $ bin/fram tell Alice :email alice@example.com
 $ bin/fram show Alice
 $ bin/fram query '{:find "emails" :rules [{:head {:rel "emails" :args [{:var "who"} {:var "email"}]} :body [{:rel "triple" :args [{:var "who"} :email {:var "email"}]}]}]}'

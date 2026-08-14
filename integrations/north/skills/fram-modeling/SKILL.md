@@ -22,12 +22,11 @@ Term)`. Positions are neutral; domain roles come from asserted vocabulary, not
 a privileged subject/predicate/object schema.
 
 **Fact Normal Form (FNF) is the admission condition, not a naming preference.**
-In FNF, an Atom is an opaque identity or literal and every semantic relation is
-established by a Triple. A model has not passed this skill until every relation
-needed to interpret, join, group, or validate the domain exists as Triples.
-Structure left inside an Atom's spelling is absent from the database. Do not
-continue to shape design, writes, or queries until the model passes the FNF
-gate below.
+In FNF, every particular domain fact has identity as a Term. Its relationship
+to a subject, value, and classification are separate Triples; no domain fact is
+compressed into a specialized predicate/scalar cell. An Atom is opaque identity
+or literal, never a packed relationship. Do not continue to shape design,
+writes, or queries until the model passes the FNF gate below.
 
 FNF is the operator's preferred application-modeling discipline, not another
 kernel primitive. Fram can store propositions outside this discipline, and
@@ -51,48 +50,52 @@ explicit development routes.
 
 ## 1. Establish Fact Normal Form before modeling
 
-- The entire rule is: **Atoms are opaque; every semantic relation is a
-  Triple.** Reject any model that requires a consumer to parse an Atom to
-  recover type, grouping, ownership, containment, version, or identity-space
-  membership.
-- The documentation's canonical example demonstrates one part of FNF:
+- Use this closed normal form for each particular domain fact. `F` is a
+  metavariable for one opaque or minted Term, not Fram syntax:
 
   ```text
-  REJECT
-  ("Alice", :contact/email, "alice@example.com")
-
-  EXPLICIT VOCABULARY RELATION
-  (:email, :grouped-under, :contact)
-  ("Alice", :email, "alice@example.com")
+  (subject, relation, F)
+  (F, :value, value)
+  (F, :member_of, class)
   ```
 
-  The rejected slash only suggests structure to a reader. The normalized
-  grouping is stored, independently queryable, and available to joins. The
-  second Triple is FNF only when the intended domain statement really is the
-  binary relation “Alice has email value X.” It does not decide whether a
-  particular email association has domain identity.
-- When the domain recognizes one personal-email association as a thing with
-  its own identity, keep that identity explicit. Let `E` denote an opaque or
-  minted Term for that association (`E` is a metavariable here, not CLI
-  syntax):
+  `relation` states how the subject relates to the identified fact. Prefer the
+  precise domain affordance: `:contactable_at`, `:followable_at`,
+  `:assigned_to`, or another established relation. Use `:has` only when
+  possession really is the intended relationship; it otherwise hides questions
+  of ownership, exclusivity, delegation, and access. `:value` and `:member_of`
+  are FNF structural vocabulary. These three propositions end the
+  decomposition: do not create another fact identity merely to reify them.
+  Every additional domain assertion about `subject`, `F`, or `value` is itself
+  another particular fact and takes this same form recursively.
+- Reject both compressed email forms:
 
   ```text
-  ("Alice", :has, E)
+  ("Alice", :contact/personal-email, "alice@example.com")
+  ("Alice", :contactable_at, "alice@example.com")
+  ```
+
+  The first hides classification in a spelling namespace. The second removes
+  the namespace but still points its domain relation directly at a scalar,
+  omitting the identity and classification of this particular contact fact.
+  Renaming the predicate does not normalize the model.
+- Normalize the particular fact instead. Let `E` name that fact:
+
+  ```text
+  ("Alice", :contactable_at, E)
   (E, :value, "alice@example.com")
-  (E, :grouped-under, :personal-emails)
+  (E, :member_of, :personal_emails)
   ```
 
-  This is not compulsory RDF-style reification. `E` exists because the domain
-  says the association persists, changes, or participates in other relations.
-  If only the proposition needs annotation, the proposition is already a Term:
-
-  ```text
-  (("Alice", :email, "alice@example.com"), :verified-by, "mail-checker-1")
-  ```
-
-  Keep three identities separate: a domain thing such as `E`; the structural
-  Triple naming proposition content; and the occurrence coordinate Fram creates
-  for one assertion or retraction. Never mint one as a substitute for another.
+  `E` exists because FNF gives every particular domain fact identity, not
+  because an annotation later happened to need an id. Its printed form may be
+  `personal-email#1515` for human readability, but no consumer may infer its
+  class from that prefix; the `:member_of` Triple is authoritative.
+- Keep three identities separate: `E` is the application-level identity of the
+  particular domain fact; each exact structural Triple is proposition content;
+  and Fram creates a distinct occurrence coordinate for each assertion or
+  retraction. Never mint one as a substitute for another. FNF does not turn
+  `fact` into a new kernel type or erase Fram's fact-as-view-status definition.
 - Present stored data as Triples only. Introduce any metavariable in prose, as
   with `E` above. Do not put `:=` declarations inside a fact block: `:=` is not
   Fram syntax and readers have already mistaken explanatory aliases for writes.
@@ -105,41 +108,38 @@ explicit development routes.
   each is one opaque Keyword, and the slash creates no relationship Fram can
   join. Replacing the slash with a hyphen, underscore, prefix, suffix, or
   compound String has the same problem if a consumer interprets its pieces.
-  A multiword lexical label such as `:grouped-under` is fine only as one opaque
+  A multiword lexical label such as `:member_of` is fine only as one opaque
   relation name; no consumer may recover extra facts by splitting it.
-- Assert grouping and use the atomic relation separately:
+- State vocabulary membership explicitly rather than spelling a namespace:
 
   ```text
-  (:within, :grouped-under, :proposal)
-  ("proposal-a", :within, "thread-a")
+  (:contactable_at, :member_of, :contact_relations)
   ```
 
-  Query the grouping proposition when asking which vocabulary belongs to a
-  domain. Do not mint one copy of the same relation per domain merely to recover
-  a namespace convention.
-- Keep a displayed compound identity such as `personal-email#1515` only when
-  it is deliberately opaque. Its prefix may help a human read logs, but it
-  cannot establish that the Term is a personal email; assert that classification
-  separately. The reserved `:kernel/*` vocabulary is closed engine protocol,
-  not a pattern for application terms.
+  Membership is semantic. `grouped under` is merely an organizational or
+  presentation relationship and must not stand in for `:member_of`.
+- The reserved `:kernel/*` vocabulary is closed engine protocol, not a pattern
+  for application terms.
 - Before presenting or implementing a model, inspect every proposed domain
   Atom containing `/` or another encoded component. If the component implies a
   join, hierarchy, type, ownership, version, or lifecycle fact, make that fact
   an explicit Triple. Renaming `/` to `-`, `_`, `.`, or a prefix does not
   normalize anything. Reject the model until the structure is asserted.
 
-The FNF gate passes only when all five answers are yes:
+The FNF gate passes only when all six answers are yes:
 
-1. Can every domain grouping and relationship be discovered by querying
-   Triples rather than parsing Atom text?
-2. Would changing an Atom's presentation spelling leave the represented
-   domain structure intact?
-3. Does every Atom denote one opaque identity or literal rather than a packed
-   record, path, namespace, type tag, or relation?
-4. Does every separately identifiable domain thing have its own Term and all
-   of its relationships stated as Triples?
-5. Have domain identity, proposition identity, and assertion-occurrence
-   identity remained distinct?
+1. Does every particular domain fact have its own Term `F`?
+2. Are its subject relationship, value, and classification stated as
+   `(subject, relation, F)`, `(F, :value, value)`, and
+   `(F, :member_of, class)`?
+3. Does every domain relation point to the identified fact rather than directly
+   to a scalar value?
+4. Can every membership and relationship be discovered by querying Triples
+   rather than parsing Atom text?
+5. Would changing an Atom's presentation spelling leave domain structure
+   intact?
+6. Have fact identity, proposition identity, and assertion-occurrence identity
+   remained distinct?
 
 ## 2. The operating model
 
@@ -173,8 +173,10 @@ The FNF gate passes only when all five answers are yes:
 
 - **Recursive terms and occurrence semantics:** `fram:README.md` and
   `fram:docs/ontology.md`.
-- **Fact Normal Form vocabulary rules and the Datomic contrast:**
-  `fram:docs/ontology.md` and `fram:docs/coming-from-datomic.md`.
+- **Kernel normalization and the Datomic contrast:**
+  `fram:docs/ontology.md` and `fram:docs/coming-from-datomic.md`. Their flat
+  Triples are legal Fram, but a domain fact in an application model must also
+  pass this skill's stricter FNF gate.
 - **Structured recursive query:** `fram:docs/query-reference.md` and
   `fram:clients/bun/README.md`.
 - **Executable contracts:** `fram:tests/triple_kernel_test.clj`,
@@ -194,12 +196,13 @@ The FNF gate passes only when all five answers are yes:
 - If you mint opaque ids for values that already have identity as Terms, stop.
   Use the Term directly; occurrence coordinates are created by the engine for
   history, not by the application as a reverse map.
-- If a domain thing has continuity or relations of its own but is flattened
-  into an attribute/value cell, stop and give it a Term. If a proposition alone
-  needs annotation, nest that Triple instead of manufacturing a statement id.
+- If any particular domain fact is flattened into an attribute/value cell,
+  stop. Give the fact a Term and separately state its subject relationship,
+  value, and membership. This is mandatory, not conditional on continuity,
+  annotation, or anticipated reuse.
 - If a domain Keyword or String uses namespace spelling to imply membership,
-  stop and replace that spelling with an atomic term plus an asserted grouping
-  proposition. Keyword versus String carries type, not grouping semantics.
+  stop and replace that spelling with an opaque Term plus an asserted
+  `:member_of` proposition. Keyword versus String carries type, not membership.
 - If you bypass FRAMRPC to reach an internal store helper, stop and confirm that
   the task is engine implementation work rather than application modeling.
 

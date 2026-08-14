@@ -163,7 +163,7 @@ else
     fi
   }
   run_contains 'committed via server (v1)' \
-    bin/fram tell :email :grouped-under :contact
+    bin/fram tell :email :member_of :contact_relations
   run_contains 'committed via server (v2)' \
     bin/fram tell Alice :email alice@example.com
   run_contains ':email  alice@example.com' bin/fram show Alice

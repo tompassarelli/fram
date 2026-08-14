@@ -18,16 +18,22 @@ Positional and named records are projections of the same information. A schema m
 
 ## Normalization
 
-Structure hidden in an Atom is structure the store cannot query. Namespaces, compound identifiers, and opaque structured strings imply joins that were never asserted. Domain vocabulary earns grouping through propositions, not spelling.
+Structure hidden in an Atom is structure the store cannot query. Namespaces, compound identifiers, and opaque structured strings imply joins that were never asserted. Domain vocabulary earns membership through propositions, not spelling.
 
-This is the sole canonical normalized example in current documentation:
+This is the sole canonical kernel-normalized example in current documentation:
 
 ```text
-(:email, :grouped-under, :contact)
+(:email, :member_of, :contact_relations)
 ("Alice", :email, "alice@example.com")
 ```
 
-Once grouping is asserted, `:email` is opaque; Keyword versus String carries type, not grouping semantics. Different punctuation does not repair hidden structure.
+Once membership is asserted, `:email` is opaque; Keyword versus String carries type, not membership semantics. Different punctuation does not repair hidden structure.
+
+This flat proposition is legal Fram and demonstrates vocabulary normalization;
+it is not the stricter application discipline named Fact Normal Form. An
+application governed by the `fram-modeling` skill additionally gives each
+particular fact a Term and separately states its subject relationship, value,
+and membership.
 
 Recursive annotation avoids compulsory value reification:
 
@@ -50,7 +56,7 @@ Meaning needs one relational anchor. A space opts into an optional profile with 
 (profile-id, "includes", "R4")
 ```
 
-Only the anchoring proposition is bootstrap-exempt. Listing `R5` additionally requires a namespaced non-`:kernel/*` predicate to have an asserted grouping; omitting R5 preserves the space's prior verdicts. Current enforcement status is in [guarantees](guarantees.md#profiles).
+Only the anchoring proposition is bootstrap-exempt. Listing `R5` additionally requires a namespaced non-`:kernel/*` predicate to have an asserted membership; omitting R5 preserves the space's prior verdicts. Current enforcement status is in [guarantees](guarantees.md#profiles).
 
 The relational profile reads the positions as **entity** (t1), **attribute** (t2), and **value** (t3) — the EAV discipline. Role words are profile vocabulary: profile-aware surfaces such as `text-match(entity, attribute, needle)` may speak them, while kernel and wire vocabulary stays t1/t2/t3. The verdict and rejected bench are in the [naming ledger](naming.md#profile--and-the-eav-reading--chosen-2026-08-04).
 

@@ -17,7 +17,7 @@
 ;; R5 is opt-in: it binds only where a profile lists it, so every space
 ;; declared before it keeps its R1-R4 verdicts unchanged.
 (def vocabulary-profile-rule String "R5")
-(def vocabulary-grouping Keyword :grouped-under)
+(def vocabulary-membership Keyword :member_of)
 (def kernel-vocabulary-prefix String ":kernel/")
 
 (defn profile-header [(profile-id Any) (kind String) (mode String)] t/Triple
@@ -91,20 +91,20 @@
            (not (str/starts-with? spelling kernel-vocabulary-prefix))))
     false))
 
-(defn- grouped-vocabulary? [(triples (Vec t/Triple)) (term Any)] Bool
+(defn- vocabulary-member? [(triples (Vec t/Triple)) (term Any)] Bool
   (not (empty?
         (filterv (fn [(value t/Triple)] Bool
                    (and (= term (t/triple-t1 value))
-                        (= vocabulary-grouping (t/triple-t2 value))))
+                        (= vocabulary-membership (t/triple-t2 value))))
                  triples))))
 
 ;; R5 reads the whole space, so it cannot join R1-R4's per-proposition verdict:
-;; the grouping that licenses a spelling lives in a sibling proposition.
+;; the membership that licenses a spelling lives in a sibling proposition.
 (defn vocabulary-lint-errors
   [(triples (Vec t/Triple)) (proposition t/Triple)] (Vec String)
   (let [(t2 Any) (t/triple-t2 proposition)]
     (if (and (namespaced-vocabulary? t2)
-             (not (grouped-vocabulary? triples t2)))
+             (not (vocabulary-member? triples t2)))
       [vocabulary-profile-rule]
       [])))
 
