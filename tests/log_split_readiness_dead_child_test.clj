@@ -3,7 +3,7 @@
 ;; diagnostically (carrying the child's exit code and captured stderr)
 ;; instead of silently waiting out the full timeout as if it were a slow
 ;; boot. This is the "dead child" half of the log-split E2E cold-boot-flake
-;; fix; see tests/log_split_readiness_slow_boot_test.clj for the "slow boot"
+;; fix; this case covers a child that exits before readiness
 ;; half.
 (require '[babashka.process :as p])
 (load-file "tests/log_split_readiness_lib.clj")

@@ -33,13 +33,9 @@
 ;; (the same path every commit takes). Git = a real repo, real branches, real 3-way
 ;; merge, real name-resolution gate. The coupled structure {bar; foo->bar} is modeled
 ;; identically in graph (Fram) and text (git). The full-schema-AST version of the same
-;; Fram incoherence is the §7 live receipt (docs/archive/VIEWS_AND_BRANCHES.md §7, 7622022):
-;; a raw :retract of a referenced binding commits and leaves main view-locally
-;; incoherent BY DESIGN (intended under §2/§4/§5, not a bug). #11b puts that behavior
-;; beside git's gate in one coupled scenario with the two-row verdict.
-;;
-;; NO fix is proposed. gate-v2 is NOT reopened. identity-refs are NOT implemented.
-;; Fram is NOT made to win. This receipt's whole job is to show git winning a regime.
+;; A raw :retract of a referenced binding commits and leaves the main view
+;; locally incoherent. This test places that current behavior beside git's gate
+;; in one coupled scenario.
 ;;   bb coherence_trade_11b.clj
 ;; ============================================================================
 (require '[fram.store :as c] '[fram.schema :as s]

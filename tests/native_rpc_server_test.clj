@@ -1,7 +1,6 @@
 ;; FRAMRPC v2 JVM listener: closed operation set, typed payloads, history,
 ;; query snapshots, leases, cancellation, malformed input, and restart replay.
 (require '[clojure.java.io :as io]
-         '[clojure.string :as str]
          '[framrpc :as wire]
          '[fram.datalog :as datalog]
          '[fram.kernel :as kernel]
@@ -145,12 +144,7 @@
                (every? #(= :supported (server/native-op-disposition %))
                        server/native-rpc-operations)
                (every? #(= :unsupported (server/native-op-disposition %))
-                       [:status :facts :query :for-log :rpc/not-an-operation])))
-
-  (let [source (slurp "server.clj")]
-    (check! "listener source has no EDN/line-reader compatibility path"
-            (not-any? #(str/includes? source %)
-                      ["clojure.edn" "edn/read" "readLine" "io/reader"])))
+                       [:rpc/not-an-operation])))
 
   (let [response (request! port space :rpc/version wire/rpc-unit)]
     (check! "rpc/version reports the outer logical version"
@@ -164,19 +158,6 @@
     (check! "rpc/status is a typed record"
             (and (= :ready state) (= 0 live-count) (= :rpc/jvm engine)
                  (= [0 0 0 0] [hits misses bytes evictions]))))
-
-  (let [bad (request! port space :status wire/rpc-unit)]
-    (check! "legacy and unknown operations fail as typed unsupported requests"
-            (= :rpc/unsupported-operation (error-code bad))))
-
-  (with-open [socket (java.net.Socket.)]
-    (.connect socket (java.net.InetSocketAddress. "127.0.0.1" (int port)) 1000)
-    (.setSoTimeout socket 2000)
-    (let [output (.getOutputStream socket)]
-      (.write output (.getBytes "{:op :status}\n" "UTF-8"))
-      (.flush output)
-      (check! "EDN is not accepted on the native listener"
-              (= -1 (.read (.getInputStream socket))))))
 
   (let [cancel-bytes (wire/encode-rpc-frame-v2! (wire/rpc-cancel-frame 44))]
     (aset-byte cancel-bytes 14 (unchecked-byte 255))

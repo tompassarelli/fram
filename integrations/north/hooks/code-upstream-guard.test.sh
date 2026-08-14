@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Hermetic transport tests for code-upstream-guard.sh — the deterministic half
-# of "the graph is the editing surface". Covers canonical + legacy in-band
-# sentinels, registry-only adoption of the primary checkout, the SAME adoption
+# of "the graph is the editing surface". Covers canonical in-band sentinels,
+# registry-only adoption of the primary checkout, the SAME adoption
 # reaching an edit through a durable Git worktree (via shared common-dir +
 # repo-relative provenance, no per-worktree paths), false-positive guards, and
 # that a denial redirects to the FRAM graph-edit tools.
@@ -28,7 +28,7 @@ cp "$SOURCE_HOOK" "$HOOK_ROOT/code-upstream-guard.sh"
 HOOK="$HOOK_ROOT/code-upstream-guard.sh"
 printf '%s\n' \
   'authoring_guards_off() {' \
-  '  case "${AGENT_NO_AUTHORING_HOOKS:-${CLAUDE_NO_AUTHORING_HOOKS:-}}" in' \
+  '  case "${AGENT_NO_AUTHORING_HOOKS:-}" in' \
   '    ""|0|false) return 1 ;;' \
   '    *) return 0 ;;' \
   '  esac' \
@@ -58,12 +58,6 @@ printf '%s\n' ';; @upstream:graph' '#lang beagle/clj' '(defn a [] 1)' >"$SENTINE
 
 SENTINEL_HEADER="$SCRATCH/header.bclj"    # sentinel after a regenerated header
 printf '%s\n' '(define-target clj)' '' ';; @upstream:graph' '(defn a [] 1)' >"$SENTINEL_HEADER"
-
-SENTINEL_LEGACY1="$SCRATCH/legacy1.bclj"
-printf '%s\n' ';; @upstream-is-graph' '(defn a [] 1)' >"$SENTINEL_LEGACY1"
-
-SENTINEL_LEGACY2="$SCRATCH/legacy2.bclj"
-printf '%s\n' ';; @claim-canonical' '(defn a [] 1)' >"$SENTINEL_LEGACY2"
 
 # marker text present, but only inside the FIRST REAL FORM (a string body) —
 # it must NOT self-adopt an ordinary file.
@@ -171,9 +165,6 @@ run_hook 0 "$(event Edit "$SENTINEL_CANON")";    assert_deny  'canonical ;; @ups
 run_hook 0 "$(event Write "$SENTINEL_CANON")";   assert_deny  'canonical sentinel denies Write'
 run_hook 0 "$(event MultiEdit "$SENTINEL_CANON")"; assert_deny 'canonical sentinel denies MultiEdit'
 run_hook 0 "$(event Edit "$SENTINEL_HEADER")";   assert_deny  'canonical sentinel after regenerated header denies Edit'
-run_hook 0 "$(event Edit "$SENTINEL_LEGACY1")";  assert_deny  'legacy @upstream-is-graph sentinel still denies (compat)'
-run_hook 0 "$(event Edit "$SENTINEL_LEGACY2")";  assert_deny  'legacy @claim-canonical sentinel still denies (compat)'
-
 # denial guidance names the FRAM graph-edit verbs explicitly.
 run_hook 0 "$(event Edit "$SENTINEL_CANON")"
 if [[ "$RUN_OUT" == *'mcp__fram__set-body'* && "$RUN_OUT" == *'mcp__fram__rename-def'* ]]; then

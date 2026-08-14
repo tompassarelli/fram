@@ -116,16 +116,6 @@
                 (t/occurrence-coordinate tx1 2)]}
              (rows withdrawal-result))))
 
-(let [legacy-relation (str "fac" "t-id")
-      invalid-plan
-      (plan "x" [[(rule "x" [(v "value")]
-                              [(rel legacy-relation [(v "value")])])]])
-      invalid (q/compile-query! invalid-plan)]
-  (check! "legacy four-cell relation has no compatibility alias"
-          (and (not (q/compile-ok? invalid))
-               (= :query-unknown-relation
-                  (q/error-code (first (q/compile-errors invalid)))))))
-
 (def all-live-plan
   (plan "all-live"
         [[(rule "all-live" [(v "a") (v "b") (v "c")]

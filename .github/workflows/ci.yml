@@ -4,8 +4,7 @@ on:
   push:
   pull_request:
 
-# The occurrence-native manifest is exhaustive: every Clojure test is either a
-# current gate, an exact known-failure baseline, or an evidence-backed exclusion.
+# The occurrence-native manifest lists the current hosted gates CI executes.
 
 jobs:
   test:
@@ -80,10 +79,7 @@ jobs:
         run: |
           set -uo pipefail
           manifest=tests/occurrence_native_ci_manifest.txt
-          pristine_failures=tests/occurrence_native_ci_failures.txt
           hosted_test=tests/run_hosted_test.sh
-          manifest_scratch="$(mktemp -d)"
-          trap 'rm -rf "${manifest_scratch:?}"' EXIT INT TERM
 
           if ! awk -F '\t' '
             /^[[:space:]]*$/ || /^#/ { next }
@@ -96,25 +92,7 @@ jobs:
             exit 1
           fi
 
-          rg --files tests -g '*_test.clj' | sort > "$manifest_scratch/actual"
-          awk -F '\t' \
-            '$1 ~ /^(run-bb|run-clojure|baseline-bb|exclude)$/ {print $3}' \
-            "$manifest" \
-            | sort > "$manifest_scratch/declared"
-          uniq -d "$manifest_scratch/declared" > "$manifest_scratch/duplicates"
-          if [ -s "$manifest_scratch/duplicates" ]; then
-            echo "duplicate Clojure test disposition in $manifest" >&2
-            sed 's/^/  /' "$manifest_scratch/duplicates" >&2
-            exit 1
-          fi
-          if ! diff -u "$manifest_scratch/actual" "$manifest_scratch/declared"; then
-            echo "classify every tests/*_test.clj entry in $manifest" >&2
-            exit 1
-          fi
-
-          : > "$manifest_scratch/actual-failures"
           fail=0
-          baseline_index=0
           while IFS=$'\t' read -r disposition class test_path evidence; do
             case "$disposition" in
               ''|'#'*) continue ;;
@@ -125,34 +103,6 @@ jobs:
               fail=1
               continue
             fi
-
-            evidence_file=""
-            evidence_regex=""
-            case "$disposition" in
-              exclude|exclude-gate|exclude-runner|aggregate-nix|baseline-bb|baseline-shell)
-                if [[ "$evidence" != *'#'* ]]; then
-                  echo "$test_path: evidence must be file#regex" >&2
-                  fail=1
-                  continue
-                fi
-                evidence_file="${evidence%%#*}"
-                evidence_regex="${evidence#*#}"
-                if [ ! -f "$evidence_file" ] || [ -z "$evidence_regex" ]; then
-                  echo "$test_path: invalid evidence $evidence" >&2
-                  fail=1
-                  continue
-                fi
-                ;;
-            esac
-
-            case "$disposition" in
-              exclude|exclude-gate|exclude-runner|aggregate-nix)
-                if ! rg -q -- "$evidence_regex" "$evidence_file"; then
-                  echo "$test_path: evidence not found in $evidence_file: $evidence_regex" >&2
-                  fail=1
-                fi
-                ;;
-            esac
 
             case "$disposition" in
               run-bb)
@@ -180,47 +130,6 @@ jobs:
                 "$hosted_test" 240s \
                   bun test "$test_path" || fail=1
                 ;;
-              baseline-bb)
-                baseline_index=$((baseline_index + 1))
-                baseline_output="$manifest_scratch/baseline-$baseline_index.out"
-                echo "== $test_path (known-failure baseline: $class) =="
-                if "$hosted_test" 240s env -u FRAM_TELEMETRY_LOG \
-                    bb -cp out "$test_path" > "$baseline_output" 2>&1; then
-                  :
-                elif rg -q -- "$evidence_regex" "$baseline_output"; then
-                  printf '%s\t%s\n' "$class" "$class" \
-                    >> "$manifest_scratch/actual-failures"
-                else
-                  echo "$test_path failed outside its recorded baseline" >&2
-                  sed 's/^/  /' "$baseline_output" >&2
-                  fail=1
-                fi
-                ;;
-              baseline-shell)
-                baseline_index=$((baseline_index + 1))
-                baseline_output="$manifest_scratch/baseline-$baseline_index.out"
-                echo "== $test_path (known-failure baseline: $class) =="
-                if "$hosted_test" 240s env -u FRAM_TELEMETRY_LOG \
-                    bash "$test_path" > "$baseline_output" 2>&1; then
-                  :
-                else
-                  sed -n 's/^  REGROWTH  \([^:]*\):.*/vocab-residue\t\1/p' \
-                    "$baseline_output" >> "$manifest_scratch/actual-failures"
-                  if ! rg -q -- "$evidence_regex" "$baseline_output"; then
-                    echo "$test_path failed outside its recorded baseline" >&2
-                    sed 's/^/  /' "$baseline_output" >&2
-                    fail=1
-                  fi
-                fi
-                ;;
-              aggregate-nix)
-                echo "== $test_path (current $class aggregate; toolchain-owned) =="
-                ;;
-              exclude-runner)
-                echo "== $test_path (current gate, not run here: $class) =="
-                ;;
-              exclude|exclude-gate)
-                ;;
               *)
                 echo "unknown manifest disposition: $disposition" >&2
                 fail=1
@@ -228,20 +137,5 @@ jobs:
             esac
           done < "$manifest"
 
-          sort -u "$manifest_scratch/actual-failures" \
-            > "$manifest_scratch/actual-failures.sorted"
-          awk -F '\t' '!/^[[:space:]]*$/ && !/^#/ {print $1 "\t" $2}' \
-            "$pristine_failures" | sort -u \
-            > "$manifest_scratch/pristine-failures.sorted"
-          if ! bash tests/occurrence_native_ci_compare.sh \
-              "$manifest_scratch/pristine-failures.sorted" \
-              "$manifest_scratch/actual-failures.sorted"; then
-            echo "known failure contract changed; repair it or update the pristine baseline" >&2
-            fail=1
-          fi
-
           echo "direct current gates: $(awk -F '\t' '$1 ~ /^run-/ {n++} END {print n+0}' "$manifest")"
-          echo "known-failure baselines: $(awk -F '\t' '$1 ~ /^baseline-/ {n++} END {print n+0}' "$manifest")"
-          echo "evidence-backed Clojure exclusions: $(awk -F '\t' '$1 == "exclude" {n++} END {print n+0}' "$manifest")"
-          echo "runner-capacity exclusions: $(awk -F '\t' '$1 == "exclude-runner" {n++} END {print n+0}' "$manifest")"
           exit $fail

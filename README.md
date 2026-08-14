@@ -92,11 +92,6 @@ primitive or a code type. See the [naming ledger](docs/naming.md).
 - [Coming from Datomic](docs/coming-from-datomic.md) — the datom-to-occurrence bridge, the exact-difference table, and the honest not-yet list.
 - [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
 
-The rationale and positioning essays, plus the old pull, claims, and Codegraph documents, live under
-[`docs/archive/`](docs/archive/README.md). Each one carries a `HISTORICAL`
-banner, is retained as design evidence only, and is never a recursive-kernel
-runtime reference.
-
 ## Quickstart
 
 The checkout runtime needs Babashka for the CLI and Clojure/JVM for the server.

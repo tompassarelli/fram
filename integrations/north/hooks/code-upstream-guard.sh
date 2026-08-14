@@ -6,8 +6,7 @@
 # `~/.agents/hooks/code-upstream-guard.sh` beside the shared kill-switch library
 # and manages the global guard state. To run a clean-room/experiment session
 # WITHOUT this guard, use persistent `north config guards off`, or launch with
-# AGENT_NO_AUTHORING_HOOKS set to any value but 0/false. North also accepts the
-# legacy CLAUDE_NO_AUTHORING_HOOKS spelling.
+# AGENT_NO_AUTHORING_HOOKS set to any value but 0/false.
 #
 # WHAT IT DOES
 #   On Edit | Write | MultiEdit it reads tool_input.file_path from the hook's stdin
@@ -46,9 +45,7 @@
 #         worktree — no per-worktree paths are enumerated, and a missing/hostile
 #         git can never let a direct or aliased edit of an adopted file through, OR
 #     (2) the file's LEADING COMMENT BLOCK carries the in-band directive
-#         ;; @upstream:graph  (the canonical marker in code-as-facts SKILL.md;
-#         the legacy `;; @upstream-is-graph` / `;; @claim-canonical` spellings
-#         stay recognized for compatibility). It is a Beagle line comment, so it
+#         ;; @upstream:graph  (the marker in code-as-facts SKILL.md). It is a Beagle line comment, so it
 #         survives the lossless round-trip as a comment node and recompiles
 #         cleanly. Only a leading `;;` comment whose payload IS the marker (with
 #         optional suffix prose) counts — an explanatory MENTION of the marker,
@@ -86,8 +83,7 @@ capture_hook_stdin
 # concurrent-authoring experiment — pin a hook-free, confound-free session
 # surface WITHOUT editing settings.json. Engaged two ways: persistent
 # `north config guards off` (state, live), or env AGENT_NO_AUTHORING_HOOKS
-# (any value but 0/false; 0/false forces guards live). North's shared library
-# also accepts the legacy CLAUDE_NO_AUTHORING_HOOKS spelling.
+# (any value but 0/false; 0/false forces guards live).
 # shellcheck disable=SC1090,SC1091
 . "$(dirname "$0")/lib/authoring-killswitch.sh" 2>/dev/null || true
 type authoring_guards_off >/dev/null 2>&1 && authoring_guards_off && exit 0
@@ -290,9 +286,7 @@ def in_registry(path):
         return False
     return False
 
-# Canonical marker (code-as-facts SKILL.md) is `;; @upstream:graph`; the two
-# legacy spellings stay recognized for deliberate backward compatibility.
-_MARKERS = ("@upstream:graph", "@upstream-is-graph", "@claim-canonical")
+_MARKERS = ("@upstream:graph",)
 # An adoption directive is a leading comment whose payload IS one of the markers,
 # optionally followed by whitespace + suffix prose (`;; @upstream:graph (managed
 # by fram)`). The marker must be anchored at the start of the comment payload and

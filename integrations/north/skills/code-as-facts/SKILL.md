@@ -164,7 +164,7 @@ Honest scope:
   projection for graph-native edits/rename.
 - **`fram:codegraph/` is the retained analysis surface of the experiment that proved
   this bet** (folded into fram per ADR 0001; measured verdict in
-  `fram:codegraph/RESULTS.md`, archived README in `fram:docs/archive/codegraph-README.md`).
+  `fram:codegraph/RESULTS.md`).
   Treat it as historical: prefer the entry points above, and read its own records
   before reviving anything inside it.
 - Do not spin any of this up for "find the string `foo`" or a single-file read.

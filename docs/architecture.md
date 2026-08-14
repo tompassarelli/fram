@@ -189,5 +189,3 @@ The engine has no tenant authorization. Loopback/private FRAMRPC, process, Space
 - `fram:src/fram/snapshot_codec.bgl`: the snapshot v1 image codec, whose boot
   decisions live beside commit planning.
 - [`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj) and [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj): kernel and boundary gates.
-
-Historical claims, Codegraph, pull, rationale, and positioning documents in [`archive/`](archive/README.md) add no current primitives or operations.

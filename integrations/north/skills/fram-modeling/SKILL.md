@@ -15,9 +15,8 @@ description: >-
 The current contract is in `fram:README.md`, `fram:docs/architecture.md`,
 `fram:docs/query-reference.md`, `fram:docs/ontology.md`, and
 `fram:docs/guarantees.md`; use `fram:docs/coming-from-datomic.md` when a design
-starts to resemble attributes, entity types, or schema migrations. Documents
-under `fram:docs/archive/` are historical provenance and must not drive a
-design. Fram’s semantic model is recursive: `Atom := String | Int | Float |
+starts to resemble attributes, entity types, or schema migrations. Fram’s
+semantic model is recursive: `Atom := String | Int | Float |
 Bool | Keyword | Instant`, `Term := Atom | Triple`, and `Triple := (Term, Term,
 Term)`. Positions are neutral; domain roles come from asserted vocabulary, not
 a privileged subject/predicate/object schema.

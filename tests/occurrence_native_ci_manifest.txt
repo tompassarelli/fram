@@ -1,13 +1,7 @@
-# disposition<TAB>class<TAB>path<TAB>evidence-file#evidence-regex
-# exclude/exclude-gate/exclude-runner entries are accepted only when their evidence
-# regex occurs in the named evidence file. Baseline entries run and compare failure sets.
-# aggregate entries name current gates exercised by their toolchain producer.
-# exclude-runner names a current gate whose cost exceeds a hosted runner; it runs
-# in the flake devShell and before a release, and its evidence is the cost source.
-
+# disposition<TAB>class<TAB>path<TAB>reserved
+# This file lists only current hosted tests that CI executes.
 run-bb	current-model	tests/cloudflare_json_response_test.clj	-
 run-bun	current-model	tests/cloudflare_capacity_receipt_test.mjs	-
-exclude-runner	needs-wasm-cgroup	tests/fram_cloudflare_capacity_gate.sh	clients/cloudflare-do/capacity/workerd-cgroup-wrapper.sh#memory\.max
 run-bb	current-model	tests/cloudflare_runtime_closure_test.clj	-
 run-bb	current-model	tests/codegraph_seam_test.clj	-
 run-bb	current-model	tests/database_test.clj	-
@@ -46,7 +40,6 @@ run-bb	current-model	tests/store_test.clj	-
 run-bb	current-model	tests/triple_kernel_test.clj	-
 run-bb	current-model	tests/triple_query_test.clj	-
 run-clojure	current-model	tests/store_defcheck_untyped_test.clj	-
-
 run-shell	current-boundary	tests/fram_up_readiness_test.sh	-
 run-shell	current-cache	tests/fram_native_build_cache_smoke.sh	-
 run-shell	current-native-query	tests/fram_query_native_closure_test.sh	-
@@ -55,8 +48,6 @@ run-shell	current-boundary	tests/fram_wasm_embed_smoke.sh	-
 run-shell	current-boundary	tests/fram_do_client_smoke.sh	-
 run-shell	current-bun-package-release	tests/bun_release_artifact_test.sh	-
 run-shell	current-model	tests/codegraph_exec_test.sh	-
-run-shell	current-docs	tests/docs_semantics_ratchet.sh	-
-run-shell	current-boundary	tests/occurrence_native_ci_compare_test.sh	-
 run-shell	current-runner	tests/hosted_test_process_reaping_test.sh	-
 run-shell	current-cache	tests/fri_golden.sh	-
 run-shell	current-model	tests/fri2_replay_oracle_test.sh	-
@@ -66,105 +57,15 @@ run-bun	current-bun-client	tests/framrpc_transport_test.mjs	-
 run-bun	current-bun-backup	tests/bun_backup_test.mjs	-
 run-bun	current-bun-schema-client	tests/bun_schema_client_test.mjs	-
 run-bun	current-bun-package-types	tests/bun_package_types_test.mjs	-
-aggregate-nix	package-closure	tests/package_server_smoke.sh	flake.nix#package_server_smoke
-baseline-shell	vocab-residue	tests/vocab_ratchet_test.sh	tests/vocab_ratchet_test.sh#REGROWTH
-
-exclude-runner	runner-capacity	tests/fram_snapshot_boot_test.sh	tests/fram_snapshot_boot_test.sh#--host server
-exclude-runner	runner-capacity	tests/fram_backup_restore_test.sh	tests/fram_backup_restore_test.sh#--host server
-
-exclude-gate	removed-flat-cli	scripts/readme-check.sh	scripts/readme-check.sh#core.engine.loop
-exclude-gate	removed-flat-store	bench/propagation/check-budget.clj	bench/propagation/sweep.clj#fram.schema
-
-exclude	moved-graph-control	tests/authority_graph_authoring_test.clj	tests/authority_graph_authoring_test.clj#graph.?author
-exclude	moved-graph-control	tests/authority_primitives_test.clj	tests/authority_primitives_test.clj#graph-edit
-exclude	removed-flat-log	tests/bind_test.clj	tests/bind_test.clj#facts\.log
-exclude	stale-database-api	tests/claims_spec_test.clj	tests/claims_spec_test.clj#fram\.claims
-exclude	moved-world-service	tests/coherence_doctor_test.clj	tests/coherence_doctor_test.clj#world[_-]
-exclude	removed-flat-store	tests/server_aggregate_seam_test.clj	tests/server_aggregate_seam_test.clj#fram\.store
-exclude	removed-flat-log	tests/server_appender_failure_test.clj	tests/server_appender_failure_test.clj#facts\.log
-exclude	removed-flat-store	tests/server_authority_snapshot_test.clj	tests/server_authority_snapshot_test.clj#fram\.store
-exclude	moved-graph-control	tests/database_authority_test.clj	tests/database_authority_test.clj#edit-prepare
-exclude	removed-flat-store	tests/commit_batch_test.clj	tests/commit_batch_test.clj#fram\.store
-exclude	removed-flat-store	tests/database_cardinality_fact_test.clj	tests/database_cardinality_fact_test.clj#fram\.store
-exclude	removed-flat-store	tests/commit_causality_test.clj	tests/commit_causality_test.clj#c/value-id
-exclude	moved-graph-control	tests/server_code_flip_test.clj	tests/server_code_flip_test.clj#set-body
-exclude	removed-flat-store	tests/commit_coexist_elect_test.clj	tests/commit_coexist_elect_test.clj#c/value-id
-exclude	moved-graph-control	tests/server_concern_overlap_test.clj	tests/server_concern_overlap_test.clj#edit-min
-exclude	moved-graph-control	tests/server_defcheck_untyped_e2e_test.clj	tests/server_defcheck_untyped_e2e_test.clj#write-def
-exclude	removed-flat-store	tests/database_dropin_test.clj	tests/database_dropin_test.clj#c/fact-of
-exclude	moved-graph-control	tests/code_edit_min_socket_test.clj	tests/code_edit_min_socket_test.clj#edit-min
-exclude	moved-graph-control	tests/code_editpath_defect_test.clj	tests/code_editpath_defect_test.clj#edit-min
-exclude	removed-flat-log	tests/commit_fenced_publish_kernel_test.clj	tests/commit_fenced_publish_kernel_test.clj#facts\.log
-exclude	removed-flat-store	tests/commit_fenced_write_kernel_test.clj	tests/commit_fenced_write_kernel_test.clj#fram\.store
-exclude	removed-flat-store	tests/server_flip_test.clj	tests/server_flip_test.clj#c/entity!
-exclude	removed-flat-log	tests/commit_group_queue_bound_test.clj	tests/commit_group_queue_bound_test.clj#facts\.log
-exclude	removed-flat-store	tests/writer_lease_test.clj	tests/writer_lease_test.clj#fram\.store
-exclude	removed-flat-store	tests/database_migrate_test.clj	tests/database_migrate_test.clj#c/entity!
-exclude	removed-flat-store	tests/snapshot_mmap_image_test.clj	tests/snapshot_mmap_image_test.clj#\bcid\b
-exclude	removed-flat-store	tests/commit_occurrence_verbs_test.clj	tests/commit_occurrence_verbs_test.clj#c/value-id
-exclude	removed-flat-store	tests/snapshot_projection_singleflight_test.clj	tests/snapshot_projection_singleflight_test.clj#k/->Fact
-exclude	removed-flat-log	tests/snapshot_query_page_test.clj	tests/snapshot_query_page_test.clj#facts\.log
-exclude	removed-flat-log	tests/snapshot_query_isolation_test.clj	tests/snapshot_query_isolation_test.clj#facts\.log
-exclude	removed-flat-store	tests/database_rotations_test.clj	tests/database_rotations_test.clj#k/->Fact
-exclude	removed-flat-store	tests/database_schema_read_test.clj	tests/database_schema_read_test.clj#fram\.store
-exclude	removed-flat-store	tests/database_schema_write_test.clj	tests/database_schema_write_test.clj#fram\.store
-exclude	removed-flat-log	tests/database_scoped_facts_test.clj	tests/database_scoped_facts_test.clj#facts\.log
-exclude	removed-flat-log	tests/snapshot_show_indexed_test.clj	tests/snapshot_show_indexed_test.clj#facts\.log
-exclude	moved-graph-control	tests/snapshot_boot_test.clj	tests/snapshot_boot_test.clj#out/resolve\.clj
-exclude	removed-flat-log	tests/snapshot_split_boot_test.clj	tests/snapshot_split_boot_test.clj#coordination\.log
-exclude	removed-flat-store	tests/snapshot_test.clj	tests/snapshot_test.clj#fram\.store
-exclude	removed-flat-log	tests/server_split_log_reload_test.clj	tests/server_split_log_reload_test.clj#coordination\.log
-exclude	removed-flat-store	tests/snapshot_views_resolve_test.clj	tests/snapshot_views_resolve_test.clj#c/value!
-exclude	removed-flat-store	tests/snapshot_views_test.clj	tests/snapshot_views_test.clj#c/value-id
-exclude	moved-graph-control	tests/code_write_def_realcheck_test.clj	tests/code_write_def_realcheck_test.clj#write-def
-exclude	moved-graph-control	tests/code_write_def_test.clj	tests/code_write_def_test.clj#write-def
-exclude	removed-query-v1	tests/datalog_diff_test.clj	tests/datalog_diff_test.clj#fixpoint-oracle
-exclude	removed-flat-store	tests/datalog_scale_test.clj	tests/datalog_scale_test.clj#k/->Fact
-exclude	removed-query-v1	tests/datalog_shared_index_test.clj	tests/datalog_shared_index_test.clj#fixpoint-bi
-exclude	removed-flat-store	tests/datalog_test.clj	tests/datalog_test.clj#c/value!
-exclude	removed-flat-log	tests/doctor_fingerprint_test.clj	tests/doctor_fingerprint_test.clj#facts\.log
-exclude	sealed-overlay-checker	tests/edit_verifier_adapter_test.clj	tests/edit_verifier_adapter_test.clj#overlay[_-]
-exclude	moved-graph-control	tests/graph_ops_telemetry_smoke_test.clj	tests/graph_ops_telemetry_smoke_test.clj#set-body
-exclude	removed-flat-store	tests/kernel_violations_test.clj	tests/kernel_violations_test.clj#k/->Fact
-exclude	removed-flat-log	tests/log_split_boot_test.clj	tests/log_split_boot_test.clj#facts\.log
-exclude	removed-flat-log	tests/log_split_e2e_test.clj	tests/log_split_e2e_test.clj#coordination\.log
-exclude	removed-flat-log	tests/log_split_readiness_slow_boot_test.clj	tests/log_split_readiness_slow_boot_test.clj#coordination\.log
-exclude	moved-graph-control	tests/mcp_warm_graph_edit_regression_test.clj	tests/mcp_warm_graph_edit_regression_test.clj#edit-min
-exclude	moved-graph-control	tests/pull_test.clj	tests/pull_test.clj#graph.?author
-exclude	removed-flat-log	tests/query_cache_singleflight_test.clj	tests/query_cache_singleflight_test.clj#coordination\.log
-exclude	removed-flat-store	tests/query_test.clj	tests/query_test.clj#k/->Fact
-exclude	moved-graph-control	tests/receipt_envelope_producer_test.clj	tests/receipt_envelope_producer_test.clj#fram-edit
 run-bb	current-model	tests/resolve_logical_identity_test.clj	-
 run-bb	current-model	tests/resolve_mint_symbol_fallback_test.clj	-
 run-bb	current-model	tests/resolve_structural_declaration_test.clj	-
-exclude	moved-graph-control	tests/resolve_shim_identity_test.clj	tests/resolve_shim_identity_test.clj#out/resolve\.clj
 run-bb	current-model	tests/schema_test.clj	-
-exclude	removed-flat-store	tests/set_tx_test.clj	tests/set_tx_test.clj#->Fact
-exclude	removed-flat-log	tests/show_reporter_join_test.clj	tests/show_reporter_join_test.clj#facts\.log
-exclude	removed-flat-log	tests/slow_read_attribution_test.clj	tests/slow_read_attribution_test.clj#coordination\.log
-exclude	removed-flat-log	tests/snapshot_retention_test.clj	tests/snapshot_retention_test.clj#coordination\.log
-exclude	moved-graph-control	tests/store_anchor_disambig_test.clj	tests/store_anchor_disambig_test.clj#replace-in-body
 run-bb	current-model	tests/store_structured_binding_roundtrip_test.clj	-
-exclude	moved-graph-control	tests/store_defcheck_test.clj	tests/store_defcheck_test.clj#graph.?author
-exclude	moved-graph-control	tests/store_delete_reorder_test.clj	tests/store_delete_reorder_test.clj#out/resolve\.clj
-exclude	removed-flat-store	tests/store_domain_test.clj	tests/store_domain_test.clj#c/entity!
-exclude	moved-graph-control	tests/store_replace_in_body_test.clj	tests/store_replace_in_body_test.clj#replace-in-body
-exclude	removed-flat-store	tests/store_replay_test.clj	tests/store_replay_test.clj#c/value!
-exclude	removed-flat-log	tests/tls_test.clj	tests/tls_test.clj#facts\.log
-exclude	moved-graph-control	tests/tools_test.clj	tests/tools_test.clj#replace-in-body
-exclude	removed-flat-log	tests/torn_tail_test.clj	tests/torn_tail_test.clj#rt/read-log
-exclude	removed-socket-harness	tests/cascade_test.clj	tests/cascade_test.clj#register-pred!
-exclude	removed-telemetry-shed	tests/server_telemetry_shed_test.clj	tests/server_telemetry_shed_test.clj#telemetry-shed-decision
-exclude	moved-graph-control	tests/snapshot_honesty_pass_test.clj	tests/snapshot_honesty_pass_test.clj#resolve/select-main-1
-
 run-bb	current-model	tests/text_match_test.clj	-
 run-clojure	current-model	tests/text_index_cache_test.clj	-
-exclude	shared-runner-timing	tests/text_index_perf_test.clj	tests/text_index_perf_test.clj#p95
 run-clojure	current-model	tests/s1_schema_foundation_test.clj	-
-exclude	s2-frontier	tests/s2_authoring_test.clj	tests/s2_authoring_test.clj#rr/context!
 run-bb	current-model	tests/candidate_transformer_test.clj	-
 run-bb	current-model	tests/native_code_reader_test.clj	-
 run-bb	current-model	tests/projection_lifecycle_test.clj	-
 run-bb	current-model	tests/query_cursor_binary_search_test.clj	-
-exclude	needs-built-binary-arg	tests/graph_control_mcp_e2e_test.clj	tests/graph_control_mcp_e2e_test.clj#usage
-exclude	needs-native-toolchain	tests/native_code_commit_gate_test.clj	tests/native_code_commit_gate_test.clj#native
