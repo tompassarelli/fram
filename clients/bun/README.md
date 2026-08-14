@@ -175,8 +175,7 @@ automatically. Integers decode as canonical decimal strings inside Terms and as
 
 ## Operations
 
-The client has no raw operation escape hatch. Its methods are the frozen
-FRAMRPC v2 set:
+The client exposes exactly the frozen FRAMRPC v2 method set:
 
 - `version`, `status`, `validate`
 - `assert`, `retract`, `batch`

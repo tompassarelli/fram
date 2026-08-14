@@ -81,7 +81,7 @@
          {:jsonrpc "2.0" :id 6 :method "tools/call"
           :params {:name "ask" :arguments {:query query}}}
          {:jsonrpc "2.0" :id 7 :method "tools/call"
-          :params {:name "untell" :arguments {:subject "a" :predicate "title" :object "A"}}}
+          :params {:name "retract" :arguments {:subject "a" :predicate "title" :object "A"}}}
          {:jsonrpc "2.0" :id 8 :method "tools/call"
           :params {:name "show" :arguments {:subject "a"}}}
          {:jsonrpc "2.0" :id 9 :method "tools/call"
@@ -89,7 +89,7 @@
          {:jsonrpc "2.0" :id 10 :method "tools/call"
           :params {:name "tell" :arguments {:subject "a" :predicate "note"}}}
          {:jsonrpc "2.0" :id 11 :method "tools/call"
-          :params {:name "add-def" :arguments {:module "x" :form "(def x 1)"}}}
+          :params {:name "not-a-tool" :arguments {}}}
          {:jsonrpc "2.0" :id 12 :method "tools/call"
           :params {:name "ask" :arguments {:query {:rules []}}}}]
         input (str (str/join "\n" (map json/generate-string requests)) "\n")
@@ -127,7 +127,7 @@
     (let [rows (json/parse-string (call-text (get by-id 6)))]
       (check! "ask lowers structured JSON to the typed query plan"
               (contains? (set (map vec rows)) ["@a" "@b"])))
-    (check! "untell aliases rpc/retract"
+    (check! "retract commits through FRAMRPC"
             (and (not (get-in by-id [7 :result :isError]))
                  (= 3 (direct-version port space))))
     (let [rows (json/parse-string (call-text (get by-id 8)))]
@@ -138,9 +138,9 @@
     (check! "missing required arguments fail before socket dispatch"
             (and (get-in by-id [10 :result :isError])
                  (str/includes? (call-text (get by-id 10)) "object")))
-    (check! "graph-control names are absent from the public MCP runtime"
+    (check! "unknown tool names fail closed"
             (and (get-in by-id [11 :result :isError])
-                 (= "unknown tool: add-def" (call-text (get by-id 11))))
+                 (= "unknown tool: not-a-tool" (call-text (get by-id 11))))
             (get by-id 11))
     (check! "malformed query is a bounded MCP error"
             (and (get-in by-id [12 :result :isError])

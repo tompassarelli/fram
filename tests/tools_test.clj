@@ -1,8 +1,8 @@
 ;; tools_test.clj — the CLOSED, O(1) tool catalog + dispatch.
 ;; Proves: (1) the catalog is exactly TWELVE tools, never minted per-predicate;
 ;; (2) tell/retract lower to a server-routable {:write} intent (@-normalized
-;; refs), with `untell` accepted as an alias for `retract`; (3) reads (show/validate)
-;; return rows from a TermStore snapshot; (4) `ask`/`query` reach fram.query; (5) unknown tool +
+;; refs); (3) reads (show/validate)
+;; return rows from a TermStore snapshot; (4) `ask` reaches fram.query; (5) unknown tool +
 ;; missing required param -> :error; (6) the seven graph-AST edit verbs dispatch to the
 ;; {:edit} envelope. The vocabulary is DATA (a predicate is an entity), so there are no
 ;; owner-of/set-owner/<pred>-list tools — `show <pred>` and `ask` reach it instead.
@@ -58,10 +58,6 @@
 (chk "retract -> retract intent"
      (= (:write (call "retract" {:subject "x" :predicate "depends_on" :object "@y"}))
         {:op "retract" :l "@x" :p "depends_on" :r "@y"}))
-;; the fold-in: `untell` is an accepted ALIAS for `retract` (same intent), mirroring query->ask.
-(chk "untell ALIAS -> same retract intent as retract"
-     (= (:write (call "untell" {:subject "x" :predicate "depends_on" :object "@y"}))
-        {:op "retract" :l "@x" :p "depends_on" :r "@y"}))
 ;; An undeclared predicate defaults to literal even when prior values happen to be refs.
 (let [mc [(terms/triple "@x" "tag" "@refnode") (terms/triple "@x" "tag" "plainword")]
       mctx (term-store "tools-undeclared" mc) mcat (t/catalog mc)]
@@ -116,13 +112,12 @@
   (chk "validate reports declared relational-profile violations"
        (contains? (set (map :rule rows)) "R2")))
 
-;; (4) ask / query reach fram.query (transitive over the same fold); `query` aliases `ask`
+;; (4) ask reaches fram.query (transitive over the same fold)
 (def reaches-q
   {:find "reaches"
    :rules [{:head {:rel "reaches" :args [{:var "a"} {:var "b"}]}
             :body [{:rel "triple" :args [{:var "a"} "depends_on" {:var "b"}]}]}]})
 (chk "ask returns :ok with the edge"    (contains? (set (:ok (call "ask" {:query reaches-q}))) ["@x" "@y"]))
-(chk "query ALIAS reaches the same op"  (contains? (set (:ok (call "query" {:query reaches-q}))) ["@x" "@y"]))
 
 ;; (5) errors
 (chk "unknown tool -> :error"                (contains? (call "nope" {}) :error))

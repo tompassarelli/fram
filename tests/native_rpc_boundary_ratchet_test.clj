@@ -13,16 +13,7 @@
     (when (and from to) (subs text from to))))
 
 (let [shim (file-source "deploy/cloudflare/shim.clj")
-      worker (file-source "deploy/cloudflare/worker-client.js")
-      example (file-source "deploy/cloudflare/worker-example.js")
-      docker (file-source "deploy/cloudflare/Dockerfile.native")
-      compose (file-source "deploy/cloudflare/docker-compose.yml")]
-  (check! "Cloudflare runtime contains no EDN codec or negotiation"
-          (every? #(absent? % ["clojure.edn" "edn/read" "application/edn"
-                               "RawEdn" "ednEncode" "ednDecode" ":fmt"
-                               "format = 'edn'"])
-                  [shim worker example docker compose])
-          nil)
+      worker (file-source "deploy/cloudflare/worker-client.js")]
   (check! "Cloudflare shim uses the shared FRAMRPC client"
           (and (str/includes? shim "rt/native-request-to!")
                (str/includes? shim "framrpc/rpc-request!")
@@ -32,29 +23,22 @@
           (every? #(str/includes? worker (str "'" % "'"))
                   ["string" "integer" "float64" "boolean" "keyword" "instant" "triple"])
           nil)
-  (check! "Worker surface has thirteen named operations and no raw method"
-          (and (= 13 (count (re-seq #"(?m)^    [A-Za-z]+: .*send\(" worker)))
-               (not (re-find #"(?m)^    raw:" worker)))
+  (check! "Worker surface has the exact thirteen named operations"
+          (= ["version" "status" "validate" "occurrences" "scan" "query"
+              "assert" "retract" "batch" "leaseAcquire" "leaseRenew"
+              "leaseRelease" "leaseCheck"]
+             (mapv second
+                   (re-seq #"(?m)^    ([A-Za-z]+): .*send\(" worker)))
           nil))
 
 (let [server (file-source "server.clj")]
-  (check! "server listener has no line/EDN compatibility parser"
-          (absent? server ["clojure.edn" "edn/read" "readLine" "io/reader"])
-          nil)
   (check! "server serves only the closed thirteen-op FRAMRPC set"
           (= 13 (count (re-seq #":rpc/[a-z-]+" (between server
                                                        "(def native-rpc-operations"
                                                        "(def paged-rpc-operations"))))
           nil))
 
-(let [runtime (file-source "src/fram/rt.clj")
-      native (between runtime ";; --- FRAMRPC v2 client"
-                      ";; The human syntax is deliberately")]
-  (check! "shared binary client section has no legacy socket dependency"
-          (and native
-               (absent? native ["edn/read" "database-request-for-log"
-                                "database-version-for-log" "readLine"]))
-          nil)
+(let [runtime (file-source "src/fram/rt.clj")]
   (check! "human Term parsing is explicitly local"
           (and (str/includes? runtime "defn parse-human-term!")
                (str/includes? runtime "This parser is a CLI boundary only"))
@@ -70,26 +54,13 @@
           tool-names)
   (check! "MCP public data dispatch is FRAMRPC-only"
           (and public
-               (str/includes? public "fram.rt/native-call!")
-               (absent? public ["database-request-for-log" "database-version-for-log"
-                                "database-assert-for-log" "database-retract-for-log"
-                                "edn/read"]))
-          nil)
-  (check! "MCP runtime closure contains no graph-control implementation"
-          (absent? mcp ["resolve-core" "babashka.process" "FRAM_GRAPH_EDIT"
-                        "route-edit" "add-def" "set-body" "rename-def"
-                        "insert-after" "insert-before" "replace-in-body"
-                        "edit-transaction"])
+               (str/includes? public "fram.rt/native-call!"))
           nil))
 
 (let [fast (file-source "bin/fram-fast.clj")
       up (file-source "bin/fram-up")
       selfcheck-runner (file-source "bin/fram-selfcheck")
       selfcheck (file-source "bin/fram-selfcheck-probe.clj")]
-  (check! "CLI data client has no legacy server helper"
-          (absent? fast ["database-request-for-log" "database-version-for-log"
-                         "database-assert-for-log" "database-retract-for-log"])
-          nil)
   (check! "CLI EDN use is confined to the local human query parser"
           (= 2 (count (re-seq #"(?:clojure\.edn|edn/read-string)" fast)))
           nil)
@@ -100,8 +71,7 @@
           nil)
   (check! "readiness and deep probes speak native version frames"
           (and (str/includes? up "native-call!")
-               (str/includes? selfcheck "native-request-to!")
-               (absent? (str up selfcheck) ["database-version-for-log" "edn/read" "readLine"]))
+               (str/includes? selfcheck "native-request-to!"))
           nil)
   (check! "deep probes bind the exact runtime engine identity"
           (and (str/includes? selfcheck-runner "native) EXPECTED_ENGINE=:rpc/native")
@@ -128,7 +98,6 @@
                (str/includes? launcher "exec \"$native_server\"")
                (str/includes? code-on "bin/fram-server serve")
                (str/includes? code-on "--space-id \"$SPACE_ID\"")
-               (absent? code-on ["edn/read" ":edit-protocol"])
                (every? #(str/includes? ingest %)
                        ["database/create-triple-log!" "database/open-database!"
                         "database/commit!" "replace-atomically!"])

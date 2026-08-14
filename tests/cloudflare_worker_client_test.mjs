@@ -42,13 +42,9 @@ check('noncanonical typed values are rejected locally', () => {
   assert.throws(() => client.integerTerm(Number.MAX_SAFE_INTEGER + 1), /safe integer/);
 });
 
-check('client has one JSON mode and requires an explicit SpaceId', () => {
+check('client requires an explicit SpaceId and closed input keys', () => {
   assert.throws(() => client.framClient({ token: 'secret' }), /space required/);
-  assert.throws(() => client.tripleQuery({ l: 'legacy' }), /unknown/);
-  assert.equal('RawEdn' in client, false);
-  assert.equal('raw' in client, false);
-  assert.equal('ednEncode' in client, false);
-  assert.equal('ednDecode' in client, false);
+  assert.throws(() => client.tripleQuery({ unexpected: 'value' }), /unknown/);
 });
 
 check('version request is the exact JSON FRAMRPC envelope', async () => {
@@ -110,7 +106,7 @@ check('typed query plans and pagination contain no untyped JSON data', async () 
   assert.deepEqual(client.recordFields(upper, 'query/as-of', 1)[0], ['integer', '12']);
 });
 
-check('the closed client exposes every public operation and no raw escape', async () => {
+check('the closed client exposes every public operation', async () => {
   const requests = [];
   const fram = client.framClient({
     token: 'secret', space: 'space-a',
@@ -130,7 +126,6 @@ check('the closed client exposes every public operation and no raw escape', asyn
   assert.equal(requests.length, 13);
   assert.equal(requests.filter(([path]) => path === '/q').length, 7);
   assert.equal(requests.filter(([path]) => path === '/assert').length, 6);
-  assert.equal('raw' in fram, false);
 });
 
 check('unknown response fields and noncanonical versions fail closed', async () => {

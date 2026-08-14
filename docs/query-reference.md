@@ -44,8 +44,7 @@ advances the version, and reports `stateChanged = false`, but produces no
 withdrawal row. The five text relations are positive virtual relations over
 live String values in the third position and speak the
 [EAV reading](ontology.md#profiles-and-anchoring) because that reading is what
-a text search of a value assumes. There are no `fact`, `fact-id`, `predicate`,
-or row-handle compatibility relations.
+a text search of a value assumes.
 
 ## Rules
 

@@ -250,29 +250,27 @@
 (defn- dispatch-call [name arguments]
   (cond
     (= name "tell") (native-mcp-write "tell" arguments)
-    (contains? #{"retract" "untell"} name)
-    (native-mcp-write "retract" arguments)
+    (= name "retract") (native-mcp-write "retract" arguments)
     (= name "show") (native-mcp-show arguments)
-    (= name "query") (native-mcp-query arguments)
+    (= name "ask") (native-mcp-query arguments)
     (= name "validate") (native-mcp-validate)
     :else
     {:isError true :text (str "unknown tool: " name)}))
 
 (defn handle-call [name args]
-  (let [normalized (if (= name "ask") "query" name)
-        arguments (or args {})
+  (let [arguments (or args {})
         required (cond
-                   (contains? #{"tell" "retract" "untell"} normalized)
+                   (contains? #{"tell" "retract"} name)
                    [:subject :predicate :object]
-                   (= "show" normalized) [:subject]
-                   (= "query" normalized) [:query]
+                   (= "show" name) [:subject]
+                   (= "ask" name) [:query]
                    :else [])
         missing (filterv #(nil? (get arguments %)) required)]
     (if (seq missing)
       {:isError true
        :text (str "missing required param(s): "
                   (str/join ", " (map #(str "'" (clojure.core/name %) "'") missing)))}
-      (dispatch-call normalized arguments))))
+      (dispatch-call name arguments))))
 
 (def ^:private max-live-queries
   (max 1 (quot (.. Runtime getRuntime availableProcessors) 2)))

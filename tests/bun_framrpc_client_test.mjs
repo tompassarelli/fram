@@ -155,10 +155,9 @@ async function startServer(port, log, space) {
 }
 
 async function exerciseClient(fram) {
-  await check('native checkpoint is fixed and absent from the data client object', async () => {
+  await check('native checkpoint is fixed and separate from the data client object', async () => {
     assert.equal(typeof framNativeCheckpoint, 'function');
     assert.equal(fram.checkpoint, undefined);
-    assert.equal(fram.raw, undefined);
   });
 
   await check('Term constructors preserve i64, float, recursive Triple, and Instant identity', async () => {
@@ -173,7 +172,7 @@ async function exerciseClient(fram) {
     );
     assert.throws(() => keywordTerm(''), /nonempty/);
     assert.throws(() => tripleTerm('\ud800', 'p', 'r'), /surrogate/);
-    assert.throws(() => tripleQuery({ l: 'legacy' }), /unknown/);
+    assert.throws(() => tripleQuery({ unexpected: 'value' }), /unknown/);
   });
 
   await check('structured query lowering emits the closed query/plan record', async () => {

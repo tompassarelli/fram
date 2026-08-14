@@ -10,7 +10,7 @@ This document fixes the current source-head MCP data surface at exactly five pub
 | `ask` | run one validated structured query |
 | `validate` | report structural integrity |
 
-The advertised list is closed. Missing arguments and unknown names fail. Dispatch accepts only two unadvertised synonyms for listed concepts: `untell` for retract and internal `query` normalized to ask. Graph-authoring verbs belong to a separate sealed control service.
+The advertised list is closed. Missing arguments and unknown names fail. Dispatch accepts only the names above. Graph-authoring verbs belong to a separate sealed control service.
 
 ## Value boundary
 

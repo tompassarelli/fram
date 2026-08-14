@@ -786,7 +786,8 @@ function queryHead(value) {
 function queryClause(value) {
   plainObject(value, 'query clause');
   if (own(value, 'rel')) {
-    const negated = Boolean(value.neg ?? value.not ?? value.negated);
+    exactKeys(value, ['rel', 'args', 'neg'], 'query relation clause');
+    const negated = Boolean(value.neg);
     return rpcRecord('query/relation', [
       stringTerm(queryName(value.rel, 'query relation')),
       rpcList(required(value, 'args', 'query clause').map(queryTerm)),

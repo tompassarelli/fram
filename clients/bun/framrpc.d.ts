@@ -46,8 +46,6 @@ export interface QueryRelationClause {
   rel: string;
   args: QueryTermInput[];
   neg?: boolean;
-  not?: boolean;
-  negated?: boolean;
 }
 
 export interface QueryPredicateClause {

@@ -102,7 +102,7 @@
        :tell
        "")
      (->ToolSpec "retract"
-       "Retract the exact fact (subject, predicate, object). The verb `untell` is an accepted alias."
+       "Retract the exact fact (subject, predicate, object)."
        spo-params
        :retract
        "")
@@ -226,19 +226,16 @@
     (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat e6 (concat e7 (concat e8 (concat e9 (concat e10 e11)))))))))))))
 
 ;; READ -> {:rows [...]}.  WRITE (tell/retract) -> {:write {:op :l :p :r}} (host routes it
-;; through the commit sequencer).  ask/query -> run result.  bad/unknown -> {:error}.
+;; through the commit sequencer).  ask -> run result.  bad/unknown -> {:error}.
 ;; args is a (Map Keyword Any): keyword keys -> arbitrary EDN values. The return is the
-;; tagged result envelope (Any — open-map key-presence gap, see ns doc). The name `query`
-;; is accepted as an alias for `ask` (same :query op) so the structured escape hatch keeps
-;; both spellings on every surface. `untell` is likewise accepted as an alias for
-;; `retract` (same :retract op) so the retract verb keeps both spellings everywhere.
+;; tagged result envelope (Any — open-map key-presence gap, see ns doc).
 (defn call!
   [(ctx (Atom t/TermStore))
    (cat (Vec ToolSpec))
    (tool-name String)
    (args (Map Keyword Any))]
   Any
-  (let [(tool String) (if (= tool-name "query") "ask" (if (= tool-name "untell") "retract" tool-name)) (spec ToolSpec?) (spec-by-name cat tool) (session schema/Session) (schema/session! ctx) (propositions (Vec t/Triple)) (rotation/propositions (rotation/all-occurrences (schema/view session)))]
+  (let [(tool String) tool-name (spec ToolSpec?) (spec-by-name cat tool) (session schema/Session) (schema/session! ctx) (propositions (Vec t/Triple)) (rotation/propositions (rotation/all-occurrences (schema/view session)))]
     (if (nil? spec)
       {:error [(str "unknown tool '" tool "' — call `tools` for the catalog")]}
       (let [(op Op) (:op spec) (miss (Vec String)) (missing-req op args)]

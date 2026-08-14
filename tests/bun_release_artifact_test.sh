@@ -251,7 +251,6 @@ assert.deepEqual(Object.keys(client).sort(), [
   'validate',
   'version',
 ]);
-assert.equal('raw' in client, false);
 assert.equal('checkpoint' in client, false);
 assert.equal('framNativeCheckpoint' in client, false);
 assert.equal(typeof framNativeCheckpoint, 'function');

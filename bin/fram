@@ -7,9 +7,9 @@ usage() {
   printf '%s\n' \
     'fram usage:' \
     '  tell <subject> <slot> <value>' \
-    '  retract <subject> <slot> <value> (alias: untell)' \
+    '  retract <subject> <slot> <value>' \
     '  tell-existing <subject> <slot> <value>' \
-    '  retract-existing <subject> <slot> <value> (alias: untell-existing)' \
+    '  retract-existing <subject> <slot> <value>' \
     '  show <subject>' \
     '  query <edn>' \
     '  scan <t1|_> <t2|_> <t3|_>' \
@@ -33,7 +33,7 @@ if [[ "${1:-}" == "selfcheck" ]]; then
 fi
 
 case "${1:-}" in
-  show|query|tell|retract|untell|tell-existing|retract-existing|untell-existing|version|status|validate|scan|occurrences)
+  show|query|tell|retract|tell-existing|retract-existing|version|status|validate|scan|occurrences)
     if [[ -z "${FRAM_SPACE_ID:-}" ]]; then
       echo "fram: FRAM_SPACE_ID is required for data commands" >&2
       exit 2

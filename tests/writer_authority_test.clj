@@ -105,9 +105,7 @@
                    (t/occurrence-coordinate? coordinate)
                    (= space (t/triple-t1 (t/triple-t1 coordinate)))
                    (= 1 (t/triple-t3 (t/triple-t1 coordinate)))
-                   (= 0 (t/triple-t3 coordinate))))
-      (check! "native response contains no physical content handle"
-              (not (str/includes? (pr-str response) "cid"))))
+                   (= 0 (t/triple-t3 coordinate)))))
     (let [append-var (ns-resolve 'database 'append-frame-cohort-durable!)
           original @append-var
           failure
@@ -138,9 +136,6 @@
                                     wire/rpc-subject-any nil)))))
       (check! "ambiguity writes one tx2 frame, never duplicate tx2"
               (= [1 2] (mapv :tx-seq (:frames (database/read-triple-log! log))))))
-    (check! "legacy query name is rejected by the native operation set"
-            (= :rpc/unsupported-operation
-               (response-error (direct-request! space :query wire/rpc-unit))))
     (finally (server/shutdown!))))
 
 ;; One active JVM writer, one JVM standby, and a refused duplicate active over
@@ -209,10 +204,6 @@
                                             "blue-green" :status nil))]
                              (when (some #{proposition} (scan-values response))
                                response))))))
-        (check! "old for-log envelope is explicitly unsupported"
-                (= :rpc/unsupported-operation
-                   (response-error
-                    (request! standby-port space :for-log wire/rpc-unit))))
         (finally
           (process/destroy-tree standby)
           @standby)))

@@ -213,8 +213,8 @@
         (fast-query! (second args)))
       (= command "scan") (scan! (vec (rest args)))
       (= command "occurrences") (occurrences!)
-      (contains? #{"tell" "retract" "untell" "tell-existing"
-                   "retract-existing" "untell-existing"} command)
+      (contains? #{"tell" "retract" "tell-existing" "retract-existing"}
+                 command)
       (do
         (when-not (= 4 (count args))
           (throw (ex-info
