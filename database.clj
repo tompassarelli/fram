@@ -504,6 +504,10 @@
                   (.digest (java.security.MessageDigest/getInstance "SHA-256")
                            content))))
 
+(defn- sha256-prefix-hex [^bytes content byte-count]
+  (sha256-hex
+   (java.util.Arrays/copyOfRange content 0 (int byte-count))))
+
 (defn- ensure-directory! [path]
   (java.nio.file.Files/createDirectories
    (.toPath (java.io.File. (str path)))
@@ -546,9 +550,88 @@
    (:space-id parsed)
    (some? (:torn-tail parsed))))
 
+(defn- read-chain-source! [path allow-continuation?]
+  (let [file (.getCanonicalFile (java.io.File. (str path)))]
+    (when-not (.isFile file)
+      (fail! :triple-log-missing "FRAMLOG source is missing"
+             {:path (.getPath file)}))
+    (let [bytes (java.nio.file.Files/readAllBytes (.toPath file))
+          parsed (parse-triple-log-bytes
+                  bytes (.getPath file) allow-continuation?)]
+      {:path (.getPath file)
+       :bytes bytes
+       :parsed parsed
+       :member (chain-member parsed (alength ^bytes bytes))})))
+
 (defn- read-chain-member! [path]
-  (let [parsed (read-triple-log! path true)]
-    [parsed (chain-member parsed (.length (java.io.File. (str path))))]))
+  (let [source (read-chain-source! path true)]
+    [(:parsed source) (:member source)]))
+
+(defn- require-segment-identity! [segment source]
+  (let [expected (branch/segmentrecord-sha256 segment)
+        actual (sha256-hex (:bytes source))]
+    (when-not (= expected actual)
+      (fail! :segment-digest-mismatch
+             "sealed FRAMLOG segment does not match its content address"
+             {:path (:path source) :expected expected :actual actual}))))
+
+(defn branch-revision!
+  "Name one exact committed point on a branch from durable history. The branch
+   name is routing, not identity: equal sealed chains and tail prefixes have the
+   same revision even when reached through different refs."
+  ([store-path]
+   (branch-revision! store-path branch/default-branch))
+  ([store-path branch-name]
+   (let [store (.getPath (.getCanonicalFile (java.io.File. (str store-path))))
+         selected (branch/require-branch-name! branch-name)
+         _ (require-no-pending-fork! store)
+         document (read-branch-ref store selected)]
+     (cond
+       (and (nil? document) (= selected branch/default-branch))
+       (let [tail (read-chain-source! store false)
+             parsed (:parsed tail)
+             valid-bytes (:valid-bytes parsed)
+             sequence (long (or (:tx-seq (last (:frames parsed))) 0))]
+         (branch/branch-revision!
+          (:space-id parsed) []
+          (sha256-prefix-hex (:bytes tail) valid-bytes)
+          (long valid-bytes) sequence))
+
+       (nil? document)
+       (fail! :branch-missing "branch has no ref"
+              {:branch selected :path (branch/ref-path! store selected)})
+
+       :else
+       (let [segments (branch/refdocument-segments document)
+             sealed
+             (mapv (fn [segment]
+                     [segment
+                      (read-chain-source!
+                       (branch/segment-path
+                        store (branch/segmentrecord-sha256 segment))
+                       true)])
+                   segments)
+             tail (read-chain-source!
+                   (branch/branch-tail-path! store selected) true)
+             parsed (:parsed tail)
+             fault (branch/chain-fault
+                    document (mapv (comp :member second) sealed)
+                    (:member tail))]
+         (when fault
+           (fail! :invalid-branch-chain fault
+                  {:branch selected :path (:path tail)
+                   :ref (branch/ref-path! store selected)}))
+         (doseq [[segment source] sealed]
+           (require-segment-identity! segment source))
+         (let [valid-bytes (:valid-bytes parsed)
+               sequence
+               (long (or (:tx-seq (last (:frames parsed)))
+                         (branch/chain-end-sequence document)))]
+           (branch/branch-revision!
+            (branch/refdocument-space-id document)
+            (mapv branch/segmentrecord-sha256 segments)
+            (sha256-prefix-hex (:bytes tail) valid-bytes)
+            (long valid-bytes) sequence)))))))
 
 (defn open-branch!
   "Open one branch of a store: fold its sealed segment chain in ref order, then

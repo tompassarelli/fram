@@ -3,12 +3,15 @@
 ;; tail; the tail is located by convention and is never listed in the ref.
 (ns fram.branch
   (:require [clojure.string :as str])
-  (:import [java.nio.charset StandardCharsets]
+  (:import [java.io ByteArrayOutputStream]
+           [java.nio.charset StandardCharsets]
+           [java.security MessageDigest]
            [java.util.zip CRC32]))
 
 
 (def ref-format String "framref/v1")
 (def fork-marker-format String "framfork/v1")
+(def branch-revision-format String "frambranch-revision/v1")
 ;; The unnamed tail at <log> keeps this spelling in <log>.refs/.
 (def default-branch String "main")
 (def max-branch-name-length Int 64)
@@ -21,6 +24,16 @@
   [(sha256 String) (start-sequence Int) (end-sequence Int) (byte-count Int)])
 
 (defrecord RefDocument [(space-id String) (segments (Vec SegmentRecord))])
+
+;; A branch name is mutable routing and is deliberately absent. Equal history
+;; on two refs has one identity; their first different tail prefix separates it.
+(defrecord BranchRevision
+  [(space-id String)
+   (segments (Vec String))
+   (tail-prefix-sha256 String)
+   (tail-prefix-byte-count Int)
+   (sequence Int)
+   (identity String)])
 
 ;; What a folded chain member turned out to be on disk, as the caller read it.
 (defrecord ChainMember
@@ -86,6 +99,95 @@
   (let [(digest Any) (CRC32.)]
     (.update digest (.getBytes text StandardCharsets/UTF_8))
     (long (.getValue digest))))
+
+(defn- revision-write-u8! [(out Any) (value Int)] Nil
+  (do (.write out (int (bit-and value 255))) nil))
+
+(defn- revision-write-u32-le! [(out Any) (value Int)] Nil
+  (do
+    (doseq [position (range 4)]
+      (revision-write-u8!
+       out (unsigned-bit-shift-right value (* position 8))))
+    nil))
+
+(defn- revision-write-i64-le! [(out Any) (value Int)] Nil
+  (do
+    (doseq [position (range 8)]
+      (revision-write-u8!
+       out (unsigned-bit-shift-right value (* position 8))))
+    nil))
+
+(defn- revision-write-text! [(out Any) (value String)] Nil
+  (let [(bytes Any) (.getBytes value StandardCharsets/UTF_8)]
+    (revision-write-u32-le! out (alength bytes))
+    (.write out bytes)
+    nil))
+
+(defn- sha256-hex [(bytes Any)] String
+  (apply str
+         (mapv (fn [(value Any)] String
+                 (format "%02x" (bit-and (int value) 255)))
+               (vec (.digest (MessageDigest/getInstance "SHA-256") bytes)))))
+
+;; The preimage is domain text, SpaceId, segment count and ordered segment
+;; identities, tail prefix byte count and digest, then sequence. Text values
+;; carry u32 little-endian byte lengths; counts are u32 and positions are i64.
+(defn- branch-revision-preimage!
+  [(space-id String)
+   (segments (Vec String))
+   (tail-prefix-sha256 String)
+   (tail-prefix-byte-count Int)
+   (sequence Int)]
+  Any
+  (let [(out ByteArrayOutputStream) (ByteArrayOutputStream.)]
+    (revision-write-text! out branch-revision-format)
+    (revision-write-text! out space-id)
+    (revision-write-u32-le! out (count segments))
+    (doseq [segment segments]
+      (revision-write-text! out segment))
+    (revision-write-i64-le! out tail-prefix-byte-count)
+    (revision-write-text! out tail-prefix-sha256)
+    (revision-write-i64-le! out sequence)
+    (.toByteArray out)))
+
+(defn branch-revision!
+  [(space-id String)
+   (segments (Vec String))
+   (tail-prefix-sha256 String)
+   (tail-prefix-byte-count Int)
+   (sequence Int)]
+  BranchRevision
+  (cond
+    [(zero? (count space-id))
+     (fail "branch revision SpaceId must be nonempty"
+           :invalid-branch-revision)]
+    [(> (count segments) max-chain-length)
+     (fail "branch revision chain exceeds the supported segment count"
+           :invalid-branch-revision)]
+    [(not (every? valid-segment-name? segments))
+     (fail "branch revision contains an invalid sealed segment identity"
+           :invalid-branch-revision)]
+    [(not= (count segments) (count (set segments)))
+     (fail "branch revision lists the same sealed segment twice"
+           :invalid-branch-revision)]
+    [(not (valid-segment-name? tail-prefix-sha256))
+     (fail "branch revision tail prefix is not a SHA-256 hex digest"
+           :invalid-branch-revision)]
+    [(neg? tail-prefix-byte-count)
+     (fail "branch revision tail prefix byte count must not be negative"
+           :invalid-branch-revision)]
+    [(neg? sequence)
+     (fail "branch revision sequence must not be negative"
+           :invalid-branch-revision)]
+    [:else
+     (let [(identity String)
+           (str "sha256:"
+                (sha256-hex
+                 (branch-revision-preimage!
+                  space-id segments tail-prefix-sha256
+                  tail-prefix-byte-count sequence)))]
+       (->BranchRevision space-id segments tail-prefix-sha256
+                         tail-prefix-byte-count sequence identity))]))
 
 (defn- segment-line [(segment SegmentRecord)] String
   (str "segment " (segmentrecord-sha256 segment) " "
@@ -187,9 +289,12 @@
 ;; The last transaction the sealed chain names, or 0 when it names none.
 (defn chain-end-sequence [(document RefDocument)] Int
   (let [(segments (Vec SegmentRecord)) (refdocument-segments document)]
-    (if (zero? (count segments))
-      0
-      (segmentrecord-end-sequence (nth segments (dec (count segments)))))))
+    (loop [(index Int) (dec (count segments))]
+      (if (neg? index)
+        0
+        (let [(end Int)
+              (segmentrecord-end-sequence (nth segments index))]
+          (if (pos? end) end (recur (dec index))))))))
 
 (defn print-fork-marker [(marker ForkMarker)] String
   (let [(body String)

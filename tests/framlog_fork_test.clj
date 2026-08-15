@@ -31,6 +31,14 @@
 (defn- read-all ^bytes [path]
   (java.nio.file.Files/readAllBytes (.toPath (java.io.File. (str path)))))
 
+(defn- write-all! [path ^bytes content]
+  (java.nio.file.Files/write
+   (.toPath (java.io.File. (str path))) content
+   (into-array java.nio.file.OpenOption
+               [java.nio.file.StandardOpenOption/CREATE
+                java.nio.file.StandardOpenOption/WRITE
+                java.nio.file.StandardOpenOption/TRUNCATE_EXISTING])))
+
 (defn- sha256-hex [^bytes content]
   (apply str (map #(format "%02x" (bit-and % 255))
                   (.digest (java.security.MessageDigest/getInstance "SHA-256")
@@ -120,14 +128,36 @@
 
 (check! "both branches fold to the exact pre-fork image"
         (= [pre-fork-image pre-fork-image] [(image parent) (image child)]))
+(check! "two refs at the same exact history share one branch revision"
+        (= (database/branch-revision! log branch/default-branch)
+           (database/branch-revision! log "lane")))
 
-(database/assert! parent (t/triple "parent" :wrote 1) {})
-(database/assert! child (t/triple "child" :wrote 1) {})
+(def parent-write (database/assert! parent (t/triple "parent" :wrote 1) {}))
+(def child-write (database/assert! child (t/triple "child" :wrote 1) {}))
+(def parent-coordinate
+  (t/operationoccurrence-coordinate (first (:occurrences parent-write))))
+(def child-coordinate
+  (t/operationoccurrence-coordinate (first (:occurrences child-write))))
+(def parent-revision
+  (database/branch-revision! log branch/default-branch))
+(def child-revision (database/branch-revision! log "lane"))
 
 (check! "each branch's first append lands at the fork sequence plus one"
         (= [(inc pre-fork-sequence) (inc pre-fork-sequence)]
            [(:tx-seq (first (:frames (database/read-triple-log! parent-tail true))))
             (:tx-seq (first (:frames (database/read-triple-log! child-tail true))))]))
+(check! "sibling post-fork occurrences can have the same coordinate"
+        (= parent-coordinate child-coordinate))
+(check! "coordinate-colliding sibling appends have distinct branch revisions"
+        (and (= (branch/branchrevision-segments parent-revision)
+                (branch/branchrevision-segments child-revision))
+             (= (branch/branchrevision-sequence parent-revision)
+                (branch/branchrevision-sequence child-revision))
+             (not= (branch/branchrevision-identity parent-revision)
+                   (branch/branchrevision-identity child-revision))))
+(check! "a durable branch revision repeats exactly without intervening writes"
+        (= parent-revision
+           (database/branch-revision! log branch/default-branch)))
 
 (def parent-cold (database/open-branch! log branch/default-branch space))
 (def child-cold (database/open-branch! log "lane" space))
@@ -266,6 +296,38 @@
 (writer-authority/release! held)
 (check! "fork proceeds once writer authority is released"
         (= 1 (count (:chain (database/fork-store! locked-log "lane")))))
+
+;; A replacement sealed segment can be a wholly valid FRAMLOG with the same
+;; SpaceId, byte count, and sequence span. Its content address must still fail.
+(def tampered-log (store-path "tampered.framlog"))
+(def replacement-log (store-path "replacement.framlog"))
+(database/create-triple-log! tampered-log space)
+(database/create-triple-log! replacement-log space)
+(database/assert! (database/open-database! tampered-log space)
+                  (t/triple "tamper" :value "aaaa") {})
+(database/assert! (database/open-database! replacement-log space)
+                  (t/triple "tamper" :value "bbbb") {})
+(def tampered-receipt (database/fork-store! tampered-log "lane"))
+(def tampered-segment
+  (branch/segment-path tampered-log (:segment tampered-receipt)))
+(def replacement-bytes (read-all replacement-log))
+
+(check! "the tamper witness preserves size, SpaceId, and transaction sequence"
+        (let [record
+              (first
+               (branch/refdocument-segments
+                (database/read-branch-ref tampered-log "lane")))
+              parsed (database/read-triple-log! replacement-log)]
+          (and (= (branch/segmentrecord-byte-count record)
+                  (alength replacement-bytes))
+               (= space (:space-id parsed))
+               (= [1] (mapv :tx-seq (:frames parsed)))
+               (not= (:segment tampered-receipt)
+                     (sha256-hex replacement-bytes)))))
+(write-all! tampered-segment replacement-bytes)
+(check! "a well-formed sealed segment under the wrong content address is refused"
+        (= :segment-digest-mismatch
+           (error-code #(database/branch-revision! tampered-log "lane"))))
 
 ;; ------------------------------------------------------ interrupted forks
 ;; Put a completed fork back to the state it passes through between writing its

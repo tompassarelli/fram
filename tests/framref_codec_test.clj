@@ -17,6 +17,7 @@
 
 (def hash-a (apply str (repeat 64 "a")))
 (def hash-b (apply str (repeat 64 "b")))
+(def hash-c (apply str (repeat 64 "c")))
 
 ;; Hand-built ref and marker text needs the same CRC the codec writes, or every
 ;; refusal below would be the CRC's rather than the one under test.
@@ -51,6 +52,45 @@
         (= [11 0]
            [(branch/chain-end-sequence document)
             (branch/chain-end-sequence (branch/empty-ref "ref-codec-space"))]))
+(check! "an empty terminal segment does not erase the chain's last transaction"
+        (= 11
+           (branch/chain-end-sequence
+            (branch/->RefDocument
+             "ref-codec-space"
+             (conj (branch/refdocument-segments document)
+                   (branch/->SegmentRecord hash-c 0 0 32))))))
+
+(def revision
+  (branch/branch-revision!
+   "ref-codec-space" [hash-a hash-b] hash-c 96 14))
+
+(check! "a branch revision is exactly repeatable"
+        (= revision
+           (branch/branch-revision!
+            "ref-codec-space" [hash-a hash-b] hash-c 96 14)))
+(check! "the canonical branch revision has its stable v1 digest"
+        (= "sha256:e83468c950e386c152e9f563107bfc4aa829ece42b7ff00dbc437043e8275800"
+           (branch/branchrevision-identity revision)))
+(check! "sealed segment order is part of branch revision identity"
+        (not= (branch/branchrevision-identity revision)
+              (branch/branchrevision-identity
+               (branch/branch-revision!
+                "ref-codec-space" [hash-b hash-a] hash-c 96 14))))
+(check! "tail prefix and sequence are independent revision inputs"
+        (= 3
+           (count
+            (set
+             (mapv branch/branchrevision-identity
+                   [revision
+                    (branch/branch-revision!
+                     "ref-codec-space" [hash-a hash-b] hash-a 96 14)
+                    (branch/branch-revision!
+                     "ref-codec-space" [hash-a hash-b] hash-c 96 15)])))))
+(check! "a malformed tail prefix identity is refused"
+        (= :invalid-branch-revision
+           (error-code
+            #(branch/branch-revision!
+              "ref-codec-space" [hash-a hash-b] (subs hash-c 1) 96 14))))
 
 (check! "an unknown ref format is refused by name"
         (= :unsupported-branch-ref-version

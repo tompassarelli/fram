@@ -1,11 +1,15 @@
 (ns fram.branch
   (:require [clojure.string :as str])
-  (:import [java.nio.charset StandardCharsets]
+  (:import [java.io ByteArrayOutputStream]
+           [java.nio.charset StandardCharsets]
+           [java.security MessageDigest]
            [java.util.zip CRC32]))
 
 (def ^String ref-format "framref/v1")
 
 (def ^String fork-marker-format "framfork/v1")
+
+(def ^String branch-revision-format "frambranch-revision/v1")
 
 (def ^String default-branch "main")
 
@@ -28,6 +32,20 @@
 (defn refdocument-space-id [r] (:space-id r))
 
 (defn refdocument-segments [r] (:segments r))
+
+(defrecord BranchRevision [space-id segments tail-prefix-sha256 tail-prefix-byte-count sequence identity])
+
+(defn branchrevision-space-id [r] (:space-id r))
+
+(defn branchrevision-segments [r] (:segments r))
+
+(defn branchrevision-tail-prefix-sha256 [r] (:tail-prefix-sha256 r))
+
+(defn branchrevision-tail-prefix-byte-count [r] (:tail-prefix-byte-count r))
+
+(defn branchrevision-sequence [r] (:sequence r))
+
+(defn branchrevision-identity [r] (:identity r))
 
 (defrecord ChainMember [start-sequence end-sequence byte-count continuation space-id torn])
 
@@ -97,6 +115,56 @@
   (.update digest (.getBytes text StandardCharsets/UTF_8))
   (long (.getValue digest))))
 
+(defn- revision-write-u8! [out value]
+  (do
+  (.write out (int (bit-and value 255)))
+  nil))
+
+(defn- revision-write-u32-le! [out value]
+  (do
+  (doseq [position (range 4)]
+  (revision-write-u8! out (unsigned-bit-shift-right value (* position 8))))
+  nil))
+
+(defn- revision-write-i64-le! [out value]
+  (do
+  (doseq [position (range 8)]
+  (revision-write-u8! out (unsigned-bit-shift-right value (* position 8))))
+  nil))
+
+(defn- revision-write-text! [out ^String value]
+  (let [bytes (.getBytes value StandardCharsets/UTF_8)]
+  (revision-write-u32-le! out (alength bytes))
+  (.write out bytes)
+  nil))
+
+(defn- ^String sha256-hex [bytes]
+  (apply str (mapv (fn [value] (format "%02x" (bit-and (int value) 255))) (vec (.digest (MessageDigest/getInstance "SHA-256") bytes)))))
+
+(defn- branch-revision-preimage! [^String space-id segments ^String tail-prefix-sha256 tail-prefix-byte-count sequence]
+  (let [out (ByteArrayOutputStream.)]
+  (revision-write-text! out branch-revision-format)
+  (revision-write-text! out space-id)
+  (revision-write-u32-le! out (count segments))
+  (doseq [segment segments]
+  (revision-write-text! out segment))
+  (revision-write-i64-le! out tail-prefix-byte-count)
+  (revision-write-text! out tail-prefix-sha256)
+  (revision-write-i64-le! out sequence)
+  (.toByteArray out)))
+
+(defn ^BranchRevision branch-revision! [^String space-id segments ^String tail-prefix-sha256 tail-prefix-byte-count sequence]
+  (cond
+  (zero? (count space-id)) (fail "branch revision SpaceId must be nonempty" :invalid-branch-revision)
+  (> (count segments) max-chain-length) (fail "branch revision chain exceeds the supported segment count" :invalid-branch-revision)
+  (not (every? valid-segment-name? segments)) (fail "branch revision contains an invalid sealed segment identity" :invalid-branch-revision)
+  (not= (count segments) (count (set segments))) (fail "branch revision lists the same sealed segment twice" :invalid-branch-revision)
+  (not (valid-segment-name? tail-prefix-sha256)) (fail "branch revision tail prefix is not a SHA-256 hex digest" :invalid-branch-revision)
+  (neg? tail-prefix-byte-count) (fail "branch revision tail prefix byte count must not be negative" :invalid-branch-revision)
+  (neg? sequence) (fail "branch revision sequence must not be negative" :invalid-branch-revision)
+  :else (let [identity (str "sha256:" (sha256-hex (branch-revision-preimage! space-id segments tail-prefix-sha256 tail-prefix-byte-count sequence)))]
+  (->BranchRevision space-id segments tail-prefix-sha256 tail-prefix-byte-count sequence identity))))
+
 (defn- ^String segment-line [^SegmentRecord segment]
   (str "segment " (segmentrecord-sha256 segment) " " (segmentrecord-start-sequence segment) " " (segmentrecord-end-sequence segment) " " (segmentrecord-byte-count segment) "\n"))
 
@@ -143,7 +211,9 @@
 
 (defn chain-end-sequence [^RefDocument document]
   (let [segments (refdocument-segments document)]
-  (if (zero? (count segments)) 0 (segmentrecord-end-sequence (nth segments (dec (count segments)))))))
+  (loop [index (dec (count segments))]
+  (if (neg? index) 0 (let [end (segmentrecord-end-sequence (nth segments index))]
+  (if (pos? end) end (recur (dec index))))))))
 
 (defn ^String print-fork-marker [^ForkMarker marker]
   (let [body (str fork-marker-format "\n" "parent " (forkmarker-parent marker) "\n" "child " (forkmarker-child marker) "\n" "segment " (forkmarker-segment marker) "\n")]
