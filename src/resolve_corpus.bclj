@@ -126,15 +126,21 @@
         nil))))
 
 (defn module-export-set [(ctx ri/Graph) (view Any) (ents-of Any) (src Any)] Any
-  (let [ents (vec (get ents-of src [])) exports (rm/module-exports ctx view ents) value-exports (if (seq exports) exports (rm/module-defs ctx view ents))]
+  (let [ents (vec (get ents-of src [])) exports (rm/module-exports ctx view ents) value-exports (if (empty? exports) (rm/module-defs ctx view ents) exports)]
     (into #{}
-      (concat (keys value-exports)
-        (keys (rm/module-types ctx view ents))
-        (keys (rm/module-accessors ctx view ents))))))
+      (concat (set (keys value-exports))
+        (set (keys (rm/module-types ctx view ents)))
+        (set (keys (rm/module-accessors ctx view ents)))))))
 
 (defn module-imports [(ctx ri/Graph) (view Any) (ents-of Any) (src Any)] Any
-  (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src [])))]
-    (into #{} (concat (vals refer) (vals as) (map first (vals rename))))))
+  (let [imports (rm/parse-require ctx view (vec (get ents-of src [])))
+        (refer (Map Any Any)) (get imports :refer {})
+        (as (Map Any Any)) (get imports :as {})
+        (rename (Map Any Any)) (get imports :rename {})]
+    (into #{}
+      (concat (set (vals refer))
+        (set (vals as))
+        (map first (set (vals rename)))))))
 
 (defn import-graph
   [(ctx ri/Graph) (view Any) (ents-of Any) (srcs (Vec Any))] Any

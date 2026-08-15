@@ -395,17 +395,19 @@
 (defn operation-count [(ctx (Atom t/TermStore))] Int
   (count (store-operations (deref ctx))))
 
-(defn assert-operation [(proposition Any)] t/CommitOperation
-  (if (and (t/triple? proposition) (t/term? proposition))
-    (t/->CommitOperation t/assert-action proposition)
-    (throw (ex-info "fram: assertion operation requires a Triple"
-                    {:type :invalid-commit-operation}))))
+(defn assert-operation [(proposition t/Term)] t/CommitOperation
+  (let [(triple t/Triple?) (t/term-as-triple proposition)]
+    (if (some? triple)
+      (t/->CommitOperation t/assert-action triple)
+      (throw (ex-info "fram: assertion operation requires a Triple"
+                      {:type :invalid-commit-operation})))))
 
-(defn retract-operation [(proposition Any)] t/CommitOperation
-  (if (and (t/triple? proposition) (t/term? proposition))
-    (t/->CommitOperation t/retract-action proposition)
-    (throw (ex-info "fram: retraction operation requires a Triple"
-                    {:type :invalid-commit-operation}))))
+(defn retract-operation [(proposition t/Term)] t/CommitOperation
+  (let [(triple t/Triple?) (t/term-as-triple proposition)]
+    (if (some? triple)
+      (t/->CommitOperation t/retract-action triple)
+      (throw (ex-info "fram: retraction operation requires a Triple"
+                      {:type :invalid-commit-operation})))))
 
 (defn- valid-commit-operation? [(operation t/CommitOperation)] Bool
   (and (or (= t/assert-action (t/commitoperation-action operation))

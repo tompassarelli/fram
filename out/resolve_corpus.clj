@@ -84,12 +84,15 @@
 (defn module-export-set [ctx view ents-of src]
   (let [ents (vec (get ents-of src []))
    exports (rm/module-exports ctx view ents)
-   value-exports (if (seq exports) exports (rm/module-defs ctx view ents))]
-  (into #{} (concat (keys value-exports) (keys (rm/module-types ctx view ents)) (keys (rm/module-accessors ctx view ents))))))
+   value-exports (if (empty? exports) (rm/module-defs ctx view ents) exports)]
+  (into #{} (concat (set (keys value-exports)) (set (keys (rm/module-types ctx view ents))) (set (keys (rm/module-accessors ctx view ents)))))))
 
 (defn module-imports [ctx view ents-of src]
-  (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src [])))]
-  (into #{} (concat (vals refer) (vals as) (map first (vals rename))))))
+  (let [imports (rm/parse-require ctx view (vec (get ents-of src [])))
+   refer (:refer imports {})
+   as (:as imports {})
+   rename (:rename imports {})]
+  (into #{} (concat (set (vals refer)) (set (vals as)) (map first (set (vals rename)))))))
 
 (defn import-graph [ctx view ents-of srcs]
   (into {} (map (fn [src] (let [ents (vec (get ents-of src []))]

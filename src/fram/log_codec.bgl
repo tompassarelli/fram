@@ -208,23 +208,24 @@
                      proposition
                      (wire/read-term-limited!
                       decoder 0 max-codec-count max-codec-count max-term-depth)
+                     triple (t/term-as-triple proposition)
                      error (deref (wire/decoder-error decoder))]
                  (cond
                    [error (->FrameDecodeResult nil error)]
                    [(not= actual ordinal)
                     (->FrameDecodeResult
                      nil "FRAMLOG operation ordinals are not contiguous")]
-                   [(not (t/triple? proposition))
+                   [(nil? triple)
                     (->FrameDecodeResult
                      nil "FRAMLOG operation proposition is not a Triple")]
                    [(= action 1)
                     (recur (+ ordinal 1)
                            (conj operations
-                                 (term-store/assert-operation proposition)))]
+                                 (term-store/assert-operation triple)))]
                    [(= action 2)
                     (recur (+ ordinal 1)
                            (conj operations
-                                 (term-store/retract-operation proposition)))]
+                                 (term-store/retract-operation triple)))]
                    [:else
                     (->FrameDecodeResult
                      nil "FRAMLOG contains an unknown operation action")]))))])))))

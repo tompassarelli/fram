@@ -288,6 +288,10 @@
 (defn ^Boolean term? [v]
   (if (triple? v) (and (term? (triple-t1 v)) (and (term? (triple-t2 v)) (term? (triple-t3 v)))) (atom? v)))
 
+(defn term-as-triple [v]
+  (let [candidate v]
+  (if (and (triple? candidate) (term? candidate)) candidate nil)))
+
 (defn ^Triple triple [t1 t2 t3]
   (let [value (->Triple t1 t2 t3)]
   (if (term? value) value (throw (ex-info "fram: triple contains a value outside Term" {:type :invalid-term})))))

@@ -485,4 +485,4 @@
    by-module (fn [f] (if (some? scope) {} (reduce (fn [table src] (let [ents (vec (get groups src []))]
   (assoc table (rm/module-name ctx view ents) (f ents)))) {} named)))]
   {:srcs srcs :modframe (per-frame (fn [ents] (rm/module-defs ctx view ents))) :typeframe (per-frame (fn [ents] (rm/module-types ctx view ents))) :accessors (per-frame (fn [ents] (rm/module-accessors ctx view ents))) :exports (by-module (fn [ents] (let [exports (rm/module-exports ctx view ents)]
-  (if (seq exports) exports (rm/module-defs ctx view ents))))) :type-exports (by-module (fn [ents] (rm/module-types ctx view ents))) :accessor-exports (by-module (fn [ents] (rm/module-accessors ctx view ents)))}))
+  (if (empty? exports) (rm/module-defs ctx view ents) exports)))) :type-exports (by-module (fn [ents] (rm/module-types ctx view ents))) :accessor-exports (by-module (fn [ents] (rm/module-accessors ctx view ents)))}))

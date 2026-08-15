@@ -161,6 +161,10 @@
               (term? (triple-t3 v))))
     (atom? v)))
 
+(defn term-as-triple [(v Term)] Triple?
+  (let [(candidate Any) v]
+    (if (and (triple? candidate) (term? candidate)) candidate nil)))
+
 (defn triple [(t1 Term) (t2 Term) (t3 Term)] Triple
   (let [value (->Triple t1 t2 t3)]
     (if (term? value)

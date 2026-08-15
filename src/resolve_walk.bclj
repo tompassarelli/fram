@@ -703,7 +703,7 @@
      :accessors
      (per-frame (fn [(ents (Vec Any))] Any (rm/module-accessors ctx view ents)))
      :exports
-     (by-module (fn [(ents (Vec Any))] Any (let [exports (rm/module-exports ctx view ents)] (if (seq exports) exports (rm/module-defs ctx view ents)))))
+     (by-module (fn [(ents (Vec Any))] Any (let [exports (rm/module-exports ctx view ents)] (if (empty? exports) (rm/module-defs ctx view ents) exports))))
      :type-exports
      (by-module (fn [(ents (Vec Any))] Any (rm/module-types ctx view ents)))
      :accessor-exports

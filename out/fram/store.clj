@@ -299,10 +299,12 @@
   (count (store-operations (deref ctx))))
 
 (defn assert-operation [proposition]
-  (if (and (t/triple? proposition) (t/term? proposition)) (t/->CommitOperation t/assert-action proposition) (throw (ex-info "fram: assertion operation requires a Triple" {:type :invalid-commit-operation}))))
+  (let [triple (t/term-as-triple proposition)]
+  (if (some? triple) (t/->CommitOperation t/assert-action triple) (throw (ex-info "fram: assertion operation requires a Triple" {:type :invalid-commit-operation})))))
 
 (defn retract-operation [proposition]
-  (if (and (t/triple? proposition) (t/term? proposition)) (t/->CommitOperation t/retract-action proposition) (throw (ex-info "fram: retraction operation requires a Triple" {:type :invalid-commit-operation}))))
+  (let [triple (t/term-as-triple proposition)]
+  (if (some? triple) (t/->CommitOperation t/retract-action triple) (throw (ex-info "fram: retraction operation requires a Triple" {:type :invalid-commit-operation})))))
 
 (defn- ^Boolean valid-commit-operation? [operation]
   (and (or (= t/assert-action (t/commitoperation-action operation)) (= t/retract-action (t/commitoperation-action operation))) (and (t/triple? (t/commitoperation-proposition operation)) (t/term? (t/commitoperation-proposition operation)))))
