@@ -63,7 +63,7 @@ jobs:
         with:
           repository: Autonymy/beagle
           # Pin matches flake.nix's beagle.url rev; keep them in sync.
-          ref: db2fdaa6d447e16c4c287dd911a0cfd24bc40c8a
+          ref: 5f321c0dadbf3f45f8bcdae777d542e3b6dfaaf5
           path: .beagle
 
       - name: Verify the checked-out Beagle compiler pin
@@ -175,7 +175,7 @@ jobs:
         with:
           repository: Autonymy/beagle
           # Pin matches flake.nix's beagle.url rev; keep them in sync.
-          ref: db2fdaa6d447e16c4c287dd911a0cfd24bc40c8a
+          ref: 5f321c0dadbf3f45f8bcdae777d542e3b6dfaaf5
           path: .beagle
 
       - name: Verify the checked-out Beagle compiler pin
