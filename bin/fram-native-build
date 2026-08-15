@@ -44,7 +44,7 @@ requires wasm32. Each profile gets its own native program cache entry and its ow
 QBE frontier scope.
 
 RELEASE GATE
-  REQUIRED (build fails)  complete C17 materialization, all nine obligation
+  REQUIRED (build fails)  complete C17 materialization, all ten obligation
                           projections PASS, no pending lowering work, and for
                           server/embed/wasm-embed a clean C17 host link.
   RATCHETED (build fails) the QBE frontier: an unrecorded refusal fails, and a
@@ -623,7 +623,7 @@ native_report_epoch_digest() {
   printf '%s\n' "${digests[0]}"
 }
 
-# The release requirement: C17 completeness plus all nine obligations, which
+# The release requirement: C17 completeness plus all ten obligations, which
 # carry the target-neutrality contract (valid-ssa, closed-layouts, legal-abi)
 # and the arena-lifetime contract (epoch-soundness, leak-freedom). The epoch
 # stage is where the second pair is earned, so the report must show the
@@ -645,6 +645,7 @@ validate_native_report() {
     "obligation-projection PASS bounded-effects"
     "obligation-projection PASS epoch-soundness"
     "obligation-projection PASS leak-freedom"
+    "obligation-projection PASS deterministic-parallelism"
     "materialize-c17 OK module_0.h module_0.c"
   )
   [[ -f "$report_path" ]] || die "native build omitted $report_path"
@@ -652,9 +653,9 @@ validate_native_report() {
     [[ "$(grep -Fxc -- "$line" "$report_path" || true)" == "1" ]] ||
       die "native report must contain exactly once: $line"
   done
-  [[ "$(grep -c '^obligation-projection ' "$report_path" || true)" == "9" &&
-     "$(grep -c '^obligation-projection PASS ' "$report_path" || true)" == "9" ]] ||
-    die "native report must contain exactly nine passing obligations"
+  [[ "$(grep -c '^obligation-projection ' "$report_path" || true)" == "10" &&
+     "$(grep -c '^obligation-projection PASS ' "$report_path" || true)" == "10" ]] ||
+    die "native report must contain exactly ten passing obligations"
   [[ "$(grep -c '^stage native-to-epoch ' "$report_path" || true)" == "1" ]] ||
     die "native report must name the epoch stage the materializer crossed"
   ! grep -q '^pending ' "$report_path" ||

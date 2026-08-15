@@ -263,7 +263,8 @@ C
       'obligation-projection PASS discharged-tokens' \
       'obligation-projection PASS bounded-effects' \
       'obligation-projection PASS epoch-soundness' \
-      'obligation-projection PASS leak-freedom'
+      'obligation-projection PASS leak-freedom' \
+      'obligation-projection PASS deterministic-parallelism'
     if [[ "$want_qbe" == 1 && -n "${FAKE_QBE_REFUSAL:-}" ]]; then
       printf '%s\n' 'result FAIL materialization'
     else
