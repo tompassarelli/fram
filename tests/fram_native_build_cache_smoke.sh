@@ -226,6 +226,7 @@ C
       "$out/module_0.h"
   fi
   {
+    printf '%s\n' "${FAKE_NATIVE_REPORT_FORMAT:-beagle-native-report/v1}"
     printf '%s\n' \
       'stage source-freeze ACCEPTED' \
       'stage source-to-typed ACCEPTED' \
@@ -970,6 +971,22 @@ grep -Fq 'unsupported-value-semantics	hash' "$scratch/grew.err" ||
 # Recorded, the same refusal builds — and C17's artifacts survive it.
 printf '%s\n' \
   "$(printf 'fram-native-server\tunsupported-value-semantics\thash')" >>"$ledger"
+printf '%s\n' '#lang beagle' '(ns demo.report-v2)' \
+  '(defn start [] Nil nil)' >"$scratch/sources/report-v2.bgl"
+if "${qbe_env[@]}" \
+  FRAM_NATIVE_CACHE="$scratch/cache-report-v2" \
+  FAKE_NATIVE_REPORT_FORMAT='beagle-native-report/v2' \
+  "$builder" --host server --adapter "$adapter" \
+    "$scratch/sources/report-v2.bgl" \
+    >"$scratch/report-v2.out" 2>"$scratch/report-v2.err"; then
+  fail "unsupported failed-report schema did not fail closed"
+fi
+grep -Fq \
+  'unsupported Beagle native report format: beagle-native-report/v2' \
+  "$scratch/report-v2.err" ||
+  fail "unsupported failed-report schema failed for the wrong reason"
+[[ -z "$(find "$scratch/cache-report-v2" -name READY -print -quit)" ]] ||
+  fail "unsupported failed-report schema exposed a READY artifact"
 calls_before_refusal="$(wc -l <"$calls")"
 refused_artifact="$("${qbe_env[@]}" "$builder" --host server \
   --adapter "$adapter" "$scratch/sources/refused.bgl")" ||

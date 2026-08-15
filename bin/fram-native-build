@@ -65,6 +65,7 @@ regen_qbe_frontier=0
 regen_wasm_seams=0
 default_abi=lp64
 wasm_abi=wasm32
+native_report_format=beagle-native-report/v1
 abi="$default_abi"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -603,12 +604,22 @@ write_wasm_provenance() {
 extract_failed_native_report() {
   local log_path="$1" destination="$2"
   awk '
-    !capturing && /^source-entry / { capturing = 1 }
-    !capturing && /^stage source-freeze (ACCEPTED|REJECTED)$/ { capturing = 1 }
+    !capturing && /^beagle-native-report\/v[0-9]+$/ { capturing = 1 }
     capturing { print }
     capturing && /^result FAIL materialization$/ { complete = 1; exit }
     END { if (!complete) exit 1 }
   ' "$log_path" >"$destination"
+}
+
+validate_native_report_schema() {
+  local report_path="$1" first_line=""
+  [[ -f "$report_path" ]] || die "native build omitted $report_path"
+  IFS= read -r first_line <"$report_path" ||
+    die "Beagle native report is empty: $report_path"
+  [[ "$first_line" == "$native_report_format" ]] ||
+    die "unsupported Beagle native report format: $first_line (required $native_report_format)"
+  [[ "$(grep -Fxc -- "$native_report_format" "$report_path" || true)" == "1" ]] ||
+    die "Beagle native report must contain exactly one $native_report_format marker"
 }
 
 native_report_epoch_digest() {
@@ -648,7 +659,7 @@ validate_native_report() {
     "obligation-projection PASS deterministic-parallelism"
     "materialize-c17 OK module_0.h module_0.c"
   )
-  [[ -f "$report_path" ]] || die "native build omitted $report_path"
+  validate_native_report_schema "$report_path"
   for line in "${required_lines[@]}"; do
     [[ "$(grep -Fxc -- "$line" "$report_path" || true)" == "1" ]] ||
       die "native report must contain exactly once: $line"
@@ -1045,6 +1056,7 @@ if [[ ! -e "$program_dir" ]]; then
   combined_program_digest=""
   if [[ -f "$program_stage/report.txt" ]]; then
     cp "$program_stage/report.txt" "$program_stage/qbe-probe.report.txt"
+    validate_native_report_schema "$program_stage/qbe-probe.report.txt"
     if [[ -f "$program_stage/module.native-program" ]]; then
       combined_program_digest="$(sha256sum "$program_stage/module.native-program" | sed 's/ .*//')"
     else
@@ -1054,6 +1066,7 @@ if [[ ! -e "$program_dir" ]]; then
   elif [[ "$combined_status" -ne 0 ]] &&
     extract_failed_native_report "$program_stage/materialize.log" \
       "$program_stage/qbe-probe.report.txt"; then
+    validate_native_report_schema "$program_stage/qbe-probe.report.txt"
     combined_program_digest="$(native_report_epoch_digest \
       "$program_stage/qbe-probe.report.txt")"
   else
