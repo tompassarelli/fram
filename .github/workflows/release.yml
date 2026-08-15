@@ -443,7 +443,16 @@ jobs:
           path: ${{ runner.temp }}/fram-cloudflare-wasm-cache
           key: fram-cloudflare-wasm-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-${{ steps.release.outputs.commit }}
 
-      - name: Build twice and seal the reproducible native release archive
+      - name: Restore content-addressed native build cache
+        id: native_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/fram-native-release-cache
+          key: fram-native-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-${{ steps.release.outputs.commit }}
+          restore-keys: |
+            fram-native-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-
+
+      - name: Build once, verify source identity, and seal the native release archive
         id: native
         env:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
@@ -466,8 +475,8 @@ jobs:
               "$source_root/bin/fram-native-build" --host server "${sources[@]}"
           }
 
-          artifact="$(build_native "$GITHUB_WORKSPACE" \
-            "$RUNNER_TEMP/fram-native-release-cache-a")"
+          cache="$RUNNER_TEMP/fram-native-release-cache"
+          artifact="$(build_native "$GITHUB_WORKSPACE" "$cache")"
           mapfile -t release_files < <(
             scripts/package-native-release.sh \
               --source-root "$GITHUB_WORKSPACE" \
@@ -484,8 +493,11 @@ jobs:
           second_source="$RUNNER_TEMP/fram-native-release-source-b"
           git clone --quiet --no-local "$GITHUB_WORKSPACE" "$second_source"
           git -C "$second_source" checkout --quiet --detach "$RELEASE_COMMIT"
-          second_artifact="$(build_native "$second_source" \
-            "$RUNNER_TEMP/fram-native-release-cache-b")"
+          second_artifact="$(build_native "$second_source" "$cache")"
+          [[ "$second_artifact" == "$artifact" ]] || {
+            echo "native cache identity differs across source workdirs" >&2
+            exit 1
+          }
           mapfile -t second_release_files < <(
             scripts/package-native-release.sh \
               --source-root "$second_source" \
@@ -496,13 +508,6 @@ jobs:
           )
           [[ "${#second_release_files[@]}" == 2 ]] || {
             echo "second native release packager returned ${#second_release_files[@]} paths" >&2
-            exit 1
-          }
-          cmp -s "$artifact/bin/fram-server-native" \
-            "$second_artifact/bin/fram-server-native" || {
-            echo "native executable differs across source workdirs" >&2
-            sha256sum "$artifact/bin/fram-server-native" \
-              "$second_artifact/bin/fram-server-native" >&2
             exit 1
           }
           cmp -s "${release_files[0]}" "${second_release_files[0]}" || {
@@ -519,6 +524,13 @@ jobs:
           }
           echo "archive=${release_files[0]}" >> "$GITHUB_OUTPUT"
           echo "receipt=${release_files[1]}" >> "$GITHUB_OUTPUT"
+
+      - name: Save content-addressed native build cache
+        if: success() && steps.native_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/fram-native-release-cache
+          key: fram-native-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-${{ steps.release.outputs.commit }}
 
       - name: Revalidate and install the shipped Bun package before upload
         env:
