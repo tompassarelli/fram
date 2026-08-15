@@ -64,8 +64,11 @@ if [[ "$command" == "build" ]]; then
       sha256sum "$source" | sed 's/ .*//'
     done
   } >"$out/module.native-program"
-  sha256sum "$out/module.native-program" | sed 's/ .*//' \
-    >"$out/module.native-program.sha256"
+  if [[ "$want_qbe" == 0 && -n "${FAKE_C17_PROGRAM_SUFFIX:-}" ]]; then
+    printf '%s\n' "$FAKE_C17_PROGRAM_SUFFIX" >>"$out/module.native-program"
+  fi
+  native_program_digest="$(sha256sum "$out/module.native-program" | sed 's/ .*//')"
+  printf '%s\n' "$native_program_digest" >"$out/module.native-program.sha256"
   cat >"$out/module_0.h" <<'C'
 #ifndef FAKE_MODULE_0_H
 #define FAKE_MODULE_0_H
@@ -229,7 +232,8 @@ C
       'stage typed-to-native COMPLETE' \
       'native-lowering-result NativeLoweringCompleteV0' \
       'stage native-to-epoch COMPLETE' \
-      'epoch-regions-minted 0'
+      'epoch-regions-minted 0' \
+      "native-provenance-v0 epoch sha256:$native_program_digest"
     printf '%s\n' 'materialize-c17 OK module_0.h module_0.c'
     if [[ "$want_qbe" == 1 ]]; then
       if [[ -n "${FAKE_QBE_REFUSAL:-}" ]]; then
@@ -271,11 +275,14 @@ C
       '(defn start [] Nil nil)' ';; changed during materialization' \
       >"$FAKE_MUTATE_SOURCE"
   fi
-  # A refused sibling makes beagle exit before persisting C17's artifacts.
+  # A refused generation is reported on stderr but publishes no artifacts.
   if [[ "$want_qbe" == 1 && -n "${FAKE_QBE_REFUSAL:-}" ]]; then
-    rm -f "$out/module_0.h" "$out/module_0.c" "$out/native_shim.h" \
-      "$out/native_shim.c" "$out/native_unicode15_data.h" \
-      "$out/UNICODE-LICENSE.txt"
+    cat "$out/report.txt" >&2
+    rm -f "$out/source.facts" "$out/report.txt" \
+      "$out/module.native-program" "$out/module.native-program.sha256" \
+      "$out/module_0.h" "$out/module_0.c" "$out/module_0.ssa" \
+      "$out/native_shim.h" "$out/native_shim.c" \
+      "$out/native_unicode15_data.h" "$out/UNICODE-LICENSE.txt"
     exit 1
   fi
   exit 0
@@ -981,6 +988,27 @@ grep -Fq 'materialize-qbe REFUSED unsupported native value-semantics op: hash' \
 [[ "$(sed -n "$((calls_before_refusal + 1)),\$p" "$calls" | head -2 | tr '\n' ' ')" == \
   "build-c17+qbe build-c17 " ]] ||
   fail "QBE refusal did not recover C17 through a second materialization"
+
+# The logged refusal is attributable only to the exact Native program recovered
+# through C17; differing bytes must fail before an artifact becomes READY.
+printf '%s\n' '#lang beagle' '(ns demo.digest-mismatch)' \
+  '(defn start [] Nil nil)' >"$scratch/sources/digest-mismatch.bgl"
+if env \
+  FRAM_BEAGLE="$scratch/tool/bin/beagle" \
+  FRAM_NATIVE_CACHE="$scratch/cache-digest-mismatch" \
+  FRAM_NATIVE_CC="${CC:-cc}" \
+  FRAM_QBE_FRONTIER_LEDGER="$ledger" \
+  FAKE_NATIVE_CALLS="$calls" \
+  FAKE_QBE_REFUSAL='unsupported native value-semantics op: hash' \
+  FAKE_C17_PROGRAM_SUFFIX='different recovered program' \
+  "$builder" --host server --adapter "$adapter" \
+    "$scratch/sources/digest-mismatch.bgl" \
+    >"$scratch/digest-mismatch.out" 2>"$scratch/digest-mismatch.err"; then
+  fail "QBE refusal accepted a different recovered Native program"
+fi
+grep -Fq 'QBE and C17 materialized different native programs' \
+  "$scratch/digest-mismatch.err" ||
+  fail "different recovered Native program failed for the wrong reason"
 
 # --regen-qbe-frontier records the observed frontier for a program scope.
 printf '%s\n' '# scratch QBE frontier ledger' >"$ledger"

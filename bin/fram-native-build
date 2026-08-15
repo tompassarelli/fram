@@ -134,7 +134,7 @@ esac
 [[ "$regen_wasm_seams" == 0 || "$host" == "wasm-embed" ]] ||
   die "--regen-wasm-seams needs --host wasm-embed"
 
-for command in awk cmp diff flock git grep mktemp realpath sed sha256sum; do
+for command in awk cmp diff flock git grep mktemp realpath sed sha256sum tail; do
   command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
 done
 
@@ -598,6 +598,31 @@ write_wasm_provenance() {
   } >"$destination"
 }
 
+# Failed Beagle generations publish no artifacts; their complete Native report
+# remains in the captured stderr so a recorded QBE refusal can be recovered.
+extract_failed_native_report() {
+  local log_path="$1" destination="$2"
+  awk '
+    !capturing && /^source-entry / { capturing = 1 }
+    !capturing && /^stage source-freeze (ACCEPTED|REJECTED)$/ { capturing = 1 }
+    capturing { print }
+    capturing && /^result FAIL materialization$/ { complete = 1; exit }
+    END { if (!complete) exit 1 }
+  ' "$log_path" >"$destination"
+}
+
+native_report_epoch_digest() {
+  local report_path="$1"
+  local -a digests=()
+  mapfile -t digests < <(
+    sed -n 's/^native-provenance-v0 epoch sha256:\([0-9a-f]\{64\}\)$/\1/p' \
+      "$report_path"
+  )
+  [[ ${#digests[@]} -eq 1 ]] ||
+    die "native report must carry exactly one epoch program digest (found ${#digests[@]})"
+  printf '%s\n' "${digests[0]}"
+}
+
 # The release requirement: C17 completeness plus all nine obligations, which
 # carry the target-neutrality contract (valid-ssa, closed-layouts, legal-abi)
 # and the arena-lifetime contract (epoch-soundness, leak-freedom). The epoch
@@ -1016,14 +1041,24 @@ if [[ ! -e "$program_dir" ]]; then
         -- \
         "${source_logical_paths[@]}"
   ) >"$program_stage/materialize.log" 2>&1 || combined_status=$?
-  # beagle-build-core wipes managed artifacts up front and, on any materializer
-  # failure, exits before copying the successful ones out (:118-133, :713-720).
-  [[ -f "$program_stage/report.txt" ]] ||
-    die "$(sed -n '1,240p' "$program_stage/materialize.log"; echo "Beagle native program materialization produced no report")"
-  cp "$program_stage/report.txt" "$program_stage/qbe-probe.report.txt"
   combined_program_digest=""
-  [[ ! -f "$program_stage/module.native-program" ]] ||
-    combined_program_digest="$(sha256sum "$program_stage/module.native-program" | sed 's/ .*//')"
+  if [[ -f "$program_stage/report.txt" ]]; then
+    cp "$program_stage/report.txt" "$program_stage/qbe-probe.report.txt"
+    if [[ -f "$program_stage/module.native-program" ]]; then
+      combined_program_digest="$(sha256sum "$program_stage/module.native-program" | sed 's/ .*//')"
+    else
+      combined_program_digest="$(native_report_epoch_digest \
+        "$program_stage/qbe-probe.report.txt")"
+    fi
+  elif [[ "$combined_status" -ne 0 ]] &&
+    extract_failed_native_report "$program_stage/materialize.log" \
+      "$program_stage/qbe-probe.report.txt"; then
+    combined_program_digest="$(native_report_epoch_digest \
+      "$program_stage/qbe-probe.report.txt")"
+  else
+    tail -n 240 -- "$program_stage/materialize.log" >&2
+    die "Beagle native program materialization produced no report"
+  fi
   if [[ "$combined_status" -ne 0 ]]; then
     # Recover C17's output from the sibling refusal; any other failure is fatal.
     grep -Fxq 'materialize-c17 OK module_0.h module_0.c' \
@@ -1031,7 +1066,7 @@ if [[ ! -e "$program_dir" ]]; then
       grep -Fxq 'result FAIL materialization' \
         "$program_stage/qbe-probe.report.txt" &&
       grep -q '^materialize-qbe REFUSED ' "$program_stage/qbe-probe.report.txt" || {
-        sed -n '1,240p' "$program_stage/materialize.log" >&2
+        tail -n 240 -- "$program_stage/materialize.log" >&2
         die "Beagle native program materialization failed"
       }
     (
@@ -1042,7 +1077,7 @@ if [[ ! -e "$program_dir" ]]; then
           -- \
           "${source_logical_paths[@]}"
     ) >"$program_stage/materialize.log" 2>&1 || {
-      sed -n '1,240p' "$program_stage/materialize.log" >&2
+      tail -n 240 -- "$program_stage/materialize.log" >&2
       die "C17 recovery materialization failed after a QBE refusal"
     }
   fi
