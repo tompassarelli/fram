@@ -13,7 +13,7 @@
     # Graph-edit authoring is sealed against one published Beagle source. Its
     # nixpkgs follows this flake so the packaged .zo files and the Racket that
     # loads them are built from the exact same package set.
-    beagle.url = "github:tompassarelli/beagle/987a2d15477670ddb51fd44b50487b52ae9c6343";
+    beagle.url = "github:tompassarelli/beagle/f291685a93fd765828b63ea67c7350bc51a4aeea";
     beagle.inputs.clj-nix.follows = "clj-nix";
     beagle.inputs.nixpkgs.follows = "nixpkgs";
   };
