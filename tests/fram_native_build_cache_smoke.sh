@@ -314,6 +314,9 @@ seed_beagle_tree() {
   printf '%s\n' 'fixture bytecode' >"$root/beagle-lib/compiled/module_01.zo"
   printf '%s\n' 'fixture bin fixture' >"$root/bin/test/fixture.txt"
   printf '%s\n' 'fixture corpus' >"$root/native-core/src/shapes_corpus.bclj"
+  cat >"$root/share/targets.sh" <<'TARGETS'
+declare -A BEAGLE_MATERIALIZER_ABIS=([c17]='lp64 wasm32' [qbe]=lp64 [wasm]=wasm32)
+TARGETS
   printf '%s\n' 'fixture ffc MIT license' \
     >"$root/native-core/shim/third_party/ffc/LICENSE-MIT"
   printf '%s\n' 'fixture ffc provenance' \
@@ -822,9 +825,21 @@ grep -Fq 'set FRAM_WASI_NOTICES to the wasi toolchain license bundle' \
   "$scratch/wasm-no-notices.err" ||
   fail "wasm-embed host did not name the missing FRAM_WASI_NOTICES"
 
+printf '%s\n' \
+  "$(printf 'fram-native-server@wasm32\tabi-profile\twasm32')" >>"$ledger"
+calls_before_wasm="$(wc -l <"$calls")"
 wasm_artifact="$("${wasm_build_env[@]}" "$builder" \
   --host wasm-embed --abi wasm32 "$scratch/sources/good.bgl")" ||
   fail "fixture wasm-embed host build failed"
+[[ "$(sed -n "$((calls_before_wasm + 1)),\$p" "$calls" | tr '\n' ' ')" == \
+  "build-c17 " ]] ||
+  fail "wasm32 build did not use exactly one C17 materialization"
+grep -Fqx 'qbe-profile-boundary/v1' \
+  "$wasm_artifact/qbe-probe.report.txt" ||
+  fail "wasm32 build omitted its declared QBE profile boundary"
+grep -Fqx 'native-qbe-frontier REFUSED scope=fram-native-server@wasm32 ledger=abi-profile/wasm32' \
+  "$wasm_artifact/native-host.report.txt" ||
+  fail "wasm32 build omitted its QBE profile boundary receipt"
 wasm_notice="$wasm_artifact/THIRD-PARTY/WASI-TOOLCHAIN-LICENSES.txt"
 [[ -f "$wasm_artifact/READY" && -f "$wasm_artifact/lib/libfram.wasm" &&
   -f "$wasm_notice" && ! -L "$wasm_notice" &&

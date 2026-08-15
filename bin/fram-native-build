@@ -50,7 +50,10 @@ RELEASE GATE
   RATCHETED (build fails) the QBE frontier: an unrecorded refusal fails, and a
                           recorded refusal that no longer reproduces fails
                           until its native/qbe-frontier.ledger line is deleted.
-                          --regen-qbe-frontier rewrites this scope's line.
+                          An ABI outside QBE's producer-declared support uses
+                          that declaration directly instead of compiling a
+                          guaranteed refusal. --regen-qbe-frontier rewrites
+                          this scope's line.
   PINNED (build fails)    the wasm-embed seam ledger: every import and export
                           of libfram.wasm must equal native/wasm-embed.seams.
                           --regen-wasm-seams rewrites that fixture.
@@ -293,6 +296,32 @@ for source in "${sources[@]}"; do
 done
 
 beagle_home="$(cd "$(dirname "$beagle")/.." && pwd -P)"
+beagle_targets="$beagle_home/share/targets.sh"
+[[ -f "$beagle_targets" && ! -L "$beagle_targets" ]] ||
+  die "Beagle target metadata is unavailable or symlinked: $beagle_targets"
+# Generated Beagle metadata is the producer-owned authority for whether a
+# materializer can accept an ABI. In particular, wasm32 must not spend a full
+# compiler pass asking the lp64-only QBE materializer to repeat that fact.
+source "$beagle_targets"
+[[ "$(declare -p BEAGLE_MATERIALIZER_ABIS 2>/dev/null || true)" == \
+  "declare -A "* ]] ||
+  die "Beagle target metadata omitted BEAGLE_MATERIALIZER_ABIS"
+
+materializer_supports_abi() {
+  local materializer="$1" requested_abi="$2" supported_abi
+  [[ -v "BEAGLE_MATERIALIZER_ABIS[$materializer]" ]] ||
+    die "Beagle target metadata omitted ABI support for $materializer"
+  for supported_abi in ${BEAGLE_MATERIALIZER_ABIS[$materializer]}; do
+    [[ "$supported_abi" != "$requested_abi" ]] || return 0
+  done
+  return 1
+}
+
+materializer_supports_abi c17 "$abi" ||
+  die "Beagle C17 materializer does not support ABI profile $abi"
+qbe_supports_abi=0
+materializer_supports_abi qbe "$abi" && qbe_supports_abi=1
+
 beagle_root="$(git -C "$beagle_home" rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -n "$beagle_root" ]]; then
   git -C "$beagle_root" diff --quiet --ignore-submodules -- ||
@@ -711,7 +740,7 @@ write_qbe_frontier() {
   local detail key class
   mapfile -t qbe_lines < <(grep '^materialize-qbe ' "$report_path" || true)
   [[ ${#qbe_lines[@]} -eq 1 ]] ||
-    die "native report must carry exactly one materialize-qbe line (found ${#qbe_lines[@]}); QBE must always run and report"
+    die "native report must carry exactly one materialize-qbe line when QBE supports the selected ABI (found ${#qbe_lines[@]})"
   case "${qbe_lines[0]}" in
     "materialize-qbe OK module_0.ssa")
       printf 'qbe-frontier/v1\nscope\t%s\nstatus\tOK\n' "$program_scope" \
@@ -1044,17 +1073,30 @@ if [[ ! -e "$program_dir" ]]; then
   # The manifest carries only the rolled-up digest; this is the per-file listing
   # behind it, so a cache miss can be explained by diffing two entries.
   printf '%s\n' "$beagle_compiler_input_list" >"$program_stage/compiler-inputs.txt"
+  materializer_args=(--materializer c17)
+  [[ "$qbe_supports_abi" == 0 ]] || materializer_args+=(--materializer qbe)
   combined_status=0
   (
     cd "$source_snapshot_root"
-    "$beagle" build --materializer c17 --materializer qbe \
+    "$beagle" build "${materializer_args[@]}" \
         --out "$program_stage" --abi "$abi" \
         "${native_server_entry_args[@]}" \
         -- \
         "${source_logical_paths[@]}"
   ) >"$program_stage/materialize.log" 2>&1 || combined_status=$?
   combined_program_digest=""
-  if [[ -f "$program_stage/report.txt" ]]; then
+  if [[ "$qbe_supports_abi" == 0 ]]; then
+    [[ "$combined_status" == 0 && -f "$program_stage/report.txt" &&
+      -f "$program_stage/module.native-program" ]] || {
+      tail -n 240 -- "$program_stage/materialize.log" >&2
+      die "Beagle C17 native program materialization failed"
+    }
+    combined_program_digest="$(sha256sum \
+      "$program_stage/module.native-program" | sed 's/ .*//')"
+    printf 'qbe-profile-boundary/v1\nmaterializer\tqbe\nabi\t%s\nstatus\tUNSUPPORTED\nsupported-abis\t%s\n' \
+      "$abi" "${BEAGLE_MATERIALIZER_ABIS[qbe]}" \
+      >"$program_stage/qbe-probe.report.txt"
+  elif [[ -f "$program_stage/report.txt" ]]; then
     cp "$program_stage/report.txt" "$program_stage/qbe-probe.report.txt"
     validate_native_report_schema "$program_stage/qbe-probe.report.txt"
     if [[ -f "$program_stage/module.native-program" ]]; then
@@ -1073,7 +1115,7 @@ if [[ ! -e "$program_dir" ]]; then
     tail -n 240 -- "$program_stage/materialize.log" >&2
     die "Beagle native program materialization produced no report"
   fi
-  if [[ "$combined_status" -ne 0 ]]; then
+  if [[ "$qbe_supports_abi" == 1 && "$combined_status" -ne 0 ]]; then
     # Recover C17's output from the sibling refusal; any other failure is fatal.
     grep -Fxq 'materialize-c17 OK module_0.h module_0.c' \
       "$program_stage/qbe-probe.report.txt" &&
@@ -1095,8 +1137,13 @@ if [[ ! -e "$program_dir" ]]; then
       die "C17 recovery materialization failed after a QBE refusal"
     }
   fi
-  write_qbe_frontier "$program_stage/qbe-probe.report.txt" \
-    "$program_stage/qbe-frontier.txt"
+  if [[ "$qbe_supports_abi" == 1 ]]; then
+    write_qbe_frontier "$program_stage/qbe-probe.report.txt" \
+      "$program_stage/qbe-frontier.txt"
+  else
+    printf 'qbe-frontier/v1\nscope\t%s\nstatus\tREFUSED\nkey\tabi-profile\t%s\ndetail\tmaterializer metadata does not declare this ABI\n' \
+      "$program_scope" "$abi" >"$program_stage/qbe-frontier.txt"
+  fi
   for artifact in source.facts module.native-program module.native-program.sha256 \
       module_0.h module_0.c native_shim.h native_shim.c \
       native_unicode15_data.h UNICODE-LICENSE.txt report.txt; do

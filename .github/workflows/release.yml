@@ -63,7 +63,7 @@ jobs:
         with:
           repository: Autonymy/beagle
           # Pin matches flake.nix's beagle.url rev; keep them in sync.
-          ref: 5f321c0dadbf3f45f8bcdae777d542e3b6dfaaf5
+          ref: b4f3081420a3be73d730802d2f4608d78d0c6cf4
           path: .beagle
 
       - name: Verify the checked-out Beagle compiler pin
@@ -175,7 +175,7 @@ jobs:
         with:
           repository: Autonymy/beagle
           # Pin matches flake.nix's beagle.url rev; keep them in sync.
-          ref: 5f321c0dadbf3f45f8bcdae777d542e3b6dfaaf5
+          ref: b4f3081420a3be73d730802d2f4608d78d0c6cf4
           path: .beagle
 
       - name: Verify the checked-out Beagle compiler pin
@@ -350,7 +350,16 @@ jobs:
           echo "archive=${package_files[0]}" >> "$GITHUB_OUTPUT"
           echo "receipt=${package_files[1]}" >> "$GITHUB_OUTPUT"
 
-      - name: Build twice and seal the reproducible Cloudflare Wasm release
+      - name: Restore content-addressed Cloudflare Wasm build cache
+        id: cloudflare_wasm_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/fram-cloudflare-wasm-cache
+          key: fram-cloudflare-wasm-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-${{ steps.release.outputs.commit }}
+          restore-keys: |
+            fram-cloudflare-wasm-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-
+
+      - name: Build once, verify source identity, and seal the Cloudflare Wasm release
         id: cloudflare_wasm
         env:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
@@ -376,14 +385,11 @@ jobs:
                 --host wasm-embed --abi wasm32 "${sources[@]}"
           }
 
-          artifact_a="$(build_wasm "$SOURCE_A" \
-            "$RUNNER_TEMP/fram-cloudflare-wasm-cache-a")"
-          artifact_b="$(build_wasm "$SOURCE_B" \
-            "$RUNNER_TEMP/fram-cloudflare-wasm-cache-b")"
-          cmp -s "$artifact_a/lib/libfram.wasm" "$artifact_b/lib/libfram.wasm" || {
-            echo "Cloudflare Wasm module differs across source workdirs" >&2
-            sha256sum "$artifact_a/lib/libfram.wasm" \
-              "$artifact_b/lib/libfram.wasm" >&2
+          cache="$RUNNER_TEMP/fram-cloudflare-wasm-cache"
+          artifact_a="$(build_wasm "$SOURCE_A" "$cache")"
+          artifact_b="$(build_wasm "$SOURCE_B" "$cache")"
+          [[ "$artifact_b" == "$artifact_a" ]] || {
+            echo "Cloudflare Wasm cache identity differs across source workdirs" >&2
             exit 1
           }
 
@@ -419,6 +425,13 @@ jobs:
           echo "receipt=${release_files[1]}" >> "$GITHUB_OUTPUT"
           echo "artifact=$artifact_a" >> "$GITHUB_OUTPUT"
           RELEASE
+
+      - name: Save content-addressed Cloudflare Wasm build cache
+        if: success() && steps.cloudflare_wasm_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/fram-cloudflare-wasm-cache
+          key: fram-cloudflare-wasm-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-${{ steps.release.outputs.commit }}
 
       - name: Build twice and seal the reproducible native release archive
         id: native
