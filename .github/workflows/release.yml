@@ -86,13 +86,14 @@ jobs:
             bash scripts/check-release-notes.sh "$notes_tag"
           done
 
-      # native_code_reader_test.clj and projection_lifecycle_test.clj ingest
-      # real Beagle sources, so the run-bb suite needs the same Beagle and
-      # Racket that .github/workflows/ci.yml installs.
+      # The release receipts name beagle-pin.txt's revision, so this job checks
+      # out that exact Beagle and its Racket runtime and proves the pin matches
+      # before any envelope is sealed. This workflow is the whole gate: no other
+      # workflow installs a toolchain for it.
       - name: Checkout beagle
         uses: actions/checkout@v4
         with:
-          repository: Autonymy/beagle
+          repository: tompassarelli/beagle
           # Pin matches flake.nix's beagle.url rev; keep them in sync.
           ref: b4f3081420a3be73d730802d2f4608d78d0c6cf4
           path: .beagle
@@ -126,6 +127,14 @@ jobs:
 
       - name: Install babashka
         run: curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | sudo bash
+
+      # out/ is committed, so the revision-identity suite needs only babashka.
+      # It runs before the heavier toolchains because it covers the identity
+      # contract this release is named for.
+      - name: Prove branch revision identity
+        run: |
+          bb -cp out tests/framref_codec_test.clj
+          bb -cp out tests/framlog_fork_test.clj
 
       - name: Install Clojure CLI
         run: |
@@ -205,7 +214,7 @@ jobs:
       - name: Checkout Beagle at FRAM's pinned native compiler revision
         uses: actions/checkout@v4
         with:
-          repository: Autonymy/beagle
+          repository: tompassarelli/beagle
           # Pin matches flake.nix's beagle.url rev; keep them in sync.
           ref: b4f3081420a3be73d730802d2f4608d78d0c6cf4
           path: .beagle
