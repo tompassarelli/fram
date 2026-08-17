@@ -22,6 +22,8 @@ set -euo pipefail
 command="${1:-}"
 shift
 if [[ "$command" == "build" ]]; then
+  [[ -n "${BEAGLE_CORE_BUILD_CACHE:-}" &&
+    -d "$BEAGLE_CORE_BUILD_CACHE" ]] || exit 95
   out=""
   abi=""
   materializers=()
@@ -706,16 +708,18 @@ grep -Fq 'fram-server-native: invalid port: not-a-port' \
   "$scratch/host.err" || fail "linked server host main did not run"
 
 rm "$host_program/THIRD-PARTY/ffc/PROVENANCE"
-if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
-    "$scratch/sources/good.bgl" \
-    >"$scratch/program-notice.out" 2>"$scratch/program-notice.err"; then
-  fail "native program cache hit accepted a missing ffc notice"
-fi
-grep -Fq 'native artifact omitted its ffc notice:' \
-  "$scratch/program-notice.err" ||
-  fail "missing native program ffc notice failed for the wrong reason"
-cp "$ffc_notice_root/PROVENANCE" \
-  "$host_program/THIRD-PARTY/ffc/PROVENANCE"
+calls_before_notice_rebuild="$(wc -l <"$calls")"
+"${build_env[@]}" "$builder" --host server --adapter "$adapter" \
+  "$scratch/sources/good.bgl" \
+  >"$scratch/program-notice.out" 2>"$scratch/program-notice.err" ||
+  fail "native program cache did not rebuild a missing ffc notice"
+grep -Fq 'retired corrupt cache entry:' "$scratch/program-notice.err" ||
+  fail "missing native program ffc notice was not visibly retired"
+[[ "$(wc -l <"$calls")" == "$((calls_before_notice_rebuild + 1))" ]] ||
+  fail "missing native program ffc notice did not cause one rebuild"
+cmp -s "$ffc_notice_root/PROVENANCE" \
+  "$host_program/THIRD-PARTY/ffc/PROVENANCE" ||
+  fail "native program rebuild did not restore the ffc notice"
 
 printf '%s\n' 'tampered license' \
   >"$host_artifact/THIRD-PARTY/ffc/LICENSE-MIT"
@@ -730,11 +734,12 @@ grep -Fq 'native artifact ffc notice differs from the Beagle source:' \
 cp "$ffc_notice_root/LICENSE-MIT" \
   "$host_artifact/THIRD-PARTY/ffc/LICENSE-MIT"
 
+calls_before_host_hit="$(wc -l <"$calls")"
 host_hit="$("${build_env[@]}" "$builder" --host server \
   --adapter "$adapter" "$scratch/sources/good.bgl")" ||
   fail "server host cache hit failed"
 [[ "$host_hit" == "$host_artifact" ]] || fail "server host missed the cache"
-[[ "$(wc -l <"$calls")" == "$((calls_before_host + 1))" ]] ||
+[[ "$(wc -l <"$calls")" == "$calls_before_host_hit" ]] ||
   fail "server host cache hit rebuilt a materializer projection"
 
 calls_before_embed="$(wc -l <"$calls")"
@@ -982,6 +987,9 @@ grep -Fq 'QBE frontier GREW for scope fram-native-server' "$scratch/grew.err" ||
   fail "unrecorded QBE refusal failed for the wrong reason"
 grep -Fq 'unsupported-value-semantics	hash' "$scratch/grew.err" ||
   fail "QBE frontier failure did not name the observed refusal key"
+[[ "$(find "$scratch/cache/.programs/.qbe-refusals" -mindepth 2 \
+  -maxdepth 2 -name READY | wc -l)" == 1 ]] ||
+  fail "exact-program QBE refusal was not checkpointed before frontier rejection"
 
 # Recorded, the same refusal builds — and C17's artifacts survive it.
 printf '%s\n' \
@@ -1018,9 +1026,9 @@ grep -Fqx 'native-qbe-frontier REFUSED scope=fram-native-server ledger=unsupport
 grep -Fq 'materialize-qbe REFUSED unsupported native value-semantics op: hash' \
   "$refused_artifact/qbe-probe.report.txt" ||
   fail "refused QBE run did not preserve the probe report"
-[[ "$(sed -n "$((calls_before_refusal + 1)),\$p" "$calls" | head -2 | tr '\n' ' ')" == \
-  "build-c17+qbe build-c17 " ]] ||
-  fail "QBE refusal did not recover C17 through a second materialization"
+[[ "$(sed -n "$((calls_before_refusal + 1)),\$p" "$calls" | head -1)" == \
+  "build-c17" ]] ||
+  fail "QBE refusal checkpoint did not skip the repeated combined materialization"
 
 # The logged refusal is attributable only to the exact Native program recovered
 # through C17; differing bytes must fail before an artifact becomes READY.
@@ -1059,6 +1067,26 @@ program_dir="$("${qbe_env[@]}" "$builder" --host program --entry demo.main/start
   fail "recorded QBE refusal blocked --host program"
 [[ -f "$program_dir/module_0.c" && -f "$program_dir/READY" ]] ||
   fail "--host program did not persist the C17 projection"
+
+# Whole-program reuse is verified recursively. Corruption retires and rebuilds
+# the entry, and the replacement must have the original content receipt.
+program_manifest_digest="$(sha256sum "$program_dir/artifacts.sha256" | sed 's/ .*//')"
+printf '%s\n' 'corrupt cache bytes' >>"$program_dir/module_0.c"
+calls_before_corrupt_rebuild="$(wc -l <"$calls")"
+rebuilt_program_dir="$("${qbe_env[@]}" "$builder" --host program \
+  --entry demo.main/start "$scratch/sources/refused.bgl" \
+  2>"$scratch/program-corrupt.err")" ||
+  fail "corrupt whole-program entry did not rebuild"
+[[ "$rebuilt_program_dir" == "$program_dir" ]] ||
+  fail "corrupt whole-program rebuild changed its content address"
+grep -Fq 'retired corrupt cache entry' "$scratch/program-corrupt.err" ||
+  fail "corrupt whole-program entry was not visibly retired"
+[[ "$(wc -l <"$calls")" == "$((calls_before_corrupt_rebuild + 1))" &&
+  "$(tail -n 1 "$calls")" == "build-c17" ]] ||
+  fail "corrupt whole-program rebuild did not reuse the QBE refusal checkpoint"
+[[ "$(sha256sum "$program_dir/artifacts.sha256" | sed 's/ .*//')" == \
+  "$program_manifest_digest" ]] ||
+  fail "whole-program rebuild did not reproduce byte-identical cached outputs"
 
 # The Beagle identity is content, not a commit: a file the compiler sweep reads
 # moves the native program cache entry, and a path the sweep prunes does not.

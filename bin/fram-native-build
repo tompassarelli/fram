@@ -280,9 +280,14 @@ cache_root="${FRAM_NATIVE_CACHE:-${XDG_CACHE_HOME:-${home:+$home/.cache}}}"
 [[ -n "$cache_root" ]] || die "set FRAM_NATIVE_CACHE, XDG_CACHE_HOME, or HOME"
 [[ -n "${FRAM_NATIVE_CACHE:-}" ]] || cache_root="$cache_root/fram/native-build"
 mkdir -p "$cache_root/.locks" "$cache_root/.tmp" \
-  "$cache_root/.programs/.locks" "$cache_root/.programs/.tmp"
+  "$cache_root/.programs/.locks" "$cache_root/.programs/.tmp" \
+  "$cache_root/.programs/.qbe-refusals/.locks" \
+  "$cache_root/.programs/.qbe-refusals/.tmp" \
+  "$cache_root/.programs/.beagle-core"
 cache_root="$(cd "$cache_root" && pwd -P)"
 program_cache="$cache_root/.programs"
+qbe_refusal_cache="$program_cache/.qbe-refusals"
+beagle_core_cache="$program_cache/.beagle-core"
 
 normalized_sources=()
 for source in "${sources[@]}"; do
@@ -406,10 +411,13 @@ input_manifest=""
 program_input_manifest=""
 stage=""
 program_stage=""
+qbe_refusal_stage=""
 source_snapshot_root=""
 cleanup() {
   [[ -z "$stage" || ! -d "$stage" ]] || rm -rf "${stage:?}"
   [[ -z "$program_stage" || ! -d "$program_stage" ]] || rm -rf "${program_stage:?}"
+  [[ -z "$qbe_refusal_stage" || ! -d "$qbe_refusal_stage" ]] ||
+    rm -rf "${qbe_refusal_stage:?}"
   [[ -z "$source_snapshot_root" || ! -d "$source_snapshot_root" ]] ||
     rm -rf "${source_snapshot_root:?}"
   [[ -z "$input_manifest" || ! -f "$input_manifest" ]] || rm -f "${input_manifest:?}"
@@ -661,6 +669,76 @@ native_report_epoch_digest() {
   [[ ${#digests[@]} -eq 1 ]] ||
     die "native report must carry exactly one epoch program digest (found ${#digests[@]})"
   printf '%s\n' "${digests[0]}"
+}
+
+# Content receipts are generated from the tree itself. Comparing a recomputed
+# receipt catches missing, added, changed, and symlinked files before reuse.
+emit_content_manifest() {
+  local artifact_root="$1"
+  (
+    cd "$artifact_root"
+    find . -type f ! -path './READY' ! -path './artifacts.sha256' -print0 |
+      LC_ALL=C sort -z |
+      xargs -0 -r sha256sum
+  )
+}
+
+content_tree_is_verified() {
+  local artifact_root="$1"
+  [[ -d "$artifact_root" && ! -L "$artifact_root" &&
+    -f "$artifact_root/artifacts.sha256" &&
+    ! -L "$artifact_root/artifacts.sha256" &&
+    -f "$artifact_root/READY" && ! -L "$artifact_root/READY" ]] || return 1
+  [[ -z "$(find "$artifact_root" -mindepth 1 \
+    \( -type l -o \( ! -type d ! -type f \) \) -print -quit)" ]] || return 1
+  cmp -s <(emit_content_manifest "$artifact_root") \
+    "$artifact_root/artifacts.sha256"
+}
+
+retire_corrupt_entry() {
+  local entry="$1" scratch_root="$2" label="$3" retired
+  retired="$(mktemp -d "$scratch_root/corrupt.$label.XXXXXX")"
+  rmdir "$retired"
+  mv "$entry" "$retired"
+  echo "fram-native-build: retired corrupt cache entry: $entry" >&2
+  rm -rf "${retired:?}"
+}
+
+qbe_refusal_entry_is_valid() {
+  local entry="$1" expected_input="$2" expected_key="$3"
+  local report="$entry/qbe-probe.report.txt" digest manifest_digest
+  content_tree_is_verified "$entry" || return 1
+  [[ -f "$entry/input.manifest" && ! -L "$entry/input.manifest" &&
+    -f "$report" && ! -L "$report" ]] || return 1
+  cmp -s "$expected_input" "$entry/input.manifest" || return 1
+  [[ "$(grep -Fxc -- "$native_report_format" "$report" || true)" == 1 &&
+    "$(grep -Fxc -- 'materialize-c17 OK module_0.h module_0.c' "$report" || true)" == 1 &&
+    "$(grep -Fxc -- 'result FAIL materialization' "$report" || true)" == 1 &&
+    "$(grep -c '^materialize-qbe REFUSED ' "$report" || true)" == 1 ]] || return 1
+  digest="$(sed -n \
+    's/^native-provenance-v0 epoch sha256:\([0-9a-f]\{64\}\)$/\1/p' \
+    "$report")"
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+  manifest_digest="$(sha256sum "$entry/artifacts.sha256" | sed 's/ .*//')"
+  [[ "$(<"$entry/READY")" == \
+    "fram-native-qbe-refusal/v1 $expected_key $digest $manifest_digest" ]]
+}
+
+program_entry_is_valid() {
+  local entry="$1" expected_input="$2" expected_key="$3"
+  local digest manifest_digest
+  content_tree_is_verified "$entry" || return 1
+  [[ -f "$entry/input.manifest" && ! -L "$entry/input.manifest" &&
+    -f "$entry/module.native-program" &&
+    ! -L "$entry/module.native-program" &&
+    -f "$entry/module.native-program.sha256" &&
+    ! -L "$entry/module.native-program.sha256" ]] || return 1
+  cmp -s "$expected_input" "$entry/input.manifest" || return 1
+  digest="$(sha256sum "$entry/module.native-program" | sed 's/ .*//')"
+  [[ "$(<"$entry/module.native-program.sha256")" == "$digest" ]] || return 1
+  manifest_digest="$(sha256sum "$entry/artifacts.sha256" | sed 's/ .*//')"
+  [[ "$(<"$entry/READY")" == \
+    "fram-native-program/v2 $expected_key $digest $manifest_digest" ]]
 }
 
 # The release requirement: C17 completeness plus all ten obligations, which
@@ -1067,6 +1145,12 @@ program_dir="$program_cache/$program_closure_hash"
 
 exec {program_lock_fd}>"$program_cache/.locks/$program_closure_hash.lock"
 flock "$program_lock_fd"
+if [[ -e "$program_dir" ]] &&
+  ! program_entry_is_valid "$program_dir" "$program_input_manifest" \
+    "$program_closure_hash"; then
+  retire_corrupt_entry "$program_dir" "$program_cache/.tmp" \
+    "$program_closure_hash"
+fi
 if [[ ! -e "$program_dir" ]]; then
   program_stage="$(mktemp -d "$program_cache/.tmp/$program_closure_hash.XXXXXX")"
   cp "$program_input_manifest" "$program_stage/input.manifest"
@@ -1076,15 +1160,41 @@ if [[ ! -e "$program_dir" ]]; then
   materializer_args=(--materializer c17)
   [[ "$qbe_supports_abi" == 0 ]] || materializer_args+=(--materializer qbe)
   combined_status=0
-  (
-    cd "$source_snapshot_root"
-    "$beagle" build "${materializer_args[@]}" \
-        --out "$program_stage" --abi "$abi" \
-        "${native_server_entry_args[@]}" \
-        -- \
-        "${source_logical_paths[@]}"
-  ) >"$program_stage/materialize.log" 2>&1 || combined_status=$?
   combined_program_digest=""
+  qbe_refusal_dir="$qbe_refusal_cache/$program_closure_hash"
+  qbe_refusal_hit=0
+  if [[ "$qbe_supports_abi" == 1 ]]; then
+    exec {qbe_refusal_lock_fd}>\
+      "$qbe_refusal_cache/.locks/$program_closure_hash.lock"
+    flock "$qbe_refusal_lock_fd"
+    if [[ -e "$qbe_refusal_dir" ]] &&
+      ! qbe_refusal_entry_is_valid "$qbe_refusal_dir" \
+        "$program_input_manifest" "$program_closure_hash"; then
+      retire_corrupt_entry "$qbe_refusal_dir" "$qbe_refusal_cache/.tmp" \
+        "$program_closure_hash"
+    fi
+    if [[ -e "$qbe_refusal_dir" ]]; then
+      cp "$qbe_refusal_dir/qbe-probe.report.txt" \
+        "$program_stage/qbe-probe.report.txt"
+      printf 'reused exact-program QBE refusal checkpoint %s\n' \
+        "$program_closure_hash" >"$program_stage/materialize.log"
+      combined_status=1
+      combined_program_digest="$(native_report_epoch_digest \
+        "$program_stage/qbe-probe.report.txt")"
+      qbe_refusal_hit=1
+    fi
+  fi
+  if [[ "$qbe_refusal_hit" == 0 ]]; then
+    (
+      cd "$source_snapshot_root"
+      BEAGLE_CORE_BUILD_CACHE="$beagle_core_cache" \
+        "$beagle" build "${materializer_args[@]}" \
+          --out "$program_stage" --abi "$abi" \
+          "${native_server_entry_args[@]}" \
+          -- \
+          "${source_logical_paths[@]}"
+    ) >"$program_stage/materialize.log" 2>&1 || combined_status=$?
+  fi
   if [[ "$qbe_supports_abi" == 0 ]]; then
     [[ "$combined_status" == 0 && -f "$program_stage/report.txt" &&
       -f "$program_stage/module.native-program" ]] || {
@@ -1096,6 +1206,8 @@ if [[ ! -e "$program_dir" ]]; then
     printf 'qbe-profile-boundary/v1\nmaterializer\tqbe\nabi\t%s\nstatus\tUNSUPPORTED\nsupported-abis\t%s\n' \
       "$abi" "${BEAGLE_MATERIALIZER_ABIS[qbe]}" \
       >"$program_stage/qbe-probe.report.txt"
+  elif [[ "$qbe_refusal_hit" == 1 ]]; then
+    :
   elif [[ -f "$program_stage/report.txt" ]]; then
     cp "$program_stage/report.txt" "$program_stage/qbe-probe.report.txt"
     validate_native_report_schema "$program_stage/qbe-probe.report.txt"
@@ -1125,9 +1237,30 @@ if [[ ! -e "$program_dir" ]]; then
         tail -n 240 -- "$program_stage/materialize.log" >&2
         die "Beagle native program materialization failed"
       }
+    if [[ "$qbe_refusal_hit" == 0 ]]; then
+      qbe_refusal_stage="$(mktemp -d \
+        "$qbe_refusal_cache/.tmp/$program_closure_hash.XXXXXX")"
+      cp "$program_input_manifest" "$qbe_refusal_stage/input.manifest"
+      cp "$program_stage/qbe-probe.report.txt" \
+        "$qbe_refusal_stage/qbe-probe.report.txt"
+      emit_content_manifest "$qbe_refusal_stage" \
+        >"$qbe_refusal_stage/artifacts.sha256"
+      qbe_refusal_manifest_digest="$(sha256sum \
+        "$qbe_refusal_stage/artifacts.sha256" | sed 's/ .*//')"
+      printf 'fram-native-qbe-refusal/v1 %s %s %s\n' \
+        "$program_closure_hash" "$combined_program_digest" \
+        "$qbe_refusal_manifest_digest" >"$qbe_refusal_stage/READY"
+      qbe_refusal_entry_is_valid "$qbe_refusal_stage" \
+        "$program_input_manifest" "$program_closure_hash" ||
+        die "new QBE refusal checkpoint failed verification"
+      mv "$qbe_refusal_stage" "$qbe_refusal_dir"
+      qbe_refusal_stage=""
+    fi
+    flock -u "$qbe_refusal_lock_fd"
     (
       cd "$source_snapshot_root"
-      "$beagle" build --materializer c17 \
+      BEAGLE_CORE_BUILD_CACHE="$beagle_core_cache" \
+        "$beagle" build --materializer c17 \
           --out "$program_stage" --abi "$abi" \
           "${native_server_entry_args[@]}" \
           -- \
@@ -1136,6 +1269,8 @@ if [[ ! -e "$program_dir" ]]; then
       tail -n 240 -- "$program_stage/materialize.log" >&2
       die "C17 recovery materialization failed after a QBE refusal"
     }
+  elif [[ "$qbe_supports_abi" == 1 ]]; then
+    flock -u "$qbe_refusal_lock_fd"
   fi
   if [[ "$qbe_supports_abi" == 1 ]]; then
     write_qbe_frontier "$program_stage/qbe-probe.report.txt" \
@@ -1173,24 +1308,23 @@ if [[ ! -e "$program_dir" ]]; then
   cmp -s "$program_input_manifest" "$program_stage/input.after" ||
     die "source/compiler/config closure changed during native program build"
   rm -f "$program_stage/input.after"
-  printf 'fram-native-program/v1 %s %s\n' \
-    "$program_closure_hash" "$native_program_digest" >"$program_stage/READY"
+  emit_content_manifest "$program_stage" >"$program_stage/artifacts.sha256"
+  program_manifest_digest="$(sha256sum "$program_stage/artifacts.sha256" |
+    sed 's/ .*//')"
+  printf 'fram-native-program/v2 %s %s %s\n' \
+    "$program_closure_hash" "$native_program_digest" \
+    "$program_manifest_digest" >"$program_stage/READY"
+  program_entry_is_valid "$program_stage" "$program_input_manifest" \
+    "$program_closure_hash" || die "new native program cache entry failed verification"
   mv "$program_stage" "$program_dir"
   program_stage=""
 fi
 
-[[ -f "$program_dir/READY" && -f "$program_dir/input.manifest" &&
-  -f "$program_dir/module.native-program" &&
-  -f "$program_dir/module.native-program.sha256" ]] ||
-  die "native program cache entry is incomplete: $program_dir"
+program_entry_is_valid "$program_dir" "$program_input_manifest" \
+  "$program_closure_hash" ||
+  die "native program cache entry failed verification: $program_dir"
 validate_ffc_notices "$program_dir"
-cmp -s "$program_input_manifest" "$program_dir/input.manifest" ||
-  die "native program cache identity does not match its input closure"
 native_program_digest="$(sha256sum "$program_dir/module.native-program" | sed 's/ .*//')"
-[[ "$(<"$program_dir/module.native-program.sha256")" == "$native_program_digest" &&
-  "$(<"$program_dir/READY")" == \
-    "fram-native-program/v1 $program_closure_hash $native_program_digest" ]] ||
-  die "native program cache entry failed its digest receipt: $program_dir"
 validate_native_report "$program_dir/report.txt"
 [[ -f "$program_dir/qbe-frontier.txt" && -f "$program_dir/qbe-probe.report.txt" ]] ||
   die "native program cache entry omitted its QBE frontier receipt: $program_dir"
