@@ -299,9 +299,6 @@ jobs:
               "$RELEASE_COMMIT" ]]
             [[ "$(git -C "$source_root" rev-parse "refs/tags/$RELEASE_TAG")" == \
               "$RELEASE_TAG_OBJECT" ]]
-            # The overlay is confined to ephemeral publication roots. The
-            # tagged commit and its annotated tag object remain untouched.
-            printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" >"$source_root/beagle-pin.txt"
           done
           echo "first=$source_a" >> "$GITHUB_OUTPUT"
           echo "second=$source_b" >> "$GITHUB_OUTPUT"
@@ -417,6 +414,11 @@ jobs:
           SOURCE_B: ${{ steps.source_roots.outputs.second }}
         run: |
           set -euo pipefail
+          # Keep Bun and Cloudflare-DO packaging on clean tag roots. The
+          # compatibility overlay begins only at the Beagle-dependent Wasm
+          # boundary and remains confined to these ephemeral roots.
+          printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" >"$SOURCE_A/beagle-pin.txt"
+          printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" >"$SOURCE_B/beagle-pin.txt"
           "$DIRENV_BIN" exec "$GITHUB_WORKSPACE" bash -euo pipefail <<'RELEASE'
           build_wasm() {
             local source_root="$1" cache_root="$2"
