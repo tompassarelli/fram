@@ -135,9 +135,7 @@ jobs:
       # It runs before the heavier toolchains because it covers the identity
       # contract this release is named for.
       - name: Prove branch revision identity
-        run: |
-          bb -cp out tests/framref_codec_test.clj
-          bb -cp out tests/framlog_fork_test.clj
+        run: bb -cp out tests/revision_identity_gate.clj
 
       - name: Install Clojure CLI
         run: |
