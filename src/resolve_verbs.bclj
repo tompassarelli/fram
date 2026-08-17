@@ -706,34 +706,27 @@
             first-body (when param? (first (:body sig)))
             body-start (if param?
                          (when (some? anchor-edge)
-                           (some (fn
-                                   [(e Any)]
-                                   Any
-                                   (when (= first-body (enode e)) (ekey e)))
-                             kids))
-                         (when (seq kids) (ekey (last kids))))
-            body-start-n (nn (if (nil? body-start) -1 body-start))
+                           (first (vec (keep-indexed (fn
+                                                      [(i Int) (e Any)]
+                                                      Int?
+                                                      (when (= first-body (enode e)) i))
+                                         kids))))
+                         (when (seq kids) (dec (count kids))))
+            (body-start-n Int) (if (nil? body-start) -1 body-start)
             body-slots (if (< body-start-n 0)
                          []
                          (if param?
-                           (vec (filter (fn
-                                          [(e Any)]
-                                          Bool
-                                          (>= (nn (ekey e)) body-start-n))
-                                  kids))
-                           (vec (filter (fn
-                                          [(e Any)]
-                                          Bool
-                                          (= (ekey e) body-start-n))
-                                  kids))))]
+                           (vec (drop body-start-n kids))
+                           [(nth kids body-start-n)]))]
         (when (= 0 (count body-slots))
           (warn (str "REJECTED — `" name "` has no body fN edges to replace; no facts mutated."))
           (reject 5))
-        (let [new-root (mint src datum)
+        (let [replacement-position (ri/predicate-at ctx (ecid (first body-slots)))
+              new-root (mint src datum)
               retire (:retire v)
               emit (:emit v)]
           (doseq [(e Any) body-slots] (retire (ecid e)))
-          (ri/assert! ctx (nn d) (str "f" body-start-n) (nn new-root))
+          (ri/assert! ctx (nn d) replacement-position (nn new-root))
           (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
           (emit "set-body"
             (str "replaced body of `"

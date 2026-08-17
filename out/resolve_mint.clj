@@ -7,8 +7,6 @@
             [resolve-modules :as rm]
             [resolve-render :as rv]))
 
-(def FN-RE (re-pattern "f\\d+"))
-
 (defrecord Mint [ctx KIND Vp ents view BOUND REFERS FIXED])
 
 (defn mint-ctx [r] (:ctx r))
@@ -27,9 +25,9 @@
 
 (defn mint-FIXED [r] (:FIXED r))
 
-(defrecord FnEdge [idx cid child])
+(defrecord FnEdge [key cid child])
 
-(defn fnedge-idx [r] (:idx r))
+(defn fnedge-key [r] (:key r))
 
 (defn fnedge-cid [r] (:cid r))
 
@@ -87,7 +85,8 @@
   (do
   (ri/assert-on! builder e (:KIND m) (ri/literal! "list"))
   (doseq [i (range (count elems))]
-  (ri/assert-on! builder e (str "f" i) (mint-datum-on! m builder src (nth elems i))))
+  (let [child (mint-datum-on! m builder src (nth elems i))]
+  (ri/assert-on! builder e (str "f" (* (inc i) rc/ORD-STEP) "~0") child)))
   e))
   (instance? java.util.regex.Pattern d) (mint-datum-on! m builder src (list (symbol "#%regex") (.pattern d)))
   (set? d) (mint-datum-on! m builder src (apply list (cons (symbol "#%set") (seq d))))
@@ -103,11 +102,9 @@
 
 (defn fN-facts [^Mint m parent]
   (let [ctx (:ctx m)
-   rows (reduce (fn [acc cid] (let [p (ri/predicate-at ctx cid)
-   r (ri/value-at ctx cid)]
-  (if (and (string? p) (some? (re-matches FN-RE (str p)))) (let [n (parse-long (subs (str p) 1))]
-  (if (nil? n) acc (conj acc (->FnEdge n cid r)))) acc))) [] (ri/by-subject ctx parent))]
-  (mapv (fn [^FnEdge e] [(:idx e) (:cid e) (:child e)]) (sort-by (fn [^FnEdge e] (:idx e)) rows))))
+   rows (reduce (fn [acc cid] (let [key (rc/ord-parse (ri/predicate-at ctx cid))]
+  (if (nil? key) acc (conj acc (->FnEdge key cid (ri/value-at ctx cid)))))) [] (ri/by-subject ctx parent))]
+  (mapv (fn [^FnEdge e] [(:key e) (:cid e) (:child e)]) (sort-by (fn [^FnEdge e] (:key e)) rc/ord-cmp rows))))
 
 (defn retire-fact! [^Mint m oldc]
   (ri/retire! (:ctx m) oldc))
@@ -254,7 +251,7 @@
    ps (ri/predicate-at ctx cid)
    r (ri/value-at ctx cid)]
   (cond
-  (and (some? wrap) (= e wrap) (string? ps) (rc/ord-pos? ps) (not= ps "f0")) nil
+  (and (some? wrap) (= e wrap) (string? ps) (rc/ord-pos? ps) (contains? (:deleted-forms m) r)) nil
   (contains? INTERNAL-PREDS (str ps)) nil
   (and (= ps "v") (some? (rr/refers-target ctx view (:BOUND m) (:REFERS m) e))) (let [D (rr/refers-target ctx view (:BOUND m) (:REFERS m) e)
    fixed? (not (empty? (ri/by-subject-predicate ctx e (:FIXED m))))
@@ -285,10 +282,8 @@
    live (if (some? root) (desc root) nil)
    ents (vec (get (:ents m) src []))
    rows (reduce (fn [acc e] (if (or (contains? dsub e) (and (some? live) (not (contains? live e)))) acc (reduce (fn [a cid] (let [line (emit-line! m wrap e cid)]
-  (if (nil? line) a (conj a line)))) acc (ri/by-subject ctx e)))) [] ents)
-   forms (if (some? wrap) (vec (remove (fn [f] (contains? dforms f)) (vec (rest (rr/ordered-children ctx wrap))))) [])
-   formlines (mapv (fn [i] (str "[" (ri/ordinal! ctx wrap) " \"f" (+ i 1) "\" " (ri/ordinal! ctx (nth forms i)) "]")) (vec (range (count forms))))]
-  (into (into [(str "@file " src)] rows) formlines)))
+  (if (nil? line) a (conj a line)))) acc (ri/by-subject ctx e)))) [] ents)]
+  (into [(str "@file " src)] rows)))
 
 (defn author-emit-lines [op detail srcs outp]
   (let [f outp]

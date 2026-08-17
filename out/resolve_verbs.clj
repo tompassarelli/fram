@@ -550,20 +550,21 @@
    first-body (if param? (do
   (first (:body sig))))
    body-start (if param? (if (some? anchor-edge) (do
-  (some (fn [e] (if (= first-body (enode e)) (do
-  (ekey e)))) kids))) (if (seq kids) (do
-  (ekey (last kids)))))
-   body-start-n (nn (if (nil? body-start) -1 body-start))
-   body-slots (if (< body-start-n 0) [] (if param? (vec (filter (fn [e] (>= (nn (ekey e)) body-start-n)) kids)) (vec (filter (fn [e] (= (ekey e) body-start-n)) kids))))]
+  (first (vec (keep-indexed (fn [i e] (if (= first-body (enode e)) (do
+  i))) kids))))) (if (seq kids) (do
+  (dec (count kids)))))
+   body-start-n (if (nil? body-start) -1 body-start)
+   body-slots (if (< body-start-n 0) [] (if param? (vec (drop body-start-n kids)) [(nth kids body-start-n)]))]
   (if (= 0 (count body-slots)) (do
   (warn (str "REJECTED — `" name "` has no body fN edges to replace; no facts mutated."))
   (reject 5)))
-  (let [new-root (mint src datum)
+  (let [replacement-position (ri/predicate-at ctx (ecid (first body-slots)))
+   new-root (mint src datum)
    retire (:retire v)
    emit (:emit v)]
   (doseq [e body-slots]
   (retire (ecid e)))
-  (ri/assert! ctx (nn d) (str "f" body-start-n) (nn new-root))
+  (ri/assert! ctx (nn d) replacement-position (nn new-root))
   (if (not (:capture-only? v)) (do
   (let [rr! (:reresolve v)]
   (rr!))))

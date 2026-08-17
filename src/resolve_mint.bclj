@@ -8,11 +8,11 @@
 ;; 019f9f0e-de2a-7759-bb10-db8b14be6fad). This is the inverse of
 ;; facts-roundtrip.rkt's datum->facts: a Clojure EDN datum (the structured edit
 ;; spec an agent emits, e.g. `(defn add-two [(x Int)] Int (+ x 2))`) is
-;; walked into FRESH entities carrying `kind`/`v`/`fN` propositions — exactly the
+;; walked into FRESH entities carrying `kind`/`v`/CRDT-order propositions — exactly the
 ;; reader-datum shape --emit-edn projects — and registered in file->ents so the
 ;; projection emits them. That is what makes add-def / set-body graph operations
 ;; rather than text splices; the renderer reconstructs purely from
-;; fN/tail, so a minted subtree round-trips byte-stable and any reference in it
+;; ordered slots/tail, so a minted subtree round-trips byte-stable and any reference in it
 ;; resolves through the SAME lexical walk.
 ;;
 ;; STRUCTURAL ADAPTATION (Cuts B–H's rule, unchanged): STATE IS A PARAMETER.
@@ -26,10 +26,9 @@
 ;;   register!    every minted entity is appended to file->ents[src] so
 ;;                extract-file! emits it. THE registration.
 ;;   mint-leaf!   one scalar leaf: asserted `kind` and `v` propositions.
-;;   fN-facts     the LIVE, ordered fN assertion occurrences of a parent — the body slots
-;;                set-body / replace-in-body address. Integer fN only (a CRDT
-;;                order key is a WRAPPER-level spelling; body edges stay flat),
-;;                matching the original's #"f\d+" exactly.
+;;   fN-facts     the LIVE, ordered structural assertion occurrences of a parent —
+;;                the body slots set-body / replace-in-body address. Both flat
+;;                fN and CRDT f<path>~<tie> positions are accepted.
 ;;   retire-fact! retract a live structural proposition with NO replacement value
 ;;                (retiring a wrapper/body fN edge). The kernel records the
 ;;                resulting withdrawal against the newest live equal assertion
@@ -52,8 +51,6 @@
     [resolve-render :as rv]))
 
 
-(def FN-RE Regex (re-pattern "f\\d+"))
-
 ;; The mint environment: the dynamic store state of resolve.clj, handed over
 ;; explicitly. `ents` is typed (Atom Any) because Beagle cannot name "a map from
 ;; src string to a vector of entity ids" more precisely than Any — the same
@@ -68,8 +65,9 @@
    (REFERS Any)
    (FIXED Any)])
 
-;; -> [[N assertion-occurrence child-node] …]: one row per LIVE fN edge, in slot order.
-(defrecord FnEdge [(idx Int) (cid Any) (child Any)])
+;; -> [[OrdKey assertion-occurrence child-node] …]: one row per LIVE structural
+;; edge, in slot order.
+(defrecord FnEdge [(key rc/OrdKey) (cid Any) (child Any)])
 
 (defn register! [(m Mint) (src String) (e Any)] Any
   (let [ents (:ents m)]
@@ -150,10 +148,11 @@
               (do
                 (ri/assert-on! builder e (:KIND m) (ri/literal! "list"))
                 (doseq [(i Int) (range (count elems))]
-                  (ri/assert-on! builder
-                    e
-                    (str "f" i)
-                    (mint-datum-on! m builder src (nth elems i))))
+                  (let [child (mint-datum-on! m builder src (nth elems i))]
+                    (ri/assert-on! builder
+                      e
+                      (str "f" (* (inc i) rc/ORD-STEP) "~0")
+                      child)))
                 e))
             (instance? java.util.regex.Pattern d)
             (mint-datum-on! m builder src (list (symbol "#%regex") (.pattern d)))
@@ -170,9 +169,9 @@
 
 (defn fN-facts [(m Mint) (parent Any)] (Vec Any)
   (let [ctx (:ctx m) rows (reduce (fn
-                                    [(acc (Vec FnEdge)) (cid Any)] (Vec FnEdge) (let [(p Any) (ri/predicate-at ctx cid) (r Any) (ri/value-at ctx cid)] (if (and (string? p) (some? (re-matches FN-RE (str p)))) (let [n (parse-long (subs (str p) 1))] (if (nil? n) acc (conj acc (->FnEdge n cid r)))) acc))) [] (ri/by-subject ctx parent))]
-    (mapv (fn [(e FnEdge)] Any [(:idx e) (:cid e) (:child e)])
-      (sort-by (fn [(e FnEdge)] Int (:idx e)) rows))))
+                                    [(acc (Vec FnEdge)) (cid Any)] (Vec FnEdge) (let [key (rc/ord-parse (ri/predicate-at ctx cid))] (if (nil? key) acc (conj acc (->FnEdge key cid (ri/value-at ctx cid)))))) [] (ri/by-subject ctx parent))]
+    (mapv (fn [(e FnEdge)] Any [(:key e) (:cid e) (:child e)])
+      (sort-by (fn [(e FnEdge)] rc/OrdKey (:key e)) rc/ord-cmp rows))))
 
 ;; The supersedes edge is gone (ruling GAP 3): retiring an edge appends a
 ;; retraction occurrence, and the kernel withdrawal relation records which live
@@ -564,12 +563,9 @@
 ;; and CLI consumers.
 ;;
 ;; Two filters, both load-bearing:
-;;   #36  wrapper form-edges are ALWAYS renumbered to consecutive integer fN.
-;;        The graph keeps CRDT keys (f<path>~<tie>); the .bclj view must be clean
-;;        integer fN so racket --render (which only understands integer fN) sees
-;;        every form. Previously this ran ONLY under deletes, so a CRDT-keyed
-;;        insert survived raw and racket silently dropped it. Idempotent for
-;;        clean modules.
+;;   #36  a deleted wrapper child edge is omitted with its subtree. Live CRDT
+;;        predicates are preserved verbatim; the renderer's current contract is
+;;        the same f<path>~<tie> order relation the graph stores.
 ;;   REACHABILITY  emit ONLY nodes reachable from the beagle-file wrapper via
 ;;        LIVE structural edges. A verb that WITHDRAWS a body/form fN assertion
 ;;        (set-body, upsert REPLACE) leaves the OLD subtree in file->ents with
@@ -603,7 +599,8 @@
 (defn- emit-line! [(m Emit) (wrap Any) (e Any) (cid Any)] Any
   (let [(ctx Any) (:ctx m) (view Any) (:view m) (ps Any) (ri/predicate-at ctx cid) (r Any) (ri/value-at ctx cid)]
     (cond
-      (and (some? wrap) (= e wrap) (string? ps) (rc/ord-pos? ps) (not= ps "f0"))
+      (and (some? wrap) (= e wrap) (string? ps) (rc/ord-pos? ps)
+        (contains? (:deleted-forms m) r))
       nil
       (contains? INTERNAL-PREDS (str ps))
       nil
@@ -621,22 +618,28 @@
       (str "[" (ri/ordinal! ctx e) " " (pr-str ps) " " (ri/ordinal! ctx r) "]"))))
 
 (defn extract-lines! [(m Emit) (src String)] (Vec Any)
-  (let [(ctx Any) (:ctx m) (wrapf Any) (:wrapper-of m) (desc Any) (:descendants m) (dforms Any) (:deleted-forms m) (dsub Any) (:deleted-subtree m) (wrap Any) (wrapf src) (root Any) (if (empty? dforms) (wrapf src) nil) (live Any) (if (some? root) (desc root) nil) (ents (Vec Any)) (vec (get (:ents m) src [])) (rows (Vec Any)) (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                [(acc (Vec Any))
-                                                                                                                                                                                                                                                                                                                                                 (e Any)]
-                                                                                                                                                                                                                                                                                                                                                (Vec Any)
-                                                                                                                                                                                                                                                                                                                                                (if (or (contains? dsub e) (and (some? live) (not (contains? live e)))) acc (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                      [(a (Vec Any))
-                                                                                                                                                                                                                                                                                                                                                                                                                                       (cid Any)]
-                                                                                                                                                                                                                                                                                                                                                                                                                                      (Vec Any)
-                                                                                                                                                                                                                                                                                                                                                                                                                                      (let [(line Any) (emit-line! m wrap e cid)] (if (nil? line) a (conj a line)))) acc (ri/by-subject ctx e)))) [] ents) (forms (Vec Any)) (if (some? wrap) (vec (remove (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            [(f Any)]
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            Bool
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            (contains? dforms f)) (vec (rest (rr/ordered-children ctx wrap))))) []) (formlines (Vec Any)) (mapv (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  [(i Int)]
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  (str "[" (ri/ordinal! ctx wrap) " \"f" (+ i 1) "\" " (ri/ordinal! ctx (nth forms i)) "]")) (vec (range (count forms))))]
-    (into (into [(str "@file " src)] rows) formlines)))
+  (let [(ctx Any) (:ctx m)
+        (wrapf Any) (:wrapper-of m)
+        (desc Any) (:descendants m)
+        (dforms Any) (:deleted-forms m)
+        (dsub Any) (:deleted-subtree m)
+        (wrap Any) (wrapf src)
+        (root Any) (if (empty? dforms) (wrapf src) nil)
+        (live Any) (if (some? root) (desc root) nil)
+        (ents (Vec Any)) (vec (get (:ents m) src []))
+        (rows (Vec Any))
+        (reduce (fn [(acc (Vec Any)) (e Any)] (Vec Any)
+                  (if (or (contains? dsub e)
+                          (and (some? live) (not (contains? live e))))
+                    acc
+                    (reduce (fn [(a (Vec Any)) (cid Any)] (Vec Any)
+                              (let [(line Any) (emit-line! m wrap e cid)]
+                                (if (nil? line) a (conj a line))))
+                      acc
+                      (ri/by-subject ctx e))))
+          [] ents)
+        ]
+    (into [(str "@file " src)] rows)))
 
 ;; author-emit! — the stderr report of an authoring run. The `binding [*out* *err*]`
 ;; stays in resolve.clj (a host dynamic var cannot change namespace), so this builds
