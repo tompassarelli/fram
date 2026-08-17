@@ -286,7 +286,10 @@
    n (count b)]
   (if (or (zero? m) (zero? n)) (max m n) (loop [i 1
    prev (vec (range (inc n)))]
-  (if (> i m) (peek prev) (recur (inc i) (reduce (fn [cur j] (conj cur (if (= (.charAt a (dec i)) (.charAt b (dec j))) (nth prev (dec j)) (inc (min (nth prev j) (peek cur) (nth prev (dec j))))))) [i] (range 1 (inc n)))))))))
+  (if (> i m) (peek prev) (recur (inc i) (reduce (fn [cur j] (let [above (nth prev j)
+   left (peek cur)
+   diagonal (nth prev (dec j))]
+  (conj cur (if (= (.charAt a (dec i)) (.charAt b (dec j))) diagonal (inc (min above left diagonal)))))) [i] (range 1 (inc n)))))))))
 
 (defn- nearest [sym candidates]
   (let [s (name sym)

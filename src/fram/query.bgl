@@ -946,7 +946,7 @@
     [(integer? value)
      (let [(integer-value Int) value] (str "i" integer-value ";"))]
     [(number? value)
-     (let [(float-value Float) value] (str "f" float-value ";"))]
+     (let [(float-value Float) (double value)] (str "f" float-value ";"))]
     [(boolean? value)
      (let [(bool-value Bool) value] (if bool-value "b1;" "b0;"))]
     [(keyword? value)
@@ -1164,7 +1164,7 @@
     [(number? value)
      (if (integer? value)
        (let [(integer-value Int) value] integer-value)
-       (let [(float-value Float) value] float-value))]
+       (let [(float-value Float) (double value)] float-value))]
     [(string? value)
      (let [(text String) value
            (integer-result (U Int Nil)) (parse-long text)]
@@ -1194,7 +1194,7 @@
 (defn- numeric-float [(value NumericAtom)] Float
   (if (integer? value)
     (let [(integer-value Int) value] (double integer-value))
-    (let [(float-value Float) value] float-value)))
+    (let [(float-value Float) (double value)] float-value)))
 
 (defn- nonnumeric-row? [(rows (Vec d/Tuple)) (position Int)] Bool
   (loop [(index Int) 0]
@@ -1311,7 +1311,7 @@
               (let [(integer-value Int) value
                     (element Any) integer-value]
                 (conj current element))
-              (let [(float-value Float) value
+              (let [(float-value Float) (double value)
                     (element Any) float-value]
                 (conj current element))))
           row values))

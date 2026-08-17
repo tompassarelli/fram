@@ -162,12 +162,13 @@
           (ri/assert! ctx leaf REFERS target))))))
 
 (defn corpus-from-store! [(state CorpusState)] Any
-  (let [t0 (System/nanoTime) groups (rw/warm-groups (:ctx state) (:corpus-cache state) name->module) t-groups (System/nanoTime) tables (rw/scoped-corpus-tables (:ctx state) (:view state) groups (:corpus-scope state)) install (:install-warm state)]
+  (let [(t0 Int) (System/nanoTime) groups (rw/warm-groups (:ctx state) (:corpus-cache state) name->module) (t-groups Int) (System/nanoTime) tables (rw/scoped-corpus-tables (:ctx state) (:view state) groups (:corpus-scope state)) install (:install-warm state)]
     (do
       (install groups tables)
       (when (= "1" (System/getenv "FRAM_PROF"))
         (let [profile (:profile state)]
-          (profile (format "  corpus-from-store!: groups=%.1fms frames+exports=%.1fms cached=%s nsrcs=%d scoped=%s" (/ (- t-groups t0) 1000000.0) (/ (- (System/nanoTime) t-groups) 1000000.0) (some? (:corpus-cache state)) (count (:srcs tables)) (boolean (:corpus-scope state))))))
+          (let [(now Int) (System/nanoTime)]
+            (profile (format "  corpus-from-store!: groups=%.1fms frames+exports=%.1fms cached=%s nsrcs=%d scoped=%s" (/ (- t-groups t0) 1000000.0) (/ (- now t-groups) 1000000.0) (some? (:corpus-cache state)) (count (:srcs tables)) (boolean (:corpus-scope state)))))))
       tables)))
 
 (def RESOLVE-SPACE String "resolve")

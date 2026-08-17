@@ -205,7 +205,8 @@
   (reduce-kv (fn [total ^String key handles] (+ total 84 (* 4 (count key)) (* 42 (count handles)))) 0 postings))
 
 (defn- token-rows-weight [rows]
-  (reduce (fn [total tokens] (+ total 42 (reduce (fn [subtotal ^String token] (+ subtotal 42 (* 4 (count token)))) 0 tokens))) 0 rows))
+  (reduce (fn [total tokens] (let [token-weight (reduce (fn [subtotal ^String token] (+ subtotal 42 (* 4 (count token)))) 0 tokens)]
+  (+ total 42 token-weight))) 0 rows))
 
 (defn- strings-weight [values]
   (reduce (fn [total ^String value] (+ total 70 (* 4 (count value)))) 0 values))
@@ -232,8 +233,7 @@
    exact (text-index/source-result-source exact-result)]
   (if (nil? exact) (->TextSearchSourceResult false nil (text-index/source-result-error exact-result)) (let [weight (+ (text-index/source-weight exact) 112 (* 28 (count rows)))
    error (index-limit-error weight maximum)]
-  (if error (->TextSearchSourceResult false nil error) (let [empty-analyzers nil
-   cell (atom empty-analyzers)]
+  (if error (->TextSearchSourceResult false nil error) (let [cell (atom nil)]
   (->TextSearchSourceResult true (->TextSearchSource exact rows maximum cell weight) (text-index/no-text-error))))))))
 
 (defn propositions-for-attributes [propositions attributes]
@@ -246,8 +246,7 @@
   (let [rows (vec propositions)
    exact (text-index/build-source! rows maximum)
    weight (+ (text-index/source-weight exact) 112 (* 28 (count rows)))
-   empty-analyzers nil
-   cell (atom empty-analyzers)]
+   cell (atom nil)]
   (index-limit weight maximum)
   (->TextSearchSource exact rows maximum cell weight)))
 

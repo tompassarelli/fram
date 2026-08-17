@@ -104,7 +104,7 @@
   (textcandidatesource-bytes source))
 
 (defn- token-set! [^String value]
-  (persistent! (reduce (fn [folded ^String token] (conj! folded (str/lower-case token))) (transient #{}) (re-seq #"[\p{L}\p{Nd}]+" value))))
+  (reduce (fn [folded ^String token] (conj folded (str/lower-case token))) #{} (re-seq #"[\p{L}\p{Nd}]+" value)))
 
 (defn tokenize! [^String value]
   (vec (sort (vec (token-set! value)))))
@@ -122,10 +122,10 @@
   (let [rows propositions
    row-count (count rows)
    empty-postings {}
-   postings (persistent! (loop [handle 0
-   current (transient empty-postings)]
+   postings (loop [handle 0
+   current empty-postings]
   (if (>= handle row-count) current (let [value (t/triple-t3 (nth rows handle))]
-  (recur (inc handle) (if (string? value) (reduce (fn [index ^String token] (assoc! index token (conj (get index token []) handle))) current (token-set! value)) current))))))
+  (recur (inc handle) (if (string? value) (reduce (fn [index ^String token] (assoc index token (conj (get index token []) handle))) current (token-set! value)) current)))))
    weight (+ 112 (* 14 row-count) (postings-weight postings))
    error (index-limit-error weight maximum)]
   (if error (->TextCandidateSourceResult false nil error) (->TextCandidateSourceResult true (->TextCandidateSource rows postings weight) (no-text-error)))))

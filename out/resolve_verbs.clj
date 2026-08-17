@@ -465,10 +465,11 @@
 (def COMMENT-RE (re-pattern "comment\\d+"))
 
 (defn- next-comment-idx [^Verb v form]
-  (let [ctx (:ctx v)]
-  (+ 1 (reduce (fn [acc n] (if (> n acc) n acc)) -1 (vec (keep (fn [cid] (let [p (ri/predicate-at ctx cid)]
+  (let [ctx (:ctx v)
+   max-index (reduce (fn [acc n] (if (> n acc) n acc)) -1 (vec (keep (fn [cid] (let [p (ri/predicate-at ctx cid)]
   (if (and (string? p) (some? (re-matches COMMENT-RE (str p)))) (do
-  (parse-long (subs (str p) 7)))))) (ri/by-subject ctx form)))))))
+  (parse-long (subs (str p) 7)))))) (ri/by-subject ctx form))))]
+  (+ 1 max-index)))
 
 (defn verb-insert-comment! [^Verb v ^String scope ^String anchor-name ^String text placement]
   (let [ctx (:ctx v)
@@ -646,7 +647,8 @@
 (defn run-cli! [env args]
   (let [mode (first args)
    fi (first (vec (keep-indexed (fn [i ^String arg] (if (= arg "--within-file") i nil)) args)))
-   stripped (if (nil? fi) args (vec (concat (take fi args) (drop (+ fi 2) args))))
+   stripped (if (nil? fi) args (let [index fi]
+  (vec (concat (take index args) (drop (+ index 2) args)))))
    skip (cond
   (= mode "resolve") 1
   (= mode "rename") 4

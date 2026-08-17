@@ -501,7 +501,7 @@
             (when (= (enode (nth forms ai)) mover-form)
               (warn (str "REJECTED — reorder `" name "` :after itself is a no-op; no facts mutated."))
               (reject 3)))))
-      (let [others (vec (remove (fn [(e Any)] Bool (= (enode e) mover-form)) forms)) a-pos (if front? -1 (nn (first (vec (keep-indexed (fn
+      (let [others (vec (remove (fn [(e Any)] Bool (= (enode e) mover-form)) forms)) (a-pos Int) (if front? -1 (nn (first (vec (keep-indexed (fn
                                                                                                                                          [(i Int)
                                                                                                                                           (e Any)]
                                                                                                                                          Any
@@ -581,7 +581,7 @@
     (when (and (seq? datum) (not (contains? rc/TOPLEVEL-VALUE-DEFS (str (first datum)))))
       (warn (str "REJECTED — insert-form head `" (first datum) "` not a value def."))
       (reject 3))
-    (let [wof (:wrapper-of v) dbind (:def-binding v) ffv (:form-for-victim v) src (first target-srcs) wrap (wof src) forms (vec (wrap-forms v (nn wrap))) anchor-bind (dbind src after-name) anchor-form (when (some? anchor-bind) (ffv src anchor-bind)) i (nn (when (some? anchor-form) (first (vec (keep-indexed (fn
+    (let [wof (:wrapper-of v) dbind (:def-binding v) ffv (:form-for-victim v) src (first target-srcs) wrap (wof src) forms (vec (wrap-forms v (nn wrap))) anchor-bind (dbind src after-name) anchor-form (when (some? anchor-bind) (ffv src anchor-bind)) (i Int) (nn (when (some? anchor-form) (first (vec (keep-indexed (fn
                                                                                                                                                                                                                                                                                                                       [(n Int)
                                                                                                                                                                                                                                                                                                                        (e Any)]
                                                                                                                                                                                                                                                                                                                       Any
@@ -616,11 +616,12 @@
 
 ;; next free commentN slot on a form (0 if none)
 (defn- next-comment-idx [(v Verb) (form Any)] Int
-  (let [ctx (:ctx v)]
-    (+ 1
-      (reduce (fn [(acc Int) (n Int)] Int (if (> n acc) n acc))
+  (let [ctx (:ctx v)
+        (max-index Int)
+        (reduce (fn [(acc Int) (n Int)] Int (if (> n acc) n acc))
         -1
-        (vec (keep (fn [(cid Any)] Int? (let [p (ri/predicate-at ctx cid)] (when (and (string? p) (some? (re-matches COMMENT-RE (str p)))) (parse-long (subs (str p) 7))))) (ri/by-subject ctx form)))))))
+        (vec (keep (fn [(cid Any)] Int? (let [p (ri/predicate-at ctx cid)] (when (and (string? p) (some? (re-matches COMMENT-RE (str p)))) (parse-long (subs (str p) 7))))) (ri/by-subject ctx form))))]
+    (+ 1 max-index)))
 
 (defn verb-insert-comment!
   [(v Verb)
@@ -920,11 +921,11 @@
       (fn [(code Int)] Any (System/exit code)))))
 
 (defn run-cli! [(env Any) (args (Vec String))] Any
-  (let [mode (first args) fi (first (vec (keep-indexed (fn
+  (let [mode (first args) (fi Int?) (first (vec (keep-indexed (fn
                                                          [(i Int)
                                                           (arg String)]
                                                          Int?
-                                                         (if (= arg "--within-file") i nil)) args))) stripped (if (nil? fi) args (vec (concat (take fi args) (drop (+ fi 2) args)))) skip (cond (= mode "resolve") 1 (= mode "rename") 4 (= mode "delete") 3 (= mode "reorder") 4 (= mode "callgraph") 1 (= mode "upsert-form") 3 (= mode "set-body") 4 (= mode "replace-in-body") 5 :else 1) edn-paths (vec (drop skip stripped)) resolve-edn (get env :resolve-edn)]
+                                                         (if (= arg "--within-file") i nil)) args))) stripped (if (nil? fi) args (let [(index Int) fi] (vec (concat (take index args) (drop (+ index 2) args))))) skip (cond (= mode "resolve") 1 (= mode "rename") 4 (= mode "delete") 3 (= mode "reorder") 4 (= mode "callgraph") 1 (= mode "upsert-form") 3 (= mode "set-body") 4 (= mode "replace-in-body") 5 :else 1) edn-paths (vec (drop skip stripped)) resolve-edn (get env :resolve-edn)]
     (resolve-edn edn-paths
       (fn [] Any
         (let [warn (fn [(line Any)] Any (binding [*out* *err*] (println line))) srcs-fn (get env :srcs) counter (get env :counter) extract (get env :extract) out-path (get env :out-path) basename (fn

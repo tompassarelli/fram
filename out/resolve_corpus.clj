@@ -122,7 +122,8 @@
   (install groups tables)
   (if (= "1" (System/getenv "FRAM_PROF")) (do
   (let [profile (:profile state)]
-  (profile (format "  corpus-from-store!: groups=%.1fms frames+exports=%.1fms cached=%s nsrcs=%d scoped=%s" (/ (- t-groups t0) 1000000.0) (/ (- (System/nanoTime) t-groups) 1000000.0) (some? (:corpus-cache state)) (count (:srcs tables)) (boolean (:corpus-scope state)))))))
+  (let [now (System/nanoTime)]
+  (profile (format "  corpus-from-store!: groups=%.1fms frames+exports=%.1fms cached=%s nsrcs=%d scoped=%s" (/ (- t-groups t0) 1000000.0) (/ (- now t-groups) 1000000.0) (some? (:corpus-cache state)) (count (:srcs tables)) (boolean (:corpus-scope state))))))))
   tables)))
 
 (def ^String RESOLVE-SPACE "resolve")

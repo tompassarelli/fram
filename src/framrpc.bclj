@@ -495,7 +495,7 @@
          (rpc-fail! :rpc-invalid-shape "cancel frame body must be empty"))]
       [:else (rpc-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown")])))
 
-(defn- rpc-add-measured-term! [(term Any) (nodes Any)] Int
+(defn- rpc-add-measured-term! [(term Any) (nodes (Atom Int))] Int
   (let [remaining (- rpc-v2-max-term-nodes (deref nodes))]
     (if (<= remaining 0)
       (rpc-fail! :rpc-term-node-limit
@@ -506,22 +506,22 @@
         (swap! nodes + (t/termcodecmeasure-nodes measure))
         (t/termcodecmeasure-bytes measure)))))
 
-(defn- rpc-page-request-bytes! [(page t/RpcPageRequest) (nodes Any)] Int
+(defn- rpc-page-request-bytes! [(page t/RpcPageRequest) (nodes (Atom Int))] Int
   (let [cursor (t/rpc-page-request-cursor-value page)]
     (+ 5 (if (nil? cursor) 0 (rpc-add-measured-term! cursor nodes)))))
 
-(defn- rpc-page-response-bytes! [(page t/RpcPageResponse) (nodes Any)] Int
+(defn- rpc-page-response-bytes! [(page t/RpcPageResponse) (nodes (Atom Int))] Int
   (let [cursor (t/rpc-page-response-cursor-value page)]
     (+ 6 (if (nil? cursor) 0 (rpc-add-measured-term! cursor nodes)))))
 
-(defn- rpc-error-bytes! [(error t/RpcError) (nodes Any)] Int
+(defn- rpc-error-bytes! [(error t/RpcError) (nodes (Atom Int))] Int
   (let [detail (t/rpc-error-detail-value error)]
     (+ 2
        (+ (rpc-add-measured-term! (t/rpcerror-code error) nodes)
           (+ (rpc-add-measured-term! (t/rpcerror-message error) nodes)
              (if (nil? detail) 0 (rpc-add-measured-term! detail nodes)))))))
 
-(defn- rpc-request-body-bytes! [(request t/RpcRequest) (nodes Any)] Int
+(defn- rpc-request-body-bytes! [(request t/RpcRequest) (nodes (Atom Int))] Int
   (let [expected (t/rpcrequest-expected-version request)
         page (t/rpcrequest-page request)
         timeout (t/rpcrequest-timeout-ms request)]
@@ -534,7 +534,7 @@
                       (rpc-add-measured-term! (t/rpc-request-payload-value request)
                                               nodes)))))))))
 
-(defn- rpc-response-body-bytes! [(response t/RpcResponse) (nodes Any)] Int
+(defn- rpc-response-body-bytes! [(response t/RpcResponse) (nodes (Atom Int))] Int
   (let [page (t/rpcresponse-page response)
         error (t/rpcresponse-error response)
         payload (t/rpc-response-payload-value response)]
@@ -692,7 +692,7 @@
        (rpc-fail! :rpc-invalid-boolean
                   (str context " must be the strict byte 0 or 1"))])))
 
-(defn- rpc-read-term! [(buffer Any) (nodes Any)] Any
+(defn- rpc-read-term! [(buffer Any) (nodes (Atom Int))] Any
   (let [remaining (- rpc-v2-max-term-nodes (deref nodes))]
     (if (<= remaining 0)
       (rpc-fail! :rpc-term-node-limit
@@ -703,7 +703,7 @@
         (swap! nodes + (t/termcodecdecoded-nodes decoded))
         (t/termcodecdecoded-value decoded)))))
 
-(defn- rpc-read-space-term! [(buffer Any) (nodes Any)] String
+(defn- rpc-read-space-term! [(buffer Any) (nodes (Atom Int))] String
   (if (>= (deref nodes) rpc-v2-max-term-nodes)
     (rpc-fail! :rpc-term-node-limit
                "FRAMRPC body exceeds the aggregate Term node limit")
@@ -715,32 +715,32 @@
           (rpc-fail! :rpc-invalid-field "FRAMRPC SpaceId must be a String Term"))))))
 
 (defn- rpc-read-keyword-term!
-  [(buffer Any) (nodes Any) (context String)] Keyword
+  [(buffer Any) (nodes (Atom Int)) (context String)] Keyword
   (let [value (rpc-read-term! buffer nodes)]
     (if (keyword? value)
       value
       (rpc-fail! :rpc-invalid-field (str context " must be a Keyword Term")))))
 
-(defn- rpc-read-string-term! [(buffer Any) (nodes Any) (context String)] String
+(defn- rpc-read-string-term! [(buffer Any) (nodes (Atom Int)) (context String)] String
   (let [value (rpc-read-term! buffer nodes)]
     (if (string? value)
       value
       (rpc-fail! :rpc-invalid-field (str context " must be a String Term")))))
 
-(defn- read-rpc-page-request! [(buffer Any) (nodes Any)] t/RpcPageRequest
+(defn- read-rpc-page-request! [(buffer Any) (nodes (Atom Int))] t/RpcPageRequest
   (let [limit (rpc-read-u32-le! buffer "page limit")
         cursor? (rpc-read-presence! buffer "page cursor presence")
         cursor (if cursor? (rpc-read-term! buffer nodes) nil)]
     (rpc-page-request! limit cursor)))
 
-(defn- read-rpc-page-response! [(buffer Any) (nodes Any)] t/RpcPageResponse
+(defn- read-rpc-page-response! [(buffer Any) (nodes (Atom Int))] t/RpcPageResponse
   (let [ordinal (rpc-read-u32-le! buffer "page ordinal")
         cursor? (rpc-read-presence! buffer "next cursor presence")
         cursor (if cursor? (rpc-read-term! buffer nodes) nil)
         done (rpc-read-bool! buffer "page done")]
     (rpc-page-response! ordinal cursor done)))
 
-(defn- read-rpc-error! [(buffer Any) (nodes Any)] t/RpcError
+(defn- read-rpc-error! [(buffer Any) (nodes (Atom Int))] t/RpcError
   (let [code (rpc-read-keyword-term! buffer nodes "error code")
         retryable (rpc-read-bool! buffer "error retryable")
         message (rpc-read-string-term! buffer nodes "error message")
@@ -748,7 +748,7 @@
         detail (if detail? (rpc-read-term! buffer nodes) nil)]
     (rpc-error! code retryable message detail)))
 
-(defn- read-rpc-request! [(buffer Any) (nodes Any)] t/RpcRequest
+(defn- read-rpc-request! [(buffer Any) (nodes (Atom Int))] t/RpcRequest
   (let [space (rpc-read-space-term! buffer nodes)
         op (rpc-read-keyword-term! buffer nodes "request op")
         expected? (rpc-read-presence! buffer "expected-version presence")
@@ -761,7 +761,7 @@
         payload (rpc-read-term! buffer nodes)]
     (rpc-request! space op expected page timeout payload)))
 
-(defn- read-rpc-response! [(buffer Any) (nodes Any)] t/RpcResponse
+(defn- read-rpc-response! [(buffer Any) (nodes (Atom Int))] t/RpcResponse
   (let [space (rpc-read-space-term! buffer nodes)
         op (rpc-read-keyword-term! buffer nodes "response op")
         served (rpc-read-i64-le! buffer "served-version")

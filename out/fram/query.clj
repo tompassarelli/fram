@@ -559,7 +559,7 @@
   (length-key "s" text))
   (integer? value) (let [integer-value value]
   (str "i" integer-value ";"))
-  (number? value) (let [float-value value]
+  (number? value) (let [float-value (double value)]
   (str "f" float-value ";"))
   (boolean? value) (let [bool-value value]
   (if bool-value "b1;" "b0;"))
@@ -687,7 +687,7 @@
 (defn- number-atom [value]
   (cond
   (number? value) (if (integer? value) (let [integer-value value]
-  integer-value) (let [float-value value]
+  integer-value) (let [float-value (double value)]
   float-value))
   (string? value) (let [text value
    integer-result (parse-long text)]
@@ -710,7 +710,7 @@
 
 (defn- numeric-float [value]
   (if (integer? value) (let [integer-value value]
-  (double integer-value)) (let [float-value value]
+  (double integer-value)) (let [float-value (double value)]
   float-value)))
 
 (defn- ^Boolean nonnumeric-row? [rows position]
@@ -778,7 +778,7 @@
 (defn- append-aggregate-values [row values]
   (reduce (fn [current value] (if (integer? value) (let [integer-value value
    element integer-value]
-  (conj current element)) (let [float-value value
+  (conj current element)) (let [float-value (double value)
    element float-value]
   (conj current element)))) row values))
 

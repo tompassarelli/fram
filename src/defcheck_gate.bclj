@@ -278,7 +278,14 @@
         (if (> i m)
           (peek prev)
           (recur (inc i)
-            (reduce (fn [(cur (Vec Int)) (j Int)] (Vec Int) (conj cur (if (= (.charAt a (dec i)) (.charAt b (dec j))) (nth prev (dec j)) (inc (min (nth prev j) (peek cur) (nth prev (dec j)))))))
+            (reduce (fn [(cur (Vec Int)) (j Int)] (Vec Int)
+                      (let [(above Int) (nth prev j)
+                            (left Int) (peek cur)
+                            (diagonal Int) (nth prev (dec j))]
+                        (conj cur
+                          (if (= (.charAt a (dec i)) (.charAt b (dec j)))
+                            diagonal
+                            (inc (min above left diagonal))))))
               [i]
               (range 1 (inc n)))))))))
 
