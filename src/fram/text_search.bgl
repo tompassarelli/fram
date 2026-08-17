@@ -271,7 +271,8 @@
             (error text-index/TextError?) (index-limit-error weight maximum)]
         (if error
           (->TextSearchSourceResult false nil error)
-          (let [(cell (Atom (U SearchAnalyzers Nil))) (atom nil)]
+          (let [(empty-analyzers (U SearchAnalyzers Nil)) nil
+                (cell (Atom (U SearchAnalyzers Nil))) (atom empty-analyzers)]
             (->TextSearchSourceResult
              true (->TextSearchSource exact rows maximum cell weight)
              (text-index/no-text-error))))))))
@@ -300,7 +301,8 @@
         (+ (text-index/source-weight exact)
            112
            (* 28 (count rows)))
-        (cell (Atom (U SearchAnalyzers Nil))) (atom nil)]
+        (empty-analyzers (U SearchAnalyzers Nil)) nil
+        (cell (Atom (U SearchAnalyzers Nil))) (atom empty-analyzers)]
     (index-limit weight maximum)
     (->TextSearchSource exact rows maximum cell weight)))
 
