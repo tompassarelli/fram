@@ -333,10 +333,13 @@
   (cond
   (some? (sv w item)) (walk-type! w item)
   (= "list" (kd w item)) (let [method (kids w item)]
+  (let [name-node (nth method 0 nil)
+   params (nth method 1 nil)]
+  (if (and (some? params) (brk? w params)) (do
   (do
-  (if (some? (nth method 0 nil)) (do
-  (wf w (nth method 0) scope)))
-  (walk-fn-arity! w (vec (rest method)) scope wf false)))
+  (if (some? name-node) (do
+  (wf w name-node scope)))
+  (walk-fn-signature! w {:params params :return-type nil :raises-type nil :body (vec (drop 2 method))} scope wf false))))))
   :else nil))))))
 
 (defn walk! [^Walk w node scope]
