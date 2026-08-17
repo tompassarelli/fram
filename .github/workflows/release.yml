@@ -424,7 +424,35 @@ jobs:
           restore-keys: |
             fram-cloudflare-wasm-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-
 
-      - name: Build once, verify source identity, and seal the Cloudflare Wasm release
+      - name: Restore content-addressed native build cache
+        id: native_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/fram-native-release-cache
+          key: fram-native-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
+          restore-keys: |
+            fram-native-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-
+
+      - name: Materialize native and Wasm publication roots across cores
+        id: publication_materialization
+        env:
+          SOURCE_A: ${{ steps.source_roots.outputs.first }}
+        run: |
+          set -euo pipefail
+          "$DIRENV_BIN" exec "$GITHUB_WORKSPACE" \
+            "$SOURCE_A/scripts/materialize-publication-roots.sh" \
+              --source-root "$SOURCE_A" \
+              --native-cache "$RUNNER_TEMP/fram-native-release-cache" \
+              --wasm-cache "$RUNNER_TEMP/fram-cloudflare-wasm-cache" \
+              --output "$RUNNER_TEMP/fram-publication-materialization"
+          native_artifact="$(<"$RUNNER_TEMP/fram-publication-materialization/native.artifact")"
+          wasm_artifact="$(<"$RUNNER_TEMP/fram-publication-materialization/wasm.artifact")"
+          [[ -f "$native_artifact/READY" && -f "$wasm_artifact/READY" ]]
+          echo "native=$native_artifact" >> "$GITHUB_OUTPUT"
+          echo "wasm=$wasm_artifact" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/fram-publication-materialization/timings.tsv"
+
+      - name: Verify source identity and seal the Cloudflare Wasm release
         id: cloudflare_wasm
         timeout-minutes: 25
         env:
@@ -433,6 +461,7 @@ jobs:
           RELEASE_TAG_OBJECT: ${{ steps.release.outputs['tag-object'] }}
           SOURCE_A: ${{ steps.source_roots.outputs.first }}
           SOURCE_B: ${{ steps.source_roots.outputs.second }}
+          WASM_ARTIFACT: ${{ steps.publication_materialization.outputs.wasm }}
         run: |
           set -euo pipefail
           "$DIRENV_BIN" exec "$GITHUB_WORKSPACE" bash -euo pipefail <<'RELEASE'
@@ -453,7 +482,7 @@ jobs:
           }
 
           cache="$RUNNER_TEMP/fram-cloudflare-wasm-cache"
-          artifact_a="$(build_wasm "$SOURCE_A" "$cache")"
+          artifact_a="$WASM_ARTIFACT"
           artifact_b="$(build_wasm "$SOURCE_B" "$cache")"
           [[ "$artifact_b" == "$artifact_a" ]] || {
             echo "Cloudflare Wasm cache identity differs across source workdirs" >&2
@@ -500,20 +529,12 @@ jobs:
           path: ${{ runner.temp }}/fram-cloudflare-wasm-cache
           key: fram-cloudflare-wasm-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
 
-      - name: Restore content-addressed native build cache
-        id: native_cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/fram-native-release-cache
-          key: fram-native-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
-          restore-keys: |
-            fram-native-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-
-
-      - name: Build once, verify source identity, and seal the native release archive
+      - name: Verify source identity and seal the native release archive
         id: native
         env:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
           RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          NATIVE_ARTIFACT: ${{ steps.publication_materialization.outputs.native }}
         run: |
           set -euo pipefail
           build_native() {
@@ -534,7 +555,7 @@ jobs:
           }
 
           cache="$RUNNER_TEMP/fram-native-release-cache"
-          artifact="$(build_native "$GITHUB_WORKSPACE" "$cache")"
+          artifact="$NATIVE_ARTIFACT"
           mapfile -t release_files < <(
             scripts/package-native-release.sh \
               --source-root "$GITHUB_WORKSPACE" \
