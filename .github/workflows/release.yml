@@ -417,8 +417,13 @@ jobs:
           # Keep Bun and Cloudflare-DO packaging on clean tag roots. The
           # compatibility overlay begins only at the Beagle-dependent Wasm
           # boundary and remains confined to these ephemeral roots.
-          printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" >"$SOURCE_A/beagle-pin.txt"
-          printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" >"$SOURCE_B/beagle-pin.txt"
+          for source_root in "$SOURCE_A" "$SOURCE_B"; do
+            printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" >"$source_root/beagle-pin.txt"
+            # The packager requires a clean Git root while the publication
+            # receipt must describe the compatibility compiler overlay.
+            git -C "$source_root" update-index --assume-unchanged -- beagle-pin.txt
+            [[ -z "$(git -C "$source_root" status --porcelain --untracked-files=normal)" ]]
+          done
           "$DIRENV_BIN" exec "$GITHUB_WORKSPACE" bash -euo pipefail <<'RELEASE'
           build_wasm() {
             local source_root="$1" cache_root="$2"
@@ -494,7 +499,10 @@ jobs:
             fram-native-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-
 
       - name: Select the publication-only Beagle compatibility pin
-        run: printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" > beagle-pin.txt
+        run: |
+          printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" > beagle-pin.txt
+          git update-index --assume-unchanged -- beagle-pin.txt
+          [[ -z "$(git status --porcelain --untracked-files=normal)" ]]
 
       - name: Build once, verify source identity, and seal the native release archive
         id: native
@@ -539,6 +547,8 @@ jobs:
           git clone --quiet --no-local "$GITHUB_WORKSPACE" "$second_source"
           git -C "$second_source" checkout --quiet --detach "$RELEASE_COMMIT"
           printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" >"$second_source/beagle-pin.txt"
+          git -C "$second_source" update-index --assume-unchanged -- beagle-pin.txt
+          [[ -z "$(git -C "$second_source" status --porcelain --untracked-files=normal)" ]]
           second_artifact="$(build_native "$second_source" "$cache")"
           [[ "$second_artifact" == "$artifact" ]] || {
             echo "native cache identity differs across source workdirs" >&2
