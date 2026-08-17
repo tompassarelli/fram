@@ -525,7 +525,10 @@ jobs:
         run: |
           printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" > beagle-pin.txt
           git update-index --assume-unchanged -- beagle-pin.txt
-          [[ -z "$(git status --porcelain --untracked-files=normal)" ]]
+          # The pinned compiler checkout is deliberately present as an
+          # untracked tool tree in the Actions workspace; only tracked-root
+          # changes are relevant to this cleanliness assertion.
+          [[ -z "$(git status --porcelain --untracked-files=no)" ]]
 
       - name: Build once, verify source identity, and seal the native release archive
         id: native
