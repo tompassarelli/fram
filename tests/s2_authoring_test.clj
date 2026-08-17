@@ -195,6 +195,8 @@
             {:a :public :b :private :c :private})))
 (check! "structural predicate classification is role-based"
         (and (corpus/node-reference-predicate? "f12")
+             (corpus/node-reference-predicate? "f65536~2")
+             (corpus/node-reference-predicate? "f65536.32768~2")
              (corpus/node-reference-predicate? "seg2")
              (not (corpus/node-reference-predicate? "line"))
              (not (corpus/node-reference-predicate? "v"))))

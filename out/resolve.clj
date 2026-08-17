@@ -38,7 +38,8 @@
   (and (string? predicate)
        (or (= "child" predicate)
            (= "tail" predicate)
-           (boolean (re-matches #"(?:f|seg|comment)\d+" predicate)))))
+           (rc/ord-pos? predicate)
+           (boolean (re-matches #"(?:seg|comment)\d+" predicate)))))
 
 (when-not (ns-resolve 'resolve-corpus 'node-reference-predicate?)
   (intern 'resolve-corpus 'node-reference-predicate? node-reference-predicate?))
