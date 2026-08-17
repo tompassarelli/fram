@@ -113,8 +113,8 @@
 
 (defn mark-derived-change! [(s Session)] Nil
   (do
-    (reset! (session-derived-generation s)
-            (inc (deref (session-derived-generation s))))
+    (let [(generation Int) (deref (session-derived-generation s))]
+      (reset! (session-derived-generation s) (inc generation)))
     nil))
 
 (defn view [(s Session)] rot/Rotation (deref (session-view s)))

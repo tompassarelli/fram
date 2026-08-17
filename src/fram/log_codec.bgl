@@ -80,7 +80,7 @@
   (loop [position 0 crc crc32-mask]
     (if (>= position (count bytes))
       (bit-and crc32-mask (bit-xor crc crc32-mask))
-      (let [mixed (bit-xor crc (nth bytes position))
+      (let [mixed (bit-xor crc (wire/read-byte-at bytes position))
             next-crc
             (loop [bit 0 value mixed]
               (if (>= bit 8)
@@ -96,7 +96,7 @@
   (loop [position start crc crc32-mask]
     (if (>= position end)
       (bit-and crc32-mask (bit-xor crc crc32-mask))
-      (let [mixed (bit-xor crc (nth bytes position))
+      (let [mixed (bit-xor crc (wire/read-byte-at bytes position))
             next-crc
             (loop [bit 0 value mixed]
               (if (>= bit 8)
@@ -125,8 +125,8 @@
         (recur (+ position 1) (bit-and crc32-mask next-crc))))))
 
 (defn u16-le-at [(bytes ByteSource) (position Int)] Int
-  (+ (nth bytes position)
-     (bit-shift-left (nth bytes (+ position 1)) 8)))
+  (+ (wire/read-byte-at bytes position)
+     (bit-shift-left (wire/read-byte-at bytes (+ position 1)) 8)))
 
 (defn u32-le-at [(bytes ByteSource) (position Int)] Int
   (loop [offset 0 value 0]
@@ -136,7 +136,7 @@
        (+ offset 1)
        (bit-or value
                (bit-shift-left
-                (nth bytes (+ position offset)) (* offset 8)))))))
+                (wire/read-byte-at bytes (+ position offset)) (* offset 8)))))))
 
 (defn magic-at-start? [(bytes ByteSource)] Bool
   (if (< (count bytes) (count framlog-magic))
@@ -144,7 +144,7 @@
     (loop [position 0]
       (if (>= position (count framlog-magic))
         true
-        (if (= (nth bytes position) (nth framlog-magic position))
+        (if (= (wire/read-byte-at bytes position) (nth framlog-magic position))
           (recur (+ position 1))
           false)))))
 
@@ -537,7 +537,7 @@
                 (reset! (wire/decoder-position decoder) frame-start)
                 (successful-boot! root valid-log-bytes []))]
              [:else
-              (let [payload-start (deref (wire/decoder-position decoder))
+              (let [(payload-start Int) (deref (wire/decoder-position decoder))
                     payload-end (+ payload-start payload-length)
                     payload
                     (subvec (wire/decoder-bytes decoder)

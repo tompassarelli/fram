@@ -66,7 +66,8 @@
   (and (>= value 0) (<= value 255)))
 
 (defn decoder-remaining [(decoder Decoder)] Int
-  (- (decoder-limit decoder) (deref (decoder-position decoder))))
+  (let [(position Int) (deref (decoder-position decoder))]
+    (- (decoder-limit decoder) position)))
 
 (defn ensure-bytes! [(decoder Decoder) (amount Int) (context String)] Bool
   (if (and (>= amount 0) (>= (decoder-remaining decoder) amount))
@@ -85,6 +86,9 @@
           (decoder-error! decoder "FRAMRPC byte vector contains a value outside u8")
           0)))
     0))
+
+(defn read-byte-at [(bytes ByteSource) (position Int)] Int
+  (nth bytes position))
 
 (defn read-u16-le! [(decoder Decoder) (context String)] Int
   (let [b0 (read-u8! decoder context)
@@ -183,10 +187,10 @@
 
 (defn read-utf8! [(decoder Decoder) (length Int) (label String)] String
   (if (ensure-bytes! decoder length label)
-    (let [start (deref (decoder-position decoder))
+    (let [(start Int) (deref (decoder-position decoder))
           end (+ start length)]
       (loop []
-        (let [position (deref (decoder-position decoder))]
+        (let [(position Int) (deref (decoder-position decoder))]
           (if (>= position end)
             (utf8-decode (subvec (decoder-bytes decoder) start end))
             (let [b0 (read-u8! decoder label)
@@ -370,7 +374,7 @@
       [(integer? term)
        (do (append-u8! encoder 2) (append-i64-le! encoder term))]
       [(and (number? term) (not (integer? term)))
-       (let [(float-term Float) term]
+       (let [(float-term Float) (double term)]
          (do
            (append-u8! encoder 3)
            (append-i64-le! encoder (float-to-bits float-term))))]

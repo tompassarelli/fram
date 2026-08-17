@@ -493,7 +493,7 @@
 
 (defn- decode-record!
   [(bytes ByteSource) (payload-start Int) (payload-end Int)] RecordResult
-  (let [kind (nth bytes payload-start)
+  (let [kind (wire/read-byte-at bytes payload-start)
         decoder (payload-decoder bytes (+ payload-start 1) payload-end)
         decoded
         (cond
@@ -575,7 +575,7 @@
   (loop [position 0]
     (if (>= position (count snapshot-magic))
       true
-      (if (= (nth bytes position) (nth snapshot-magic position))
+      (if (= (wire/read-byte-at bytes position) (nth snapshot-magic position))
         (recur (+ position 1))
         false))))
 

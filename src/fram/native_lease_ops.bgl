@@ -260,8 +260,9 @@
       (let [(values (Vec Any)) (valuesresult-values fields)
             (resource Any) (nth values 0)
             (holder Any) (nth values 1)
-            (ttl-ms Any) (nth values 2)]
-        (if (not (valid-grant-input? resource holder ttl-ms now-ms))
+            (ttl-ms Any) (nth values 2)
+            (ttl-ms-int Int) (if (integer? ttl-ms) ttl-ms 0)]
+        (if (not (valid-grant-input? resource holder ttl-ms-int now-ms))
           (error-response
            request served-version :rpc-invalid-payload false
            "lease acquire requires Term resource/holder and a positive bounded ttl-ms")
@@ -270,7 +271,7 @@
               (error-response request served-version :rpc/lease-held false
                               "lease resource is already held")
               (let [(root (Atom t/TermStore)) (schema/store-of session)
-                    (expires-ms Int) (+ now-ms ttl-ms)
+                    (expires-ms Int) (+ now-ms ttl-ms-int)
                     (epoch Int) (store/next-sequence root)
                     (candidate t/RpcResponse)
                     (response request epoch
@@ -293,11 +294,12 @@
                           "lease renew payload is malformed"))
       (let [(values (Vec Any)) (valuesresult-values fields)
             (fence FenceResult) (parse-fence (nth values 0))
-            (ttl-ms Any) (nth values 1)]
+            (ttl-ms Any) (nth values 1)
+            (ttl-ms-int Int) (if (integer? ttl-ms) ttl-ms 0)]
         (if (or (not (fenceresult-ok fence))
                 (not (valid-grant-input?
                       (fenceresult-resource fence)
-                      (fenceresult-holder fence) ttl-ms now-ms)))
+                      (fenceresult-holder fence) ttl-ms-int now-ms)))
           (error-response
            request served-version :rpc-invalid-payload false
            (or (fenceresult-message fence)
@@ -310,7 +312,7 @@
                               :rpc/lease-fence-mismatch false
                               "lease fence is stale or expired")
               (let [(root (Atom t/TermStore)) (schema/store-of session)
-                    (expires-ms Int) (+ now-ms ttl-ms)
+                    (expires-ms Int) (+ now-ms ttl-ms-int)
                     (epoch Int) (store/next-sequence root)
                     (candidate t/RpcResponse)
                     (response

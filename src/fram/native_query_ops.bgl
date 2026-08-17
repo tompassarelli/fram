@@ -59,8 +59,11 @@
 (def no-query-result-rows (Vec (Vec Any)) [])
 (def no-triple-result-rows (Vec t/Triple) [])
 
+(defn empty-read-error-cell [] (Atom ReadError?)
+  (atom no-read-error))
+
 (defn new-read-context [] ReadContext
-  (->ReadContext (atom no-read-error)))
+  (->ReadContext (empty-read-error-cell)))
 
 (defn record-read-error!
   [(context ReadContext) (code Keyword) (message String)] Nil
