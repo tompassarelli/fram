@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing semver tag to publish (for example, v0.4.1)
+        description: Existing annotated semver tag to publish from the workflow definition on main (for example, v0.8.0)
         required: true
         type: string
 
@@ -265,6 +265,13 @@ jobs:
       - name: Install the pinned Nix release toolchain resolver
         uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
 
+      - name: Restore and save Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 7G
+
       - name: Resolve and authorize the locked Fram development shell
         run: |
           set -euo pipefail
@@ -274,6 +281,21 @@ jobs:
           [[ -x "$direnv_bin" ]]
           "$direnv_bin" allow "$GITHUB_WORKSPACE"
           echo "DIRENV_BIN=$direnv_bin" >> "$GITHUB_ENV"
+
+      - name: Materialize the locked Fram development shell
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          set +e
+          timeout --foreground --signal=TERM --kill-after=60s 19m \
+            "$DIRENV_BIN" exec "$GITHUB_WORKSPACE" \
+            bash -euo pipefail -c 'echo "Fram native development shell materialized"'
+          status=$?
+          set -e
+          if [[ "$status" -ne 0 ]]; then
+            echo "::error::Fram native development shell materialization failed or timed out (status $status)" >&2
+            exit "$status"
+          fi
 
       - name: Prepare two clean release source roots
         id: source_roots
@@ -406,6 +428,7 @@ jobs:
 
       - name: Build once, verify source identity, and seal the Cloudflare Wasm release
         id: cloudflare_wasm
+        timeout-minutes: 25
         env:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
           RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
