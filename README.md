@@ -1,5 +1,21 @@
 # Fram
 
+> Fram has been absorbed into [Beagle](https://github.com/tompassarelli/beagle) as `beagle store`. This repository hosts the final standalone releases; **v0.8.0 is the last**. Active development continues in the [Beagle repository](https://github.com/tompassarelli/beagle).
+
+## Why this moved
+
+The store is the heap: the engine belongs in the same substrate as the
+language and its programs, so code, state, and history can share one typed
+system. The store still carries Fram names in `FRAMRPC`, `FRAMLOG`, and
+`framlog` because those protocol and history surfaces are part of the current
+engine contract; the product now lives with Beagle.
+
+## Pointers
+
+- [Beagle repository](https://github.com/tompassarelli/beagle)
+- [Beagle Store documentation](https://github.com/tompassarelli/beagle/blob/main/store/README.md)
+- [Final standalone release: v0.8.0](https://github.com/tompassarelli/fram/releases/tag/v0.8.0)
+
 *Fram is a persistent engine for recursive, typed triples with neutral,
 position-addressed structure.*
 
