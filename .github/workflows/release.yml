@@ -178,6 +178,10 @@ jobs:
     needs: gate
     runs-on: ubuntu-latest
     env:
+      # v0.8.0's tagged source predates Beagle's v0.22 native interface. Keep
+      # the tag immutable and select the last compatible compiler only for the
+      # publication job; the gate remains on the tag's recorded pin.
+      PUBLICATION_BEAGLE_REVISION: b4f3081420a3be73d730802d2f4608d78d0c6cf4
       BEAGLE_HOME: ${{ github.workspace }}/.beagle
       FRAM_BEAGLE: ${{ github.workspace }}/.beagle/bin/beagle
     steps:
@@ -215,13 +219,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tompassarelli/beagle
-          # Pin matches flake.nix's beagle.url rev; keep them in sync.
-          ref: 4aaf833c1edd27f155fbb744dfbbfa8ba9f1b55d
+          # Publication-only compatibility pin for the immutable v0.8.0 tag.
+          ref: ${{ env.PUBLICATION_BEAGLE_REVISION }}
           path: .beagle
 
       - name: Verify the checked-out Beagle compiler pin
         run: |
-          test "$(cat beagle-pin.txt)" = \
+          test "$PUBLICATION_BEAGLE_REVISION" = \
             "$(git -C "$BEAGLE_HOME" rev-parse 'HEAD^{commit}')"
 
       - name: Install Racket for the pinned Beagle compiler
@@ -295,6 +299,9 @@ jobs:
               "$RELEASE_COMMIT" ]]
             [[ "$(git -C "$source_root" rev-parse "refs/tags/$RELEASE_TAG")" == \
               "$RELEASE_TAG_OBJECT" ]]
+            # The overlay is confined to ephemeral publication roots. The
+            # tagged commit and its annotated tag object remain untouched.
+            printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" >"$source_root/beagle-pin.txt"
           done
           echo "first=$source_a" >> "$GITHUB_OUTPUT"
           echo "second=$source_b" >> "$GITHUB_OUTPUT"
@@ -396,9 +403,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/fram-cloudflare-wasm-cache
-          key: fram-cloudflare-wasm-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-${{ steps.release.outputs.commit }}
+          key: fram-cloudflare-wasm-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
           restore-keys: |
-            fram-cloudflare-wasm-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-
+            fram-cloudflare-wasm-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-
 
       - name: Build once, verify source identity, and seal the Cloudflare Wasm release
         id: cloudflare_wasm
@@ -421,7 +428,8 @@ jobs:
               echo "$source_root/native/core_closure_sources.txt is empty" >&2
               return 1
             }
-            FRAM_NATIVE_CACHE="$cache_root" \
+            FRAM_BEAGLE="$BEAGLE_HOME/bin/beagle" \
+              FRAM_NATIVE_CACHE="$cache_root" \
               "$source_root/bin/fram-native-build" \
                 --host wasm-embed --abi wasm32 "${sources[@]}"
           }
@@ -472,16 +480,19 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/fram-cloudflare-wasm-cache
-          key: fram-cloudflare-wasm-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-${{ steps.release.outputs.commit }}
+          key: fram-cloudflare-wasm-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
 
       - name: Restore content-addressed native build cache
         id: native_cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/fram-native-release-cache
-          key: fram-native-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-${{ steps.release.outputs.commit }}
+          key: fram-native-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
           restore-keys: |
-            fram-native-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-
+            fram-native-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-
+
+      - name: Select the publication-only Beagle compatibility pin
+        run: printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" > beagle-pin.txt
 
       - name: Build once, verify source identity, and seal the native release archive
         id: native
@@ -500,7 +511,8 @@ jobs:
               echo "$source_root/native/core_closure_sources.txt is empty" >&2
               return 1
             }
-            FRAM_NATIVE_CC="$(command -v musl-gcc)" \
+            FRAM_BEAGLE="$BEAGLE_HOME/bin/beagle" \
+              FRAM_NATIVE_CC="$(command -v musl-gcc)" \
               FRAM_NATIVE_STATIC=1 \
               FRAM_NATIVE_CACHE="$cache_root" \
               "$source_root/bin/fram-native-build" --host server "${sources[@]}"
@@ -524,6 +536,7 @@ jobs:
           second_source="$RUNNER_TEMP/fram-native-release-source-b"
           git clone --quiet --no-local "$GITHUB_WORKSPACE" "$second_source"
           git -C "$second_source" checkout --quiet --detach "$RELEASE_COMMIT"
+          printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" >"$second_source/beagle-pin.txt"
           second_artifact="$(build_native "$second_source" "$cache")"
           [[ "$second_artifact" == "$artifact" ]] || {
             echo "native cache identity differs across source workdirs" >&2
@@ -561,7 +574,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/fram-native-release-cache
-          key: fram-native-${{ runner.os }}-${{ hashFiles('beagle-pin.txt') }}-${{ steps.release.outputs.commit }}
+          key: fram-native-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
 
       - name: Revalidate and install the shipped Bun package before upload
         env:
@@ -707,7 +720,7 @@ jobs:
           [[ "$(wasm_value release-tag)" == "$RELEASE_TAG" ]]
           [[ "$(wasm_value release-tag-object)" == "$RELEASE_TAG_OBJECT" ]]
           [[ "$(wasm_value target)" == wasm32-wasm-embed ]]
-          [[ "$(wasm_value beagle-revision)" == "$(cat beagle-pin.txt)" ]]
+          [[ "$(wasm_value beagle-revision)" == "$PUBLICATION_BEAGLE_REVISION" ]]
           [[ "$(wasm_value native-build-closure-sha256)" =~ ^[0-9a-f]{64}$ ]]
           [[ "$(wasm_value wasm-path)" == "$release_root/lib/libfram.wasm" ]]
           [[ "$(wasm_value seams-path)" == "$release_root/wasm-embed.seams" ]]
@@ -829,7 +842,7 @@ jobs:
           [[ "$(receipt_value release-tag)" == "$RELEASE_TAG" ]]
           [[ "$(receipt_value release-tag-object)" == "$RELEASE_TAG_OBJECT" ]]
           [[ "$(receipt_value target)" == x86_64-linux-musl ]]
-          [[ "$(receipt_value beagle-revision)" == "$(cat beagle-pin.txt)" ]]
+          [[ "$(receipt_value beagle-revision)" == "$PUBLICATION_BEAGLE_REVISION" ]]
           [[ "$(receipt_value native-build-closure-sha256)" =~ ^[0-9a-f]{64}$ ]]
           [[ "$(receipt_value executable-path)" == "$expected_executable" ]]
           [[ "$(receipt_value archive-name)" == "$expected_archive" ]]
