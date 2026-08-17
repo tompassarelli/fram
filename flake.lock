@@ -11,17 +11,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1786933888,
-        "narHash": "sha256-2HvdI2soJnkojcBf7mYjMIELDAwlzykaIREbWrCThqs=",
+        "lastModified": 1786971180,
+        "narHash": "sha256-nUKgnj5ArdLKGEMnjpNeAD/52Gtqv6l+IGuqMvnooog=",
         "owner": "tompassarelli",
         "repo": "beagle",
-        "rev": "4aaf833c1edd27f155fbb744dfbbfa8ba9f1b55d",
+        "rev": "487191b25f2493a5e8b50df0bc9421b12c7843bc",
         "type": "github"
       },
       "original": {
         "owner": "tompassarelli",
         "repo": "beagle",
-        "rev": "4aaf833c1edd27f155fbb744dfbbfa8ba9f1b55d",
+        "rev": "487191b25f2493a5e8b50df0bc9421b12c7843bc",
         "type": "github"
       }
     },

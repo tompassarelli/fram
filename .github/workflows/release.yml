@@ -16,6 +16,9 @@ on:
 permissions:
   contents: write
 
+env:
+  BEAGLE_REVISION: 487191b25f2493a5e8b50df0bc9421b12c7843bc
+
 concurrency:
   group: fram-release-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
   cancel-in-progress: false
@@ -95,7 +98,7 @@ jobs:
         with:
           repository: tompassarelli/beagle
           # Pin matches flake.nix's beagle.url rev; keep them in sync.
-          ref: 4aaf833c1edd27f155fbb744dfbbfa8ba9f1b55d
+          ref: ${{ env.BEAGLE_REVISION }}
           path: .beagle
 
       - name: Verify the checked-out Beagle compiler pin
@@ -178,10 +181,6 @@ jobs:
     needs: gate
     runs-on: ubuntu-latest
     env:
-      # v0.8.0's tagged source predates Beagle's v0.22 native interface. Keep
-      # the tag immutable and select the last compatible compiler only for the
-      # publication job; the gate remains on the tag's recorded pin.
-      PUBLICATION_BEAGLE_REVISION: b4f3081420a3be73d730802d2f4608d78d0c6cf4
       BEAGLE_HOME: ${{ github.workspace }}/.beagle
       FRAM_BEAGLE: ${{ github.workspace }}/.beagle/bin/beagle
     steps:
@@ -219,13 +218,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tompassarelli/beagle
-          # Publication-only compatibility pin for the immutable v0.8.0 tag.
-          ref: ${{ env.PUBLICATION_BEAGLE_REVISION }}
+          ref: ${{ env.BEAGLE_REVISION }}
           path: .beagle
 
       - name: Verify the checked-out Beagle compiler pin
         run: |
-          test "$PUBLICATION_BEAGLE_REVISION" = \
+          test "$(cat beagle-pin.txt)" = \
             "$(git -C "$BEAGLE_HOME" rev-parse 'HEAD^{commit}')"
 
       - name: Install Racket for the pinned Beagle compiler
@@ -422,9 +420,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/fram-cloudflare-wasm-cache
-          key: fram-cloudflare-wasm-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
+          key: fram-cloudflare-wasm-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
           restore-keys: |
-            fram-cloudflare-wasm-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-
+            fram-cloudflare-wasm-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-
 
       - name: Build once, verify source identity, and seal the Cloudflare Wasm release
         id: cloudflare_wasm
@@ -437,16 +435,6 @@ jobs:
           SOURCE_B: ${{ steps.source_roots.outputs.second }}
         run: |
           set -euo pipefail
-          # Keep Bun and Cloudflare-DO packaging on clean tag roots. The
-          # compatibility overlay begins only at the Beagle-dependent Wasm
-          # boundary and remains confined to these ephemeral roots.
-          for source_root in "$SOURCE_A" "$SOURCE_B"; do
-            printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" >"$source_root/beagle-pin.txt"
-            # The packager requires a clean Git root while the publication
-            # receipt must describe the compatibility compiler overlay.
-            git -C "$source_root" update-index --assume-unchanged -- beagle-pin.txt
-            [[ -z "$(git -C "$source_root" status --porcelain --untracked-files=normal)" ]]
-          done
           "$DIRENV_BIN" exec "$GITHUB_WORKSPACE" bash -euo pipefail <<'RELEASE'
           build_wasm() {
             local source_root="$1" cache_root="$2"
@@ -510,25 +498,16 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/fram-cloudflare-wasm-cache
-          key: fram-cloudflare-wasm-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
+          key: fram-cloudflare-wasm-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
 
       - name: Restore content-addressed native build cache
         id: native_cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/fram-native-release-cache
-          key: fram-native-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
+          key: fram-native-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
           restore-keys: |
-            fram-native-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-
-
-      - name: Select the publication-only Beagle compatibility pin
-        run: |
-          printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" > beagle-pin.txt
-          git update-index --assume-unchanged -- beagle-pin.txt
-          # The pinned compiler checkout is deliberately present as an
-          # untracked tool tree in the Actions workspace; only tracked-root
-          # changes are relevant to this cleanliness assertion.
-          [[ -z "$(git status --porcelain --untracked-files=no)" ]]
+            fram-native-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-
 
       - name: Build once, verify source identity, and seal the native release archive
         id: native
@@ -572,8 +551,6 @@ jobs:
           second_source="$RUNNER_TEMP/fram-native-release-source-b"
           git clone --quiet --no-local "$GITHUB_WORKSPACE" "$second_source"
           git -C "$second_source" checkout --quiet --detach "$RELEASE_COMMIT"
-          printf '%s\n' "$PUBLICATION_BEAGLE_REVISION" >"$second_source/beagle-pin.txt"
-          git -C "$second_source" update-index --assume-unchanged -- beagle-pin.txt
           [[ -z "$(git -C "$second_source" status --porcelain --untracked-files=normal)" ]]
           second_artifact="$(build_native "$second_source" "$cache")"
           [[ "$second_artifact" == "$artifact" ]] || {
@@ -612,7 +589,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/fram-native-release-cache
-          key: fram-native-${{ runner.os }}-${{ env.PUBLICATION_BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
+          key: fram-native-${{ runner.os }}-${{ env.BEAGLE_REVISION }}-${{ steps.release.outputs.commit }}
 
       - name: Revalidate and install the shipped Bun package before upload
         env:
@@ -758,7 +735,7 @@ jobs:
           [[ "$(wasm_value release-tag)" == "$RELEASE_TAG" ]]
           [[ "$(wasm_value release-tag-object)" == "$RELEASE_TAG_OBJECT" ]]
           [[ "$(wasm_value target)" == wasm32-wasm-embed ]]
-          [[ "$(wasm_value beagle-revision)" == "$PUBLICATION_BEAGLE_REVISION" ]]
+          [[ "$(wasm_value beagle-revision)" == "$BEAGLE_REVISION" ]]
           [[ "$(wasm_value native-build-closure-sha256)" =~ ^[0-9a-f]{64}$ ]]
           [[ "$(wasm_value wasm-path)" == "$release_root/lib/libfram.wasm" ]]
           [[ "$(wasm_value seams-path)" == "$release_root/wasm-embed.seams" ]]
@@ -880,7 +857,7 @@ jobs:
           [[ "$(receipt_value release-tag)" == "$RELEASE_TAG" ]]
           [[ "$(receipt_value release-tag-object)" == "$RELEASE_TAG_OBJECT" ]]
           [[ "$(receipt_value target)" == x86_64-linux-musl ]]
-          [[ "$(receipt_value beagle-revision)" == "$PUBLICATION_BEAGLE_REVISION" ]]
+          [[ "$(receipt_value beagle-revision)" == "$BEAGLE_REVISION" ]]
           [[ "$(receipt_value native-build-closure-sha256)" =~ ^[0-9a-f]{64}$ ]]
           [[ "$(receipt_value executable-path)" == "$expected_executable" ]]
           [[ "$(receipt_value archive-name)" == "$expected_archive" ]]

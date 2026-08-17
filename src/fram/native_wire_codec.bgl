@@ -11,7 +11,6 @@
 (def rpc-v2-max-string-bytes Int 1048576)
 (def rpc-v2-max-space-bytes Int 4096)
 (def rpc-v2-max-term-nodes Int 65536)
-(def rpc-v2-max-term-depth Int limits/term-codec-v1-max-depth)
 (def rpc-v2-magic (Vec Int) [70 82 65 77 82 80 67 0])
 (def recursive-term-depth-error String
   "recursive Term exceeds the TermCodecV1 depth bound")
@@ -76,19 +75,19 @@
       (decoder-error! decoder (str "FRAMRPC ended inside " context))
       false)))
 
+(defn read-byte-at [(bytes ByteSource) (position Int)] Int
+  (nth bytes position))
+
 (defn read-u8! [(decoder Decoder) (context String)] Int
   (if (ensure-bytes! decoder 1 context)
     (let [position (deref (decoder-position decoder))
-          value (nth (decoder-bytes decoder) position)]
+          value (read-byte-at (decoder-bytes decoder) position)]
       (if (byte-value? value)
         (do (swap! (decoder-position decoder) increment-int) value)
         (do
           (decoder-error! decoder "FRAMRPC byte vector contains a value outside u8")
           0)))
     0))
-
-(defn read-byte-at [(bytes ByteSource) (position Int)] Int
-  (nth bytes position))
 
 (defn read-u16-le! [(decoder Decoder) (context String)] Int
   (let [b0 (read-u8! decoder context)
@@ -290,11 +289,11 @@
 
 (defn decoder-node! [(decoder Decoder) (depth Int)] Bool
   (decoder-node-limited! decoder depth rpc-v2-max-term-nodes
-                         rpc-v2-max-term-depth))
+                         limits/term-codec-v1-max-depth))
 
 (defn encoder-node! [(encoder Encoder) (depth Int)] Bool
   (encoder-node-limited! encoder depth rpc-v2-max-term-nodes
-                         rpc-v2-max-term-depth))
+                         limits/term-codec-v1-max-depth))
 
 (defn read-term-limited!
   [(decoder Decoder)
@@ -346,7 +345,7 @@
 
 (defn read-term! [(decoder Decoder) (depth Int)] t/Term
   (read-term-limited! decoder depth rpc-v2-max-string-bytes
-                      rpc-v2-max-term-nodes rpc-v2-max-term-depth))
+                      rpc-v2-max-term-nodes limits/term-codec-v1-max-depth))
 
 (defn append-term-limited!
   [(encoder Encoder)
@@ -399,7 +398,7 @@
 
 (defn append-term! [(encoder Encoder) (term Any) (depth Int)] Nil
   (append-term-limited! encoder term depth rpc-v2-max-string-bytes
-                        rpc-v2-max-term-nodes rpc-v2-max-term-depth))
+                        rpc-v2-max-term-nodes limits/term-codec-v1-max-depth))
 
 (defn canonical-term-sha256-result! [(term Any)] TermDigestResult
   (let [encoder (->Encoder (empty-byte-cell) (atom 0) (empty-error-cell))]
