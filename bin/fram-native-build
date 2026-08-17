@@ -280,12 +280,15 @@ cache_root="${FRAM_NATIVE_CACHE:-${XDG_CACHE_HOME:-${home:+$home/.cache}}}"
 [[ -n "$cache_root" ]] || die "set FRAM_NATIVE_CACHE, XDG_CACHE_HOME, or HOME"
 [[ -n "${FRAM_NATIVE_CACHE:-}" ]] || cache_root="$cache_root/fram/native-build"
 mkdir -p "$cache_root/.locks" "$cache_root/.tmp" \
+  "$cache_root/.source-snapshots/.locks" \
+  "$cache_root/.source-snapshots/.tmp" \
   "$cache_root/.programs/.locks" "$cache_root/.programs/.tmp" \
   "$cache_root/.programs/.qbe-refusals/.locks" \
   "$cache_root/.programs/.qbe-refusals/.tmp" \
   "$cache_root/.programs/.beagle-core"
 cache_root="$(cd "$cache_root" && pwd -P)"
 program_cache="$cache_root/.programs"
+source_snapshot_cache="$cache_root/.source-snapshots"
 qbe_refusal_cache="$program_cache/.qbe-refusals"
 beagle_core_cache="$program_cache/.beagle-core"
 
@@ -412,13 +415,18 @@ program_input_manifest=""
 stage=""
 program_stage=""
 qbe_refusal_stage=""
+source_snapshot_stage=""
 source_snapshot_root=""
+source_snapshot_owned=1
 cleanup() {
   [[ -z "$stage" || ! -d "$stage" ]] || rm -rf "${stage:?}"
   [[ -z "$program_stage" || ! -d "$program_stage" ]] || rm -rf "${program_stage:?}"
   [[ -z "$qbe_refusal_stage" || ! -d "$qbe_refusal_stage" ]] ||
     rm -rf "${qbe_refusal_stage:?}"
-  [[ -z "$source_snapshot_root" || ! -d "$source_snapshot_root" ]] ||
+  [[ -z "$source_snapshot_stage" || ! -d "$source_snapshot_stage" ]] ||
+    rm -rf "${source_snapshot_stage:?}"
+  [[ "$source_snapshot_owned" == 0 || -z "$source_snapshot_root" ||
+    ! -d "$source_snapshot_root" ]] ||
     rm -rf "${source_snapshot_root:?}"
   [[ -z "$input_manifest" || ! -f "$input_manifest" ]] || rm -f "${input_manifest:?}"
   [[ -z "$program_input_manifest" || ! -f "$program_input_manifest" ]] ||
@@ -739,6 +747,24 @@ program_entry_is_valid() {
   manifest_digest="$(sha256sum "$entry/artifacts.sha256" | sed 's/ .*//')"
   [[ "$(<"$entry/READY")" == \
     "fram-native-program/v2 $expected_key $digest $manifest_digest" ]]
+}
+
+source_snapshot_entry_is_valid() {
+  local entry="$1" expected_input="$2" expected_key="$3"
+  local index manifest_digest source_path
+  content_tree_is_verified "$entry" || return 1
+  [[ -d "$entry/tree" && ! -L "$entry/tree" &&
+    -f "$entry/input.manifest" && ! -L "$entry/input.manifest" ]] || return 1
+  cmp -s "$expected_input" "$entry/input.manifest" || return 1
+  for index in "${!source_logical_paths[@]}"; do
+    source_path="$entry/tree/${source_logical_paths[$index]}"
+    [[ -f "$source_path" && ! -L "$source_path" &&
+      "$(sha256sum "$source_path" | sed 's/ .*//')" == \
+        "${source_digests[$index]}" ]] || return 1
+  done
+  manifest_digest="$(sha256sum "$entry/artifacts.sha256" | sed 's/ .*//')"
+  [[ "$(<"$entry/READY")" == \
+    "fram-native-source-snapshot/v1 $expected_key $manifest_digest" ]]
 }
 
 # The release requirement: C17 completeness plus all ten obligations, which
@@ -1142,6 +1168,44 @@ program_input_manifest="$(mktemp "$program_cache/.tmp/input.XXXXXX")"
 write_program_input_manifest "$program_input_manifest"
 program_closure_hash="$(sha256sum "$program_input_manifest" | sed 's/ .*//')"
 program_dir="$program_cache/$program_closure_hash"
+
+# Beagle's frozen-program provenance includes the absolute source path. Give an
+# exact input closure one immutable path so a cached materializer observation
+# remains attributable across launches instead of inheriting mktemp churn.
+source_snapshot_dir="$source_snapshot_cache/$program_closure_hash"
+exec {source_snapshot_lock_fd}>\
+  "$source_snapshot_cache/.locks/$program_closure_hash.lock"
+flock "$source_snapshot_lock_fd"
+if [[ -e "$source_snapshot_dir" ]] &&
+  ! source_snapshot_entry_is_valid "$source_snapshot_dir" \
+    "$program_input_manifest" "$program_closure_hash"; then
+  retire_corrupt_entry "$source_snapshot_dir" "$source_snapshot_cache/.tmp" \
+    "$program_closure_hash"
+fi
+if [[ ! -e "$source_snapshot_dir" ]]; then
+  source_snapshot_stage="$(mktemp -d \
+    "$source_snapshot_cache/.tmp/$program_closure_hash.XXXXXX")"
+  mv "$source_snapshot_root" "$source_snapshot_stage/tree"
+  source_snapshot_root=""
+  cp "$program_input_manifest" "$source_snapshot_stage/input.manifest"
+  emit_content_manifest "$source_snapshot_stage" \
+    >"$source_snapshot_stage/artifacts.sha256"
+  source_snapshot_manifest_digest="$(sha256sum \
+    "$source_snapshot_stage/artifacts.sha256" | sed 's/ .*//')"
+  printf 'fram-native-source-snapshot/v1 %s %s\n' \
+    "$program_closure_hash" "$source_snapshot_manifest_digest" \
+    >"$source_snapshot_stage/READY"
+  source_snapshot_entry_is_valid "$source_snapshot_stage" \
+    "$program_input_manifest" "$program_closure_hash" ||
+    die "new source snapshot cache entry failed verification"
+  mv "$source_snapshot_stage" "$source_snapshot_dir"
+  source_snapshot_stage=""
+else
+  rm -rf "${source_snapshot_root:?}"
+fi
+source_snapshot_root="$source_snapshot_dir/tree"
+source_snapshot_owned=0
+flock -u "$source_snapshot_lock_fd"
 
 exec {program_lock_fd}>"$program_cache/.locks/$program_closure_hash.lock"
 flock "$program_lock_fd"

@@ -1008,7 +1008,10 @@ grep -Fq \
   'unsupported Beagle native report format: beagle-native-report/v2' \
   "$scratch/report-v2.err" ||
   fail "unsupported failed-report schema failed for the wrong reason"
-[[ -z "$(find "$scratch/cache-report-v2" -name READY -print -quit)" ]] ||
+[[ -z "$(find "$scratch/cache-report-v2" -mindepth 2 -maxdepth 2 \
+  -name READY -print -quit)" &&
+  -z "$(find "$scratch/cache-report-v2/.programs" -mindepth 2 -maxdepth 2 \
+    -name READY -print -quit)" ]] ||
   fail "unsupported failed-report schema exposed a READY artifact"
 calls_before_refusal="$(wc -l <"$calls")"
 refused_artifact="$("${qbe_env[@]}" "$builder" --host server \
