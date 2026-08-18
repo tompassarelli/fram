@@ -336,13 +336,25 @@ if [[ "${1:-}" == "--version" ]]; then
 fi
 output=""
 compile=0
+dependency=0
+depfile=""
+target=""
+source=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -c) compile=1; shift ;;
+    -M) dependency=1; shift ;;
+    -MF) depfile="$2"; shift 2 ;;
+    -MT) target="$2"; shift 2 ;;
     -o) output="$2"; shift 2 ;;
-    *) shift ;;
+    *) source="$1"; shift ;;
   esac
 done
+if [[ "$dependency" == 1 ]]; then
+  [[ -n "$depfile" && -n "$target" && -n "$source" ]] || exit 94
+  printf '%s: %s\n' "$target" "$source" >"$depfile"
+  exit 0
+fi
 [[ -n "$output" ]] || exit 94
 if [[ "$compile" == 1 ]]; then
   printf '%s\n' 'fixture wasm object' >"$output"
@@ -367,6 +379,20 @@ printf '%s\n' 'fram-wasm-embed-seams/v1' >"$scratch/wasm-embed.seams"
 printf '%s\n' 'fixture wasi toolchain licenses' >"$scratch/wasi-notices.txt"
 
 ffc_notice_root="$scratch/tool/native-core/shim/third_party/ffc"
+compile_calls="$scratch/compile.calls"
+: >"$compile_calls"
+cat >"$scratch/tool/bin/counting-cc" <<'COUNTING_CC'
+#!/usr/bin/env bash
+set -euo pipefail
+for argument in "$@"; do
+  if [[ "$argument" == "-c" ]]; then
+    printf '%s\n' compile >>"$FAKE_COMPILE_CALLS"
+    break
+  fi
+done
+exec "$REAL_CC" "$@"
+COUNTING_CC
+chmod +x "$scratch/tool/bin/counting-cc"
 assert_ffc_notices() {
   local artifact_root="$1" notice
   for notice in LICENSE-MIT PROVENANCE; do
@@ -390,6 +416,8 @@ build_env=(
   FRAM_NATIVE_CC="${CC:-cc}"
   FRAM_QBE_FRONTIER_LEDGER="$ledger"
   FAKE_NATIVE_CALLS="$calls"
+  FAKE_COMPILE_CALLS="$compile_calls"
+  REAL_CC="${CC:-cc}"
 )
 
 printf '%s\n' '1111111111111111111111111111111111111111' \
@@ -426,12 +454,13 @@ pinned_hit="$("${build_env[@]}" \
   FRAM_NATIVE_CACHE="$scratch/cache-pin-override" \
   "$builder" --host program --entry demo.main/start \
   "$scratch/sources/good.bgl")" ||
-  fail "pinned Beagle revision did not reuse a content-equivalent cache entry"
-[[ "$pinned_hit" == "$override_artifact" &&
-  "$(wc -l <"$calls")" == "$override_calls" ]] ||
-  fail "Beagle revision changed the content-keyed native program cache"
-! grep -Fq "$beagle_pin" "$pinned_hit/input.manifest" ||
-  fail "Beagle revision leaked into the native program cache identity"
+  fail "pinned Beagle revision build failed"
+[[ "$pinned_hit" != "$override_artifact" &&
+  "$(wc -l <"$calls")" == "$((override_calls + 1))" ]] ||
+  fail "pinned Beagle revision did not partition the native program cache"
+grep -Fqx "compiler-revision=$beagle_pin" \
+  "$pinned_hit/input.manifest" ||
+  fail "pinned Beagle revision was absent from the native program cache identity"
 
 # A QBE refusal invokes a second C17 materialization. Both passes must consume
 # the launch snapshot even when the original worktree source changes between
@@ -655,6 +684,15 @@ assert_ffc_notices "$host_program"
 grep -Fqx 'native-host-abi PASS host=server exports=8' \
   "$host_artifact/native-host.report.txt" ||
   fail "server host artifact omitted its eight-export receipt"
+printf '%s\n' '#lang beagle' '(ns demo.changed)' '(defn start [] Nil nil)' \
+  >"$scratch/sources/changed.bgl"
+compile_calls_before_reuse="$(wc -l <"$compile_calls")"
+changed_host_artifact="$("${build_env[@]}" "$builder" --host server \
+  --adapter "$adapter" "$scratch/sources/changed.bgl")" ||
+  fail "changed native program host build failed"
+[[ "$changed_host_artifact" != "$host_artifact" &&
+  "$(wc -l <"$compile_calls")" == "$compile_calls_before_reuse" ]] ||
+  fail "unchanged C17 translation units were recompiled"
 symbols_header="$host_artifact/server_symbols.h"
 [[ -f "$symbols_header" ]] || fail "server host omitted its generated symbol header"
 [[ "$(grep -c '^#define FRAM_SERVER_SYMBOL_' "$symbols_header")" == "8" ]] ||
@@ -774,7 +812,7 @@ embed_hit="$("${build_env[@]}" "$builder" --host embed \
 [[ "$(wc -l <"$calls")" == "$calls_before_embed" ]] ||
   fail "embed host rebuilt the shared native program"
 [[ "$(find "$scratch/cache/.programs" -mindepth 2 -maxdepth 2 \
-  -name READY | wc -l)" == "1" ]] ||
+  -name READY | wc -l)" == "2" ]] ||
   fail "server and embed did not share exactly one native program"
 
 # The wasm-embed host is refusal-visible without its toolchain: it names the
@@ -942,7 +980,7 @@ if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
 fi
 grep -Fq 'fram_server_codec_release_response' "$scratch/missing-export.err" ||
   fail "server host link did not name the missing ABI export"
-[[ "$(find "$scratch/cache" -mindepth 2 -maxdepth 2 -name READY | wc -l)" == "2" ]] ||
+[[ "$(find "$scratch/cache" -mindepth 2 -maxdepth 2 -name READY | wc -l)" == "3" ]] ||
   fail "failed server host link exposed a READY artifact"
 [[ -z "$(find "$scratch/cache/.tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
   fail "failed server host link left temporary artifacts"
@@ -1173,8 +1211,8 @@ calls_after_portable_a="$(wc -l <"$calls")"
   fail "checkout A portability build did not run the materializer"
 portable_program="$scratch/cache-portable/.programs/$(sed -n 's/^program=//p' \
   "$portable_artifact_a/input.manifest")"
-grep -Fqx 'fram-native-program-input/v3' "$portable_program/input.manifest" ||
-  fail "portable program entry did not use the v3 logical-name vocabulary"
+grep -Fqx 'fram-native-program-input/v4' "$portable_program/input.manifest" ||
+  fail "portable program entry did not use the v4 pinned-compiler vocabulary"
 grep -Eq '^000000 portable\.bgl [0-9a-f]{64}$' \
   "$portable_program/input.manifest" ||
   fail "portable program manifest did not name its source logically"

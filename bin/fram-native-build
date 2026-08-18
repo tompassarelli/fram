@@ -285,12 +285,15 @@ mkdir -p "$cache_root/.locks" "$cache_root/.tmp" \
   "$cache_root/.programs/.locks" "$cache_root/.programs/.tmp" \
   "$cache_root/.programs/.qbe-refusals/.locks" \
   "$cache_root/.programs/.qbe-refusals/.tmp" \
-  "$cache_root/.programs/.beagle-core"
+  "$cache_root/.programs/.beagle-core" \
+  "$cache_root/.cache/c-objects/.locks" \
+  "$cache_root/.cache/c-objects/.tmp"
 cache_root="$(cd "$cache_root" && pwd -P)"
 program_cache="$cache_root/.programs"
 source_snapshot_cache="$cache_root/.source-snapshots"
 qbe_refusal_cache="$program_cache/.qbe-refusals"
 beagle_core_cache="$program_cache/.beagle-core"
+compile_cache_root="$cache_root/.cache/c-objects"
 
 normalized_sources=()
 for source in "${sources[@]}"; do
@@ -418,6 +421,9 @@ qbe_refusal_stage=""
 source_snapshot_stage=""
 source_snapshot_root=""
 source_snapshot_owned=1
+compile_stage=""
+compile_manifest=""
+compile_depfile=""
 cleanup() {
   [[ -z "$stage" || ! -d "$stage" ]] || rm -rf "${stage:?}"
   [[ -z "$program_stage" || ! -d "$program_stage" ]] || rm -rf "${program_stage:?}"
@@ -428,6 +434,12 @@ cleanup() {
   [[ "$source_snapshot_owned" == 0 || -z "$source_snapshot_root" ||
     ! -d "$source_snapshot_root" ]] ||
     rm -rf "${source_snapshot_root:?}"
+  [[ -z "$compile_stage" || ! -d "$compile_stage" ]] ||
+    rm -rf "${compile_stage:?}"
+  [[ -z "$compile_manifest" || ! -f "$compile_manifest" ]] ||
+    rm -f "${compile_manifest:?}"
+  [[ -z "$compile_depfile" || ! -f "$compile_depfile" ]] ||
+    rm -f "${compile_depfile:?}"
   [[ -z "$input_manifest" || ! -f "$input_manifest" ]] || rm -f "${input_manifest:?}"
   [[ -z "$program_input_manifest" || ! -f "$program_input_manifest" ]] ||
     rm -f "${program_input_manifest:?}"
@@ -555,11 +567,12 @@ wasm_exports=(
 write_program_input_manifest() {
   local destination="$1" index
   {
-    # v3 gives each launch snapshot a checkout-independent logical source name.
-    # The version rides in the hashed bytes, so no path-bound /v2 entry can be
-    # looked up or interpreted under this vocabulary.
-    printf 'fram-native-program-input/v3\n%s\n%s\nconfiguration=profile=3\n' \
-      "$builder_identity" "$beagle_identity"
+    # v4 gives each launch snapshot a checkout-independent logical source name
+    # and binds the program emission cache to the pinned compiler revision.
+    # The version rides in the hashed bytes, so no older entry can be looked up
+    # or interpreted under this vocabulary.
+    printf 'fram-native-program-input/v4\n%s\n%s\ncompiler-revision=%s\nconfiguration=profile=3\n' \
+      "$builder_identity" "$beagle_identity" "$beagle_revision"
     # Mirrors the ABI profile Beagle freezes into the program configuration; without
     # it two profiles over one closure would collide on a single cache entry.
     printf 'abi=%s\n' "$abi"
@@ -605,9 +618,131 @@ write_input_manifest() {
   } >"$destination"
 }
 
-# Release provenance deliberately excludes paths. The v3 cache identity uses
-# logical names for checkout-owned inputs and absolute names only for external
-# inputs; this manifest names only content affecting wasm32-wasm-embed bytes.
+compile_source_name() {
+  local source="$1"
+  if [[ "$source" == "$stage/"* ]]; then
+    printf 'stage:%s\n' "${source#"$stage/"}"
+  elif [[ "$source" == "$repo/"* ]]; then
+    printf 'repo:%s\n' "${source#"$repo/"}"
+  else
+    printf 'path:%s\n' "$source"
+  fi
+}
+
+compile_dependency_name() {
+  local dependency="$1"
+  if [[ "$dependency" == "$stage/"* ]]; then
+    printf 'stage:%s\n' "${dependency#"$stage/"}"
+  elif [[ "$dependency" == "$repo/"* ]]; then
+    printf 'repo:%s\n' "${dependency#"$repo/"}"
+  else
+    printf 'system:%s\n' "$dependency"
+  fi
+}
+
+write_compile_input_manifest() {
+  local destination="$1" source="$2" source_name="$3"
+  local dependency_text dependency dependency_path dependency_name
+  dependency_text="$(awk '{ sub(/\\$/, ""); printf "%s ", $0 }' "$compile_depfile")"
+  dependency_text="${dependency_text#*: }"
+  {
+    printf 'fram-native-c-object-input/v1\n'
+    printf 'compiler %q\n' "$cc_identity"
+    printf 'source-name %q\n' "$source_name"
+    printf 'flags'
+    printf ' %q' "${compile_flags[@]}"
+    printf '\ninclude-path stage\ninclude-path repo:%s\ndependencies\n' \
+      "$host_include_arg"
+    for dependency in $dependency_text; do
+      dependency_path="$dependency"
+      [[ "$dependency_path" == /* ]] || dependency_path="$repo/$dependency_path"
+      dependency_path="$(realpath "$dependency_path")"
+      [[ -f "$dependency_path" && ! -L "$dependency_path" ]] ||
+        die "C compiler dependency is unavailable: $dependency_path"
+      dependency_name="$(compile_dependency_name "$dependency_path")"
+      printf '%s %s\n' "$dependency_name" \
+        "$(sha256sum "$dependency_path" | sed 's/ .*//')"
+    done | LC_ALL=C sort -u
+  } >"$destination"
+}
+
+compile_cache_entry_is_valid() {
+  local entry="$1" expected_manifest="$2" expected_key="$3" digest
+  [[ -d "$entry" && ! -L "$entry" &&
+    -f "$entry/input.manifest" && ! -L "$entry/input.manifest" &&
+    -f "$entry/object" && ! -L "$entry/object" &&
+    -f "$entry/READY" && ! -L "$entry/READY" ]] || return 1
+  cmp -s "$expected_manifest" "$entry/input.manifest" || return 1
+  digest="$(sha256sum "$entry/object" | sed 's/ .*//')"
+  [[ "$(<"$entry/READY")" == \
+    "fram-native-c-object/v1 $expected_key $digest" ]]
+}
+
+compile_cached() {
+  local source="$1" object="$2" source_name="$3"
+  local dep_error object_key entry object_digest object_lock_fd
+  compile_depfile="$(mktemp "$compile_cache_root/.tmp/deps.XXXXXX")"
+  dep_error="$compile_depfile.err"
+  if ! (
+    cd "$repo"
+    "$cc" "${compile_flags[@]}" "${include_flags[@]}" \
+      -M -MF "$compile_depfile" -MT "$object" "$source"
+  ) > /dev/null 2>"$dep_error"; then
+    cat "$dep_error" >&2
+    rm -f "${dep_error:?}" "${compile_depfile:?}"
+    compile_depfile=""
+    die "C compiler dependency scan failed for $source"
+  fi
+  rm -f "${dep_error:?}"
+  compile_manifest="$(mktemp "$compile_cache_root/.tmp/input.XXXXXX")"
+  write_compile_input_manifest "$compile_manifest" "$source" "$source_name"
+  object_key="$(sha256sum "$compile_manifest" | sed 's/ .*//')"
+  entry="$compile_cache_root/$object_key"
+  exec {object_lock_fd}>"$compile_cache_root/.locks/$object_key.lock"
+  flock "$object_lock_fd"
+  if [[ -e "$entry" ]] &&
+    ! compile_cache_entry_is_valid "$entry" "$compile_manifest" "$object_key"; then
+    retire_corrupt_entry "$entry" "$compile_cache_root/.tmp" "$object_key"
+  fi
+  if [[ ! -e "$entry" ]]; then
+    compile_stage="$(mktemp -d "$compile_cache_root/.tmp/$object_key.XXXXXX")"
+    if ! (
+      cd "$repo"
+      "$cc" "${compile_flags[@]}" "${include_flags[@]}" \
+        -c "$source" -o "$compile_stage/object"
+    ) >"$compile_stage/compile.log" 2>&1; then
+      cat "$compile_stage/compile.log" >&2
+      flock -u "$object_lock_fd"
+      eval "exec ${object_lock_fd}>&-"
+      rm -f "${compile_manifest:?}" "${compile_depfile:?}"
+      compile_manifest=""
+      compile_depfile=""
+      rm -rf "${compile_stage:?}"
+      compile_stage=""
+      die "C compiler compilation failed for $source"
+    fi
+    cp "$compile_manifest" "$compile_stage/input.manifest"
+    object_digest="$(sha256sum "$compile_stage/object" | sed 's/ .*//')"
+    printf 'fram-native-c-object/v1 %s %s\n' "$object_key" "$object_digest" \
+      >"$compile_stage/READY"
+    compile_cache_entry_is_valid "$compile_stage" "$compile_manifest" \
+      "$object_key" || die "new C object cache entry failed verification"
+    mv "$compile_stage" "$entry"
+    compile_stage=""
+  fi
+  compile_cache_entry_is_valid "$entry" "$compile_manifest" "$object_key" ||
+    die "C object cache entry failed verification: $entry"
+  cp "$entry/object" "$object"
+  flock -u "$object_lock_fd"
+  eval "exec ${object_lock_fd}>&-"
+  rm -f "${compile_manifest:?}" "${compile_depfile:?}"
+  compile_manifest=""
+  compile_depfile=""
+}
+
+# Release provenance deliberately excludes paths. The v4 cache identity uses
+# logical names, content digests, and the pinned compiler revision; this
+# manifest names only content affecting wasm32-wasm-embed bytes.
 write_wasm_provenance() {
   local destination="$1" index source version_line
   version_line="$($cc --version 2>&1 | sed -n '1p')"
@@ -1486,15 +1621,23 @@ shopt -u nullglob
 if [[ "$host" == "server" ]]; then
   link_flags=()
   [[ "$link_mode" != static ]] || link_flags+=(-static)
+  compile_flags=(-std=c17 -pedantic -Wall -Wextra -Werror -pthread)
+  include_flags=(-I"$stage" -I"$host_include_arg")
+  mkdir -p "$stage/objects"
+  compile_sources=("${module_sources[@]}" "$stage/native_shim.c" \
+    "$host_source" "$adapter")
+  compile_objects=()
+  for index in "${!compile_sources[@]}"; do
+    object="$stage/objects/$index.o"
+    compile_cached "${compile_sources[$index]}" "$object" \
+      "$(compile_source_name "${compile_sources[$index]}")"
+    compile_objects+=("$object")
+  done
   if ! (
     cd "$repo"
-    "$cc" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
+    "$cc" -pthread \
         "${link_flags[@]}" \
-        -I"$stage" -I"$host_include_arg" \
-        "${module_sources[@]}" \
-        "$stage/native_shim.c" \
-        "$host_source_arg" \
-        "$adapter_arg" \
+        "${compile_objects[@]}" \
         -o "$stage/bin/fram-server-native"
   ) >"$stage/native-host.log" 2>&1; then
     sed -n '1,240p' "$stage/native-host.log" >&2
@@ -1506,25 +1649,19 @@ if [[ "$host" == "server" ]]; then
     printf 'native-host-abi PASS host=server exports=8\n'
     write_qbe_frontier_receipt
   } >"$stage/native-host.report.txt"
+  rm -rf "${stage:?}/objects"
 elif [[ "$host" == "wasm-embed" ]]; then
   mkdir -p "$stage/objects"
   wasm_sources=("${module_sources[@]}" "$stage/native_shim.c" \
-    "$adapter_arg" "$host_source_arg" "$wasm_host_source_arg")
+    "$adapter" "$host_source" "$wasm_host_source")
+  compile_flags=(-std=c17 -pedantic -Wall -Wextra -Werror -O2 \
+    -DFRAM_WASM_HOST_IMPORTS=1)
+  include_flags=(-I"$stage" -I"$host_include_arg")
   wasm_objects=()
   for index in "${!wasm_sources[@]}"; do
     object="$stage/objects/$index.o"
-    # -O2 keeps the reactor's frames inside its default linear stack; there is
-    # no -pthread, wasip1 being single-threaded.
-    if ! (
-      cd "$repo"
-      "$cc" -std=c17 -pedantic -Wall -Wextra -Werror -O2 \
-          -DFRAM_WASM_HOST_IMPORTS=1 \
-          -I"$stage" -I"$host_include_arg" -c "${wasm_sources[$index]}" \
-          -o "$object"
-    ) >>"$stage/native-host.log" 2>&1; then
-      sed -n '1,240p' "$stage/native-host.log" >&2
-      die "wasm-embed object compilation failed"
-    fi
+    source="${wasm_sources[$index]}"
+    compile_cached "$source" "$object" "$(compile_source_name "$source")"
     wasm_objects+=("$object")
   done
   wasm_export_flags=()
@@ -1560,20 +1697,15 @@ elif [[ "$host" == "wasm-embed" ]]; then
 else
   mkdir -p "$stage/objects"
   embed_sources=("${module_sources[@]}" "$stage/native_shim.c" \
-    "$adapter_arg" "$host_source_arg")
+    "$adapter" "$host_source")
+  compile_flags=(-std=c17 -pedantic -Wall -Wextra -Werror -pthread \
+    -fPIC -fvisibility=hidden -DFRAM_BUILDING_SHARED)
+  include_flags=(-I"$stage" -I"$host_include_arg")
   embed_objects=()
   for index in "${!embed_sources[@]}"; do
     object="$stage/objects/$index.o"
-    if ! (
-      cd "$repo"
-      "$cc" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
-          -fPIC -fvisibility=hidden -DFRAM_BUILDING_SHARED \
-          -I"$stage" -I"$host_include_arg" -c "${embed_sources[$index]}" \
-          -o "$object"
-    ) >>"$stage/native-host.log" 2>&1; then
-      sed -n '1,240p' "$stage/native-host.log" >&2
-      die "embed native object compilation failed"
-    fi
+    source="${embed_sources[$index]}"
+    compile_cached "$source" "$object" "$(compile_source_name "$source")"
     embed_objects+=("$object")
   done
   if ! "$ar" rcs "$stage/lib/libfram.a" "${embed_objects[@]}" \
