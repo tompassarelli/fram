@@ -19,8 +19,8 @@ only to the revision checked; never treat it as evergreen.
   checker oracle; compiler output and protocol integration may be consumed by
   FRAM under either offered license.
 
-- 2026-08-17 — Beagle packaged-input revision
-  `487191b25f2493a5e8b50df0bc9421b12c7843bc` is MIT OR Apache-2.0. It is
+- 2026-08-20 — Beagle packaged-input revision
+  `f30421aee7fe49fe76b22fb8d92a8cccd6c4ac88` is MIT OR Apache-2.0. It is
   the current `beagle-pin.txt` native compiler and `flake.nix` graph-authoring
   runtime pin and is license-compatible with FRAM; update this dated record
   when the package pin advances.

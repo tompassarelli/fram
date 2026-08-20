@@ -17,7 +17,7 @@ permissions:
   contents: write
 
 env:
-  BEAGLE_REVISION: 487191b25f2493a5e8b50df0bc9421b12c7843bc
+  BEAGLE_REVISION: f30421aee7fe49fe76b22fb8d92a8cccd6c4ac88
 
 concurrency:
   group: fram-release-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
