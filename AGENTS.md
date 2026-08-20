@@ -13,24 +13,6 @@ only to the revision checked; never treat it as evergreen.
   Datahike for ideas and mechanisms only: copy or derive no source expression
   without a fresh license-compatibility review.
 
-- 2026-07-29 — Beagle revision
-  `0d6e712f5b829545bb82cb3a9e0b77853a9521a0` is MIT OR Apache-2.0. FRAM
-  uses this compatible local revision as its compiler and coherent-world
-  checker oracle; compiler output and protocol integration may be consumed by
-  FRAM under either offered license.
-
-- 2026-08-20 — Beagle packaged-input revision
-  `f30421aee7fe49fe76b22fb8d92a8cccd6c4ac88` is MIT OR Apache-2.0. It is
-  the current `beagle-pin.txt` native compiler and `flake.nix` graph-authoring
-  runtime pin and is license-compatible with FRAM; update this dated record
-  when the package pin advances.
-
-  A compiler-pin advance is one coherent change: update `beagle-pin.txt`, the
-  `flake.nix` input and lock, every CI/release Beagle checkout ref, and this
-  dated license record together. Run the existing native build-cache and
-  native/Cloudflare release-artifact gates against exactly that revision.
-  Never inherit Beagle main silently.
-
 - 2026-08-11 — TypeScript npm package `6.0.3`, source revision
   `050880ce59e30b356b686bd3144efe24f875ebc8`, is Apache-2.0. FRAM uses it
   only as the pinned CI compiler for the packed Bun declaration-surface gate;
